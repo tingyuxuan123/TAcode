@@ -66,6 +66,7 @@ import {
 } from "./ui";
 import logo from "./logo.svg";
 import { useI18n } from "./i18n";
+import { composerModelOptions, modelOptionKey } from "../shared/model-selection";
 import type { MessageKey } from "../shared/i18n";
 
 const PERMISSIONS: PermissionMode[] = ["plan", "ask", "auto", "full"];
@@ -369,6 +370,8 @@ export function App() {
   const [workspace, setWorkspace] = useState<string>();
   const [activeSession, setActiveSession] = useState<string>();
   const [model, setModel] = useState("");
+  const [modelSwitchPending, setModelSwitchPending] = useState(false);
+  const modelSwitchBusy = useRef(false);
   const [chatModels, setChatModels] = useState<string[]>([]);
   const [effort, setEffort] = useState(readStoredEffort);
   const [thinkingLevels, setThinkingLevels] = useState<string[]>(["low", "medium", "high", "max"]);
@@ -430,7 +433,7 @@ export function App() {
   }, [providers]);
 
   const syncAgentThinking = useCallback(async () => {
-    if (!agentCwd.current) return;
+    if (!agentCwd.current || modelSwitchBusy.current) return;
     const seq = startSeq.current;
     const currentService = activeChatProvider(providersRef.current);
     if (`${currentService?.serviceId ?? ""}:${currentService?.serviceVersion ?? ""}` !== runtimeServiceRef.current) return;
@@ -441,7 +444,9 @@ export function App() {
         window.harness.agent.command<{ levels: string[] }>("get_available_thinking_levels"),
         window.harness.agent.command<{ thinkingLevel?: string; model?: { id?: string } }>("get_state"),
       ]);
-      if (seq !== startSeq.current || requestedModel !== modelRef.current || requestedEffort !== effortRef.current) return;
+      const latestService = activeChatProvider(providersRef.current);
+      if (latestService?.serviceId !== currentService?.serviceId || latestService?.serviceVersion !== currentService?.serviceVersion) return;
+      if (modelSwitchBusy.current || seq !== startSeq.current || requestedModel !== modelRef.current || requestedEffort !== effortRef.current) return;
       if (stateResp?.model?.id && stateResp.model.id !== requestedModel) return;
       const levels = Array.isArray(levelsResp?.levels) ? levelsResp.levels : ["off"];
       setThinkingLevels(levels);
@@ -485,6 +490,7 @@ export function App() {
   const planApproval = planAwaitingApproval(permission, running, todos);
   const darwin = window.harness.platform === "darwin";
   const connected = activeChatProvider(providers);
+  const modelOptions = useMemo(() => composerModelOptions(providers, model, chatModels), [providers, model, chatModels]);
   const waiting = running && (groups.length === 0 || groups.at(-1)?.type === "user");
   const suggestions = workspace
     ? [
@@ -724,19 +730,38 @@ export function App() {
     return startAgent(workspace, sessionRef.current, Boolean(workspace), true);
   }, [startAgent, syncAgentThinking, workspace]);
 
-  const switchModel = useCallback((next: string) => {
-    setModel(next);
-    modelRef.current = next;
-    applyThinkingForModel(next);
-    const currentService = activeChatProvider(providersRef.current);
-    if (agentCwd.current && `${currentService?.serviceId ?? ""}:${currentService?.serviceVersion ?? ""}` === runtimeServiceRef.current
-      && agentModelIdsRef.current.includes(next)) {
-      void window.harness.agent.command("set_model", { provider: runtimeProviderRef.current, modelId: next })
-        .then(() => syncAgentThinking())
-        .catch(() => undefined);
+  const switchModel = useCallback(async (key: string) => {
+    const option = modelOptions.find((item) => item.value === key);
+    if (!option || modelSwitchBusy.current || loading) return;
+    const next = option.modelId;
+    modelSwitchBusy.current = true;
+    setModelSwitchPending(true);
+    try {
+      let accounts = providersRef.current;
+      if (option.serviceId) {
+        const saved = await window.harness.providers.setDefault(option.serviceId, next);
+        if (!saved) throw new Error(t("toast.modelSwitchFailed"));
+        accounts = await window.harness.auth.status();
+        providersRef.current = accounts;
+        setProviders(accounts);
+      }
+      setModel(next);
+      modelRef.current = next;
+      applyThinkingForModel(next, accounts);
+      const currentService = activeChatProvider(accounts);
+      // A running turn keeps its original service; ensureModelReady applies the choice next turn.
+      if (!running && agentCwd.current && `${currentService?.serviceId ?? ""}:${currentService?.serviceVersion ?? ""}` === runtimeServiceRef.current
+        && agentModelIdsRef.current.includes(next)) {
+        await window.harness.agent.command("set_model", { provider: runtimeProviderRef.current, modelId: next }).catch(() => undefined);
+      }
+      setToast(agentCwd.current ? t("toast.modelNextTurn", { model: next }) : t("toast.modelSwitched", { model: next }));
+    } catch (error) {
+      setToast(friendlyAgentError(error));
+    } finally {
+      modelSwitchBusy.current = false;
+      setModelSwitchPending(false);
     }
-    setToast(agentCwd.current ? t("toast.modelNextTurn", { model: next }) : t("toast.modelSwitched", { model: next }));
-  }, [applyThinkingForModel, syncAgentThinking, t]);
+  }, [applyThinkingForModel, loading, modelOptions, running, t]);
 
   const bindProject = useCallback(async (cwd: string): Promise<boolean> => {
     if (running && agentCwd.current && agentCwd.current !== cwd) {
@@ -990,7 +1015,7 @@ export function App() {
       void undoLastTurn();
       return;
     }
-    if ((!text && !images?.length) || loading || sending.current) return;
+    if ((!text && !images?.length) || loading || modelSwitchBusy.current || sending.current) return;
     if (running) {
       if (text.startsWith("/")) return;
       const followup = text || t("toast.defaultImagePrompt");
@@ -1238,12 +1263,13 @@ export function App() {
       steering={steering}
       rootRef={dock}
       running={running}
-      disabled={loading}
+      disabled={loading || modelSwitchPending}
       workspace={workspace}
       onPickWorkspace={() => void openFolder()}
       model={model}
-      models={[...new Set([model, ...chatModels].filter(Boolean))].map((id) => ({ value: id, label: id }))}
-      onModel={switchModel}
+      modelKey={modelOptionKey(connected?.serviceId, model)}
+      models={modelOptions}
+      onModel={(key) => void switchModel(key)}
       effort={effort}
       effortLevels={thinkingLevels}
       onEffort={applyEffort}

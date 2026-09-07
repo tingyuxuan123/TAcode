@@ -9,7 +9,9 @@ import { defaultCustomProfile, type CustomApiProfile } from "../shared/chat-prof
 import { ProviderListPage, ProviderSetupDialog } from "./provider-dialog";
 import type { ProviderRecord } from "../shared/types";
 import { applyTheme, readStoredTheme, THEMES, type ThemeId } from "../shared/theme";
-import { effortLabelKey, pickEffortOptions, reasoningLevelsAvailable } from "../shared/thinking";
+import { effortLabelKey, reasoningLevelsAvailable } from "../shared/thinking";
+import type { ModelOption } from "../shared/model-selection";
+import { EffortPicker, ModelPicker } from "./composer-pickers";
 import { approvalTitle, baseName, cacheHitRate, collectFileChanges, collapseThinking, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, omitFinalReply, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolSummary, toolWritePreview, traceRows, turnWork, assistantReplyText, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
 import { tokenizeCode } from "./highlight";
 import type { AgentSkillCommand } from "../shared/skills";
@@ -1780,6 +1782,7 @@ export function PromptBar({
   workspace,
   onPickWorkspace,
   model,
+  modelKey,
   models,
   onModel,
   effort,
@@ -1805,7 +1808,8 @@ export function PromptBar({
   workspace?: string;
   onPickWorkspace(): void;
   model: string;
-  models: { value: string; label: string }[];
+  modelKey: string;
+  models: ModelOption[];
   onModel(value: string): void;
   effort: string;
   effortLevels: string[];
@@ -2247,7 +2251,7 @@ export function PromptBar({
           >
             <Icon path="M12 5v14M5 12h14" size={15} />
           </button>
-          <Combo value={model} options={models} searchable placeholder={t("composer.filterModels")} down={hero} onChange={onModel} />
+          <ModelPicker value={modelKey} fallback={model} options={models} down={hero} disabled={disabled} onChange={onModel} />
           {reasoningLevelsAvailable(effortLevels) && (
             <EffortPicker value={effort} levels={effortLevels} down={hero} onChange={onEffort} />
           )}
@@ -2397,30 +2401,6 @@ export function PermissionPicker({
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-export function EffortPicker({
-  value,
-  levels,
-  onChange,
-  down,
-}: {
-  value: string;
-  levels: string[];
-  onChange(value: string): void;
-  down?: boolean;
-}) {
-  const { t } = useI18n();
-  const options = pickEffortOptions(levels).map((level) => ({
-    value: level,
-    label: t(effortLabelKey(level)),
-  }));
-  if (options.length === 0) return null;
-  return (
-    <div className="effort-combo" title={t("composer.effort")}>
-      <Combo value={value} options={options} down={down} onChange={onChange} />
     </div>
   );
 }

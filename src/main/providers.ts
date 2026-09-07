@@ -5,7 +5,8 @@ import { ProviderRepository, serviceCredentialId } from "./provider-store";
 import { listModels } from "../shared/openai-models";
 import { serviceBaseUrl, serviceRuntimeConfig } from "../shared/provider-config";
 import { testModelConnection } from "../shared/provider-connection";
-import type { ProviderConnection, ProviderStatus } from "../shared/types";
+import type { ProviderConnection } from "../shared/types";
+import { desktopProviderStatuses } from "../shared/model-selection";
 
 let repository: ProviderRepository;
 export function providerRepository(): ProviderRepository {
@@ -30,13 +31,9 @@ async function connectionKey(input: ProviderConnection): Promise<string> {
   return providerRepository().credentials.read(serviceCredentialId(input.id));
 }
 
-export async function desktopProviderStatus(): Promise<ProviderStatus | undefined> {
+export async function desktopProviderStatus() {
   const store = await providerRepository().load();
-  const provider = store.providers.find((p) => p.id === store.defaultProviderId);
-  if (!provider) return undefined;
-  return { id: "openai", serviceId: provider.id, serviceVersion: provider.updatedAt, name: provider.name, configured: true, preferred: true,
-    defaultModel: store.defaultModelId ?? provider.defaultModelId ?? provider.models[0].id,
-    models: provider.models.map((m) => m.id), modelCapabilities: serviceRuntimeConfig(provider).models, baseUrl: provider.baseUrl };
+  return desktopProviderStatuses(store.providers, store.defaultProviderId, store.defaultModelId);
 }
 
 export async function resolveDesktopProvider(id: string, modelId?: string) {

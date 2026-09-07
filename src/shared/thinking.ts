@@ -25,6 +25,7 @@ const EXTENDED_THINKING_LEVELS = [
 ] as const;
 
 const EFFORT_LABEL_KEYS: Record<string, MessageKey> = {
+  off: "effort.off",
   minimal: "effort.minimal",
   low: "effort.low",
   medium: "effort.medium",
@@ -81,7 +82,7 @@ export function levelsForModel(
   const entry = catalog?.find((item) => item.id === modelId);
   if (entry?.reasoning === false) return ["off"];
   if (entry?.thinkingLevels !== undefined) {
-    const levels = pickEffortOptions(entry.thinkingLevels);
+    const levels = pickThinkingOptions(entry.thinkingLevels);
     return levels.length ? levels : ["off"];
   }
   if (entry?.thinkingLevelMap) return levelsFromThinkingMap(entry.thinkingLevelMap);
@@ -97,16 +98,21 @@ export function pickEffortOptions(levels: string[]): string[] {
   return EXTENDED_THINKING_LEVELS.filter((level) => level !== "off" && set.has(level));
 }
 
+export function pickThinkingOptions(levels: string[]): string[] {
+  const set = new Set(levels);
+  return EXTENDED_THINKING_LEVELS.filter((level) => set.has(level));
+}
+
 export function effortLabelKey(level: string): MessageKey {
   return EFFORT_LABEL_KEYS[level] ?? "effort.medium";
 }
 
 export function normalizeEffort(value: string, levels: string[]): string {
-  const options = pickEffortOptions(levels);
+  const options = pickThinkingOptions(levels);
   if (options.includes(value)) return value;
   if (options.includes(DEFAULT_EFFORT)) return DEFAULT_EFFORT;
   if (options.includes("high")) return "high";
-  return options[0] ?? "off";
+  return options.find((level) => level !== "off") ?? "off";
 }
 
 export function readStoredEffort(): string {

@@ -685,7 +685,7 @@ function registerIpc(): void {
         };
       },
     );
-    return desktop ? [desktop, ...builtIn.filter((p) => p.id !== desktop.id)] : builtIn;
+    return desktop.length ? [...desktop, ...builtIn.filter((p) => !desktop.some((service) => service.id === p.id))] : builtIn;
   });
   ipcMain.handle(
     "auth:read-api-key",

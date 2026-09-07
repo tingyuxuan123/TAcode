@@ -3,7 +3,7 @@
  *
  * 包含：服务选择器（预设下拉）、API 配置表单、模型发现与选择面板。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./ui";
 import { useI18n } from "./i18n";
 import {
@@ -39,33 +39,34 @@ function useModelDiscovery(
   const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const requestSeq = useRef(0);
 
-  useEffect(() => {
+  // 模型发现改为手动触发：只在用户点击“发现模型”按钮时执行，不再随输入自动调起。
+  const discover = useCallback(() => {
     const trimmedUrl = baseUrl.trim();
+    const seq = ++requestSeq.current;
     setModels([]);
     setError("");
-    setLoading(false);
-    if (!trimmedUrl) return;
+    if (!trimmedUrl) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError("");
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        const ids = await window.harness.providers.discover({ id: providerId, baseUrl: trimmedUrl, apiKey: apiKey.trim(), apiStyle });
-        if (!cancelled) setModels(ids);
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }, 600);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
+    window.harness.providers
+      .discover({ id: providerId, baseUrl: trimmedUrl, apiKey: apiKey.trim(), apiStyle })
+      .then((ids) => {
+        if (seq === requestSeq.current) setModels(ids);
+      })
+      .catch((err) => {
+        if (seq === requestSeq.current) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (seq === requestSeq.current) setLoading(false);
+      });
   }, [baseUrl, apiKey, apiStyle, providerId]);
 
-  return { models, loading, error };
+  return { models, loading, error, discover };
 }
 
 // --- 服务选择器 ---
@@ -174,6 +175,8 @@ export function ModelSelectionPanes({
   apiStyle,
   loading,
   error,
+  onDiscover,
+  discoverDisabled,
 }: {
   availableModels: string[];
   selectedModels: ProviderModelBinding[];
@@ -181,6 +184,8 @@ export function ModelSelectionPanes({
   apiStyle: CatalogApiStyle;
   loading: boolean;
   error: string;
+  onDiscover: () => void;
+  discoverDisabled: boolean;
 }) {
   const { t } = useI18n();
   const [search, setSearch] = useState("");
@@ -281,6 +286,14 @@ export function ModelSelectionPanes({
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t("settings.filterModels")}
           />
+          <button
+            type="button"
+            className="provider-model-discover"
+            onClick={onDiscover}
+            disabled={loading || discoverDisabled}
+          >
+            {loading ? t("settings.discoveringModels") : t("settings.discoverModels")}
+          </button>
         </div>
         {error && (
           <div className="provider-model-error">
@@ -471,7 +484,7 @@ export function ProviderSetupDialog({
   const resolvedApiStyle = apiStyle;
   const selectedDefault = models.some((m) => m.id === defaultModelId) ? defaultModelId : models[0]?.id ?? "";
 
-  const { models: discoveredModels, loading: discovering, error: discoveryError } = useModelDiscovery(
+  const { models: discoveredModels, loading: discovering, error: discoveryError, discover } = useModelDiscovery(
     resolvedBaseUrl,
     apiKey,
     resolvedApiStyle,
@@ -561,61 +574,61 @@ export function ProviderSetupDialog({
 
         <div className="provider-dialog-body" inert={saving || testing}>
           <div className="provider-form-grid">
-            <div className="provider-form-col">
-              <label className="provider-field">
-                <span>{t("settings.serviceProvider")}</span>
-                <ServicePicker value={service} onChange={(id) => {
-                  setService(id);
-                  const preset = NAMED_ENDPOINT_PRESETS.find((p) => p.id === id);
-                  if (preset) { setName(preset.name); setBaseUrl(preset.baseUrl); setApiStyle(preset.apiStyle); }
-                  setApiKey(""); setModels([]); setDefaultModelId("");
-                }} />
-              </label>
-              <label className="provider-field">
-                <span>{t("settings.profileName")}</span>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder={namedPreset?.name ?? t("settings.profileNamePlaceholder")}
-                />
-              </label>
-              <label className="provider-field">
-                <span>{t("settings.apiKey")}</span>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={editing ? t("settings.apiKeyEditHint") : t("settings.apiKeyPlaceholder")}
-                />
-              </label>
-            </div>
-            <div className="provider-form-col">
-              <label className="provider-field">
-                <span>{t("settings.baseUrl")}</span>
-                <input
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="https://api.example.com/v1"
-                />
-              </label>
-              <label className="provider-field">
-                <span>{t("settings.apiStyle")}</span>
-                <select
-                  value={apiStyle}
-                  onChange={(e) => setApiStyle(e.target.value as CatalogApiStyle)}
-                >
-                  {Object.entries(API_STYLE_LABELS).filter(([value]) => SUPPORTED_SERVICE_STYLES.includes(value as CatalogApiStyle)).map(([value, label]) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
-                </select>
-              </label>
-              <p className="provider-hint">{t("settings.styleHint")}</p>
-            </div>
+            <label className="provider-field">
+              <span>{t("settings.serviceProvider")}</span>
+              <ServicePicker value={service} onChange={(id) => {
+                setService(id);
+                const preset = NAMED_ENDPOINT_PRESETS.find((p) => p.id === id);
+                if (preset) { setName(preset.name); setBaseUrl(preset.baseUrl); setApiStyle(preset.apiStyle); }
+                setApiKey(""); setModels([]); setDefaultModelId("");
+              }} />
+            </label>
+            <label className="provider-field">
+              <span>{t("settings.profileName")}</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={namedPreset?.name ?? t("settings.profileNamePlaceholder")}
+              />
+            </label>
+            <label className="provider-field">
+              <span>{t("settings.baseUrl")}</span>
+              <input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="https://api.example.com/v1"
+              />
+            </label>
+            <label className="provider-field">
+              <span>{t("settings.apiStyle")}</span>
+              <select
+                value={apiStyle}
+                onChange={(e) => setApiStyle(e.target.value as CatalogApiStyle)}
+              >
+                {Object.entries(API_STYLE_LABELS).filter(([value]) => SUPPORTED_SERVICE_STYLES.includes(value as CatalogApiStyle)).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="provider-field">
+              <span>{t("settings.apiKey")}</span>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={editing ? t("settings.apiKeyEditHint") : t("settings.apiKeyPlaceholder")}
+              />
+            </label>
+            {models.length > 0 && <label className="provider-field">
+              <span>{t("settings.serviceModel")}</span>
+              <select value={selectedDefault} onChange={(e) => setDefaultModelId(e.target.value)}>
+                {models.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
+              </select>
+            </label>}
           </div>
 
           <div className="provider-section">
             <h3>{t("settings.models")}</h3>
-            <p className="provider-hint">{t("settings.modelsHint")}</p>
             <ModelSelectionPanes
               availableModels={discoveredModels}
               selectedModels={models}
@@ -623,13 +636,9 @@ export function ProviderSetupDialog({
               apiStyle={resolvedApiStyle}
               loading={discovering}
               error={discoveryError}
+              onDiscover={discover}
+              discoverDisabled={!resolvedBaseUrl.trim()}
             />
-            {models.length > 0 && <label className="provider-field">
-              <span>{t("settings.serviceModel")}</span>
-              <select value={selectedDefault} onChange={(e) => setDefaultModelId(e.target.value)}>
-                {models.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
-              </select>
-            </label>}
           </div>
         </div>
 
@@ -640,7 +649,6 @@ export function ProviderSetupDialog({
           </div>
         )}
         {testResult && <p role="status" className={testResult.ok ? "provider-test-success" : "provider-error"}>{testResult.message}</p>}
-        <p className="provider-hint provider-test-hint">{t("settings.serviceTestHint")}</p>
       </div>
     </div>
   );

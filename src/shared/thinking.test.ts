@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { effortLabelKey, inferModelReasoning, levelsForModel, levelsFromThinkingMap, normalizeEffort, pickEffortOptions, reasoningLevelsAvailable } from "./thinking";
+import { effortLabelKey, inferModelReasoning, levelsForModel, levelsFromThinkingMap, normalizeEffort, pickEffortOptions, pickThinkingOptions, reasoningLevelsAvailable } from "./thinking";
 import { t } from "./i18n";
 
 describe("thinking effort helpers", () => {
+  it("exposes off on the slider only when supported, preserving every discrete tier", () => {
+    expect(pickThinkingOptions(["max", "off", "high", "low", "xhigh", "low"]))
+      .toEqual(["off", "low", "high", "xhigh", "max"]);
+    expect(pickThinkingOptions(["low", "high", "max"])).toEqual(["low", "high", "max"]);
+    expect(normalizeEffort("off", ["off", "low", "high"])).toBe("off");
+    expect(normalizeEffort("off", ["low", "high"])).toBe("high");
+    expect(normalizeEffort("max", ["off", "low"])).toBe("low");
+    expect(levelsForModel("reasoner", [{ id: "reasoner", reasoning: true, thinkingLevels: ["off", "high"] }]))
+      .toEqual(["off", "high"]);
+    expect(t("zh", effortLabelKey("off"))).toBe("关闭");
+  });
+
   it("keeps the four UI tiers when the model supports them", () => {
     expect(pickEffortOptions(["off", "low", "medium", "high", "xhigh"])).toEqual([
       "low",
