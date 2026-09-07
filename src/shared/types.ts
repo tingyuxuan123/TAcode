@@ -54,12 +54,17 @@ export interface ProviderStatus {
   defaultModel: string;
   baseUrl?: string;
   preferred?: boolean;
+  /** Desktop-managed service; runtime credentials are resolved in the main process. */
+  serviceId?: string;
+  serviceVersion?: string;
+  models?: string[];
 }
 
 export interface AgentStartOptions {
   cwd?: string;
   project?: boolean;
   provider: ProviderId;
+  serviceId?: string;
   model?: string;
   baseUrl?: string;
   maxTokens?: number;
@@ -102,7 +107,7 @@ export interface AgentSessionStats {
 export interface AgentSnapshot {
   state: Record<string, unknown>;
   messages: unknown[];
-  models: Array<{ provider: string; id: string; contextWindow?: number; reasoning?: boolean }>;
+  models: Array<{ provider: string; id: string; contextWindow?: number; reasoning?: boolean; input?: string[] }>;
   thinkingLevels: string[];
   stats?: AgentSessionStats;
   cwd?: string;
@@ -186,7 +191,7 @@ export interface DesktopApi {
     status(): Promise<ProviderStatus[]>;
     readApiKey(provider: Exclude<ProviderId, "openai-codex">): Promise<string>;
     saveApiKey(provider: Exclude<ProviderId, "openai-codex">, key: string, baseUrl?: string, model?: string): Promise<void>;
-    listModels(baseUrl: string, apiKey: string): Promise<string[]>;
+    listModels(baseUrl: string, apiKey: string, apiStyle?: import("./provider-presets").CatalogApiStyle): Promise<string[]>;
     profiles(): Promise<import("./chat-profiles").ChatProfiles>;
     saveProfiles(profiles: import("./chat-profiles").ChatProfiles): Promise<void>;
     logout(provider: ProviderId): Promise<void>;
@@ -200,4 +205,64 @@ export interface DesktopApi {
     onError(listener: (message: string) => void): () => void;
   };
   onAppCommand(listener: (command: string) => void): () => void;
+  providers: {
+    list(): Promise<ProviderRecord[]>;
+    defaults(): Promise<{ defaultProviderId: string | null; defaultModelId: string | null }>;
+    create(input: {
+      name: string;
+      vendorKey: string;
+      baseUrl: string;
+      apiStyle: import("./provider-presets").CatalogApiStyle;
+      models: ProviderModelBinding[];
+      defaultModelId?: string;
+      apiKey?: string;
+    }): Promise<ProviderRecord>;
+    update(input: {
+      id: string;
+      name?: string;
+      vendorKey?: string;
+      baseUrl?: string;
+      apiStyle?: import("./provider-presets").CatalogApiStyle;
+      models?: ProviderModelBinding[];
+      defaultModelId?: string;
+      isEnabled?: boolean;
+      apiKey?: string;
+    }): Promise<ProviderRecord | null>;
+    delete(id: string): Promise<boolean>;
+    setDefault(providerId: string, modelId?: string): Promise<boolean>;
+    test(id: string): Promise<{ ok: boolean; message: string }>;
+    discover(input: ProviderConnection): Promise<string[]>;
+    testConnection(input: ProviderConnection & { modelId: string }): Promise<{ ok: boolean; message: string }>;
+  };
+}
+
+export interface ProviderConnection {
+  id?: string;
+  baseUrl: string;
+  apiStyle: import("./provider-presets").CatalogApiStyle;
+  /** Omitted/blank when editing means reuse the existing service's credential. */
+  apiKey?: string;
+}
+
+export interface ProviderModelBinding {
+  id: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+  thinkingLevels?: string[];
+  supportsImages?: boolean;
+}
+
+export interface ProviderRecord {
+  id: string;
+  name: string;
+  vendorKey: string;
+  baseUrl: string;
+  apiStyle: import("../shared/provider-presets").CatalogApiStyle;
+  apiKeyHint?: string;
+  defaultModelId?: string;
+  models: ProviderModelBinding[];
+  isEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }

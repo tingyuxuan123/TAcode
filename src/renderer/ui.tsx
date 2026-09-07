@@ -1,11 +1,13 @@
-import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PREVIEW_HOST, PREVIEW_SCHEME, type AgentSessionStats, type ExtensionUiRequest, type PermissionMode } from "../shared/types";
 import { skillUserDisplay } from "../shared/skills";
 import { visibleUserText, visionResultSections, visionToolChips } from "../shared/vision-api";
-import { DEEPSEEK_PRESET, activeCustomProfile, defaultCustomProfile, isDeepSeekUrl, type CustomApiProfile } from "../shared/chat-profiles";
+import { defaultCustomProfile, type CustomApiProfile } from "../shared/chat-profiles";
+import { ProviderListPage, ProviderSetupDialog } from "./provider-dialog";
+import type { ProviderRecord } from "../shared/types";
 import { applyTheme, readStoredTheme, THEMES, type ThemeId } from "../shared/theme";
 import { effortLabelKey, pickEffortOptions, reasoningLevelsAvailable } from "../shared/thinking";
 import { approvalTitle, baseName, cacheHitRate, collectFileChanges, collapseThinking, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, omitFinalReply, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolSummary, toolWritePreview, traceRows, turnWork, assistantReplyText, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
@@ -2892,7 +2894,7 @@ function ApiProfilesEditor({
   );
 }
 
-type SettingsPane = "chat" | "vision" | "appearance" | "shortcuts" | "skills" | "about";
+type SettingsPane = "providers" | "vision" | "appearance" | "shortcuts" | "skills" | "about";
 
 const THEME_LABEL: Record<ThemeId, MessageKey> = {
   white: "settings.themeWhite",
@@ -2911,7 +2913,7 @@ function settingsNav(t: ReturnType<typeof useI18n>["t"]): Array<{ label: string;
   {
     label: t("settings.groupModels"),
     items: [
-      { id: "chat", label: t("settings.chat"), icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
+      { id: "providers", label: t("settings.providers"), icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
       { id: "vision", label: t("settings.vision"), icon: "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z\nM11 9a2 2 0 1 1-4 0 2 2 0 0 1 4 0\nm21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" },
     ],
   },
@@ -2945,98 +2947,95 @@ function settingsNav(t: ReturnType<typeof useI18n>["t"]): Array<{ label: string;
 }
 
 export function Login({
-  configured,
-  model,
-  baseUrl,
   agentSkills = [],
   onRefreshSkills,
   onClose,
   onSaved,
 }: {
-  configured: boolean;
-  model: string;
-  baseUrl?: string;
   agentSkills?: AgentSkillCommand[];
   onRefreshSkills?: () => void;
   onClose(): void;
   onSaved(): Promise<void>;
 }) {
   const { t } = useI18n();
-  const [pane, setPane] = useState<SettingsPane>("chat");
+  const [pane, setPane] = useState<SettingsPane>("providers");
   const [theme, setTheme] = useState<ThemeId>(readStoredTheme);
-  const [customProfiles, setCustomProfiles] = useState<CustomApiProfile[]>([]);
-  const [activeCustomId, setActiveCustomId] = useState("");
   const [visionProfiles, setVisionProfiles] = useState<CustomApiProfile[]>([]);
   const [activeVisionId, setActiveVisionId] = useState("");
   const [busy, setBusy] = useState(false);
-  const [chatModels, setChatModels] = useState<string[]>([]);
   const [visionModels, setVisionModels] = useState<string[]>([]);
-  const [listing, setListing] = useState<"chat" | "vision" | null>(null);
+  const [listing, setListing] = useState(false);
   const [appVersion, setAppVersion] = useState("");
   const [skillRevealError, setSkillRevealError] = useState<string>();
-  const [testStatus, setTestStatus] = useState<{ target: "chat" | "vision"; ok: boolean; message: string } | null>(null);
+  const [testStatus, setTestStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  // Provider management state
+  const [providers, setProviders] = useState<ProviderRecord[]>([]);
+  const [providerDefaults, setProviderDefaults] = useState<{ defaultProviderId: string | null; defaultModelId: string | null }>({ defaultProviderId: null, defaultModelId: null });
+  const [setupForProvider, setSetupForProvider] = useState<ProviderRecord | null | undefined>(undefined); // undefined=closed, null=add, ProviderRecord=edit
+  const [providerLoadError, setProviderLoadError] = useState("");
 
-  const activeCustom = customProfiles.find((item) => item.id === activeCustomId) ?? customProfiles[0];
   const activeVision = visionProfiles.find((item) => item.id === activeVisionId) ?? visionProfiles[0];
-  const chatUrl = activeCustom?.url ?? "";
-  const chatKey = activeCustom?.apiKey ?? "";
   const visionUrl = activeVision?.url ?? "";
   const visionKey = activeVision?.apiKey ?? "";
   const modKey = window.harness.platform === "darwin" ? "⌘" : "Ctrl";
 
-  const listModels = async (target: "chat" | "vision") => {
-    const base = target === "chat" ? chatUrl : visionUrl;
-    const secret = target === "chat" ? chatKey : visionKey;
+  const listVisionModels = async () => {
+    const base = visionUrl;
+    const secret = visionKey;
     if (!base.trim() || !secret.trim()) {
-      setTestStatus({ target, ok: false, message: t("settings.fillUrlKey") });
+      setTestStatus({ ok: false, message: t("settings.fillUrlKey") });
       return;
     }
-    setListing(target);
+    setListing(true);
     setTestStatus(null);
     const start = Date.now();
     try {
       const ids = await window.harness.auth.listModels(base.trim(), secret.trim());
       const elapsed = Date.now() - start;
-      if (target === "chat") setChatModels(ids);
-      else setVisionModels(ids);
+      setVisionModels(ids);
       if (ids.length === 0) {
-        setTestStatus({ target, ok: true, message: t("settings.okNoModels", { ms: elapsed }) });
+        setTestStatus({ ok: true, message: t("settings.okNoModels", { ms: elapsed }) });
       } else {
-        setTestStatus({ target, ok: true, message: t("settings.okModels", { ms: elapsed, n: ids.length }) });
+        setTestStatus({ ok: true, message: t("settings.okModels", { ms: elapsed, n: ids.length }) });
       }
     } catch (error) {
       setTestStatus({
-        target,
         ok: false,
         message: error instanceof Error ? error.message : t("settings.connectFailed"),
       });
     } finally {
-      setListing(null);
+      setListing(false);
     }
   };
 
   useEffect(() => {
     void Promise.all([
-      window.harness.auth.profiles(),
       window.harness.vision.config(),
       window.harness.app.version().catch(() => "0.1.0"),
-    ]).then(async ([profiles, config, ver]) => {
-      setCustomProfiles(profiles.customProfiles);
-      setActiveCustomId(profiles.activeCustomId);
+    ]).then(async ([config, ver]) => {
       setVisionProfiles(config.profiles);
       setActiveVisionId(config.activeProfileId);
       if (ver) setAppVersion(ver);
-      const url = activeCustomProfile(profiles)?.url ?? "";
-      const key = activeCustomProfile(profiles)?.apiKey ?? "";
-      if (url.trim() && key.trim()) {
-        void window.harness.auth.listModels(url, key).then(setChatModels).catch(() => undefined);
-      }
       const vision = config.profiles.find((item) => item.id === config.activeProfileId) ?? config.profiles[0];
       if (vision?.url.trim() && vision.apiKey.trim()) {
         void window.harness.auth.listModels(vision.url, vision.apiKey).then(setVisionModels).catch(() => undefined);
       }
     }).catch(() => undefined);
   }, []);
+
+  const refreshProviders = useCallback(async () => {
+    const [list, defaults] = await Promise.all([
+      window.harness.providers.list(),
+      window.harness.providers.defaults(),
+    ]);
+    setProviders(list);
+    setProviderDefaults(defaults);
+    setProviderLoadError("");
+  }, []);
+
+  useEffect(() => {
+    void refreshProviders().catch((error) => setProviderLoadError(error instanceof Error ? error.message : String(error)));
+  }, [refreshProviders]);
 
   useEffect(() => {
     if (pane !== "skills") return;
@@ -3055,18 +3054,6 @@ export function Login({
           event.preventDefault();
           setBusy(true);
           try {
-            if (customProfiles.length === 0 || Boolean(activeCustom?.url && activeCustom.model && activeCustom.apiKey)) {
-              const official = customProfiles.find((item) => isDeepSeekUrl(item.url));
-              await window.harness.auth.saveProfiles({
-                kind: "custom",
-                deepseek: {
-                  model: official?.model || DEEPSEEK_PRESET.model,
-                  apiKey: official?.apiKey || "",
-                },
-                customProfiles,
-                activeCustomId: activeCustom?.id ?? "",
-              });
-            }
             await window.harness.vision.saveConfig({
               profiles: visionProfiles,
               activeProfileId: activeVision?.id ?? activeVisionId,
@@ -3100,49 +3087,23 @@ export function Login({
         <div className="settings-main">
           <header className="settings-head">
             <h2>
-              {pane === "chat"
-                ? t("settings.chat")
-                : pane === "vision"
-                  ? t("settings.vision")
-                  : pane === "appearance"
-                    ? t("settings.appearance")
-                    : pane === "skills"
-                      ? t("settings.skills")
-                      : pane === "shortcuts"
-                        ? t("settings.shortcuts")
-                        : t("settings.about")}
+              {pane === "providers"
+                  ? t("settings.providers")
+                  : pane === "vision"
+                    ? t("settings.vision")
+                    : pane === "appearance"
+                      ? t("settings.appearance")
+                      : pane === "skills"
+                        ? t("settings.skills")
+                        : pane === "shortcuts"
+                          ? t("settings.shortcuts")
+                          : t("settings.about")}
             </h2>
             <button type="button" className="settings-close" aria-label={t("common.close")} onClick={onClose}>
               <Icon path="M6 6l12 12M18 6L6 18" />
             </button>
           </header>
           <div className="settings-body">
-            {pane === "chat" && (
-              <>
-                <p className="settings-hint">{t("settings.customHint")}</p>
-                <ApiProfilesEditor
-                  profiles={customProfiles}
-                  activeId={activeCustomId}
-                  onProfiles={setCustomProfiles}
-                  onActiveId={(id) => {
-                    setActiveCustomId(id);
-                    setChatModels([]);
-                    setTestStatus((current) => current?.target === "chat" ? null : current);
-                    const profile = customProfiles.find((item) => item.id === id);
-                    if (profile?.url.trim() && profile.apiKey.trim()) {
-                      void window.harness.auth.listModels(profile.url, profile.apiKey).then(setChatModels).catch(() => undefined);
-                    }
-                  }}
-                  models={chatModels}
-                  listing={listing === "chat"}
-                  onList={() => void listModels("chat")}
-                  urlPlaceholder="https://api.example.com/v1"
-                  showMaxTokens
-                  testStatus={testStatus?.target === "chat" ? testStatus : null}
-                />
-              </>
-            )}
-
             {pane === "vision" && (
               <>
                 <p className="settings-hint">{t("settings.visionHint")}</p>
@@ -3153,19 +3114,60 @@ export function Login({
                   onActiveId={(id) => {
                     setActiveVisionId(id);
                     setVisionModels([]);
-                    setTestStatus((current) => current?.target === "vision" ? null : current);
+                    setTestStatus(null);
                     const profile = visionProfiles.find((item) => item.id === id);
                     if (profile?.url.trim() && profile.apiKey.trim()) {
                       void window.harness.auth.listModels(profile.url, profile.apiKey).then(setVisionModels).catch(() => undefined);
                     }
                   }}
                   models={visionModels}
-                  listing={listing === "vision"}
-                  onList={() => void listModels("vision")}
+                  listing={listing}
+                  onList={() => void listVisionModels()}
                   urlPlaceholder="https://api.example.com/v1/chat/completions"
-                  testStatus={testStatus?.target === "vision" ? testStatus : null}
+                  testStatus={testStatus}
                 />
                 <p className="settings-hint">{t("settings.mineruHint")}</p>
+              </>
+            )}
+
+            {pane === "providers" && (
+              <>
+                {providerLoadError && <p role="alert" className="provider-error">{providerLoadError}</p>}
+                <ProviderListPage
+                  providers={providers}
+                  defaultProviderId={providerDefaults.defaultProviderId}
+                  defaultModelId={providerDefaults.defaultModelId}
+                  onAdd={() => setSetupForProvider(null)}
+                  onEdit={(provider) => setSetupForProvider(provider)}
+                  onDelete={async (id) => {
+                    await window.harness.providers.delete(id);
+                    await refreshProviders();
+                  }}
+                  onSetDefault={async (id, modelId) => {
+                    await window.harness.providers.setDefault(id, modelId);
+                    await refreshProviders();
+                  }}
+                  onToggle={async (id, enabled) => {
+                    await window.harness.providers.update({ id, isEnabled: enabled });
+                    await refreshProviders();
+                  }}
+                  onTest={async (id) => {
+                    return window.harness.providers.test(id);
+                  }}
+                />
+                {setupForProvider !== undefined && (
+                  <ProviderSetupDialog
+                    provider={setupForProvider}
+                    onClose={() => setSetupForProvider(undefined)}
+                    onSaved={async () => {
+                      // Saving already succeeded. A refresh failure must not
+                      // leave an add dialog open where retry creates a duplicate.
+                      try { await refreshProviders(); }
+                      catch (error) { setProviderLoadError(error instanceof Error ? error.message : String(error)); }
+                      setSetupForProvider(undefined);
+                    }}
+                  />
+                )}
               </>
             )}
             {pane === "appearance" && (
@@ -3343,18 +3345,6 @@ export function Login({
             )}
           </div>
           <footer className="settings-foot">
-            {configured && pane === "chat" && (
-              <button
-                type="button"
-                className="ghost danger"
-                onClick={async () => {
-                  await window.harness.auth.logout("deepseek");
-                  await onSaved();
-                }}
-              >
-                {t("settings.clearConfig")}
-              </button>
-            )}
             {pane === "about" && (
               <>
                 <button
@@ -3383,7 +3373,7 @@ export function Login({
                 </button>
               </>
             )}
-            {pane !== "chat" && pane !== "vision" ? (
+            {pane !== "vision" ? (
               <button type="button" className="primary" onClick={onClose}>
                 {t("settings.close")}
               </button>
@@ -3393,9 +3383,6 @@ export function Login({
                 className="primary"
                 disabled={
                   busy ||
-                  (activeCustom
-                    ? !activeCustom.url.trim() || !activeCustom.model.trim() || !activeCustom.apiKey.trim()
-                    : false) ||
                   (activeVision
                     ? !activeVision.url.trim() || !activeVision.model.trim() || !activeVision.apiKey.trim()
                     : false)

@@ -71,7 +71,13 @@ The renderer has no direct Node.js access; desktop capabilities cross the typed 
 
 ## Models and images
 
-The desktop app currently focuses on DeepSeek and custom OpenAI-compatible Base URLs. `tether-agent-core` also includes provider foundations for OpenAI, Anthropic, OpenRouter, Z.AI, Kimi, MiniMax, and xAI; the desktop settings UI will expose these progressively.
+Add a model provider under **Settings → AI Services**: choose a preset or custom service, enter its name, API URL and key, then discover models or enter model IDs manually. Preset URLs and API styles remain editable. Each model supports context/output limits, image-input capabilities and reasoning-level configuration.
+
+- Supported protocols: Chat Completions, Responses, Anthropic Messages, Google Generative AI, and OpenCode Go via Chat Completions. Only runtime-supported styles are offered; Codex OAuth login is not included.
+- Edit, delete, enable/disable services and select the default service/model. Multiple services from the same vendor have independent credentials. The existing DeepSeek configuration remains the fallback when no desktop service is enabled.
+- **Test connection** sends a short generation request to the selected model and may incur a small charge. Successful model discovery alone does not prove generation access.
+- Keys use separate `tether-agent-core` CredentialStore entries, not provider metadata. The credential backend may be an OS credential store or file storage depending on runtime configuration. Metadata is stored in `providers.json` under Electron userData.
+- After closing settings, service changes apply on the next send. Native PDF configuration and automatic cross-model routing are outside this feature; PDFs continue through the existing OCR workflow.
 
 For pasted images:
 

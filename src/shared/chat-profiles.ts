@@ -194,7 +194,7 @@ export function parseChatProfiles(raw: unknown): ChatProfiles | undefined {
   const activeCustomId = text(value.activeCustomId);
   const listed = Array.isArray(value.customProfiles);
   let customProfiles = listed
-    ? value.customProfiles.map(parseCustomProfile).filter((item): item is CustomApiProfile => Boolean(item))
+    ? (value.customProfiles as unknown[]).map(parseCustomProfile).filter((item): item is CustomApiProfile => Boolean(item))
     : [];
   let resolvedActiveId = activeCustomId;
   if (!listed) {

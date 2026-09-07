@@ -91,6 +91,8 @@ export class AgentHost {
     visionExtension?: string;
     visionConfig?: string;
     visionUploads?: string;
+    providerExtension?: string;
+    desktopProvider?: { config: unknown; apiKey: string };
   }): Promise<AgentSnapshot> {
     await this.stop();
     const args = [
@@ -114,6 +116,7 @@ export class AgentHost {
     args.push("--transport", "chat");
     if (options.sessionPath) args.push("--session", options.sessionPath);
     if (options.visionExtension) args.push("--extension", options.visionExtension);
+    if (options.providerExtension) args.push("--extension", options.providerExtension);
 
     this.lineBuffer = Buffer.alloc(0);
     this.stderr = "";
@@ -124,6 +127,10 @@ export class AgentHost {
         ELECTRON_RUN_AS_NODE: "1",
         PI_TELEMETRY: "0",
         PI_SKIP_VERSION_CHECK: "1",
+        ...(options.desktopProvider ? {
+          TETHER_DESKTOP_PROVIDER_CONFIG: JSON.stringify(options.desktopProvider.config),
+          TETHER_DESKTOP_PROVIDER_KEY: options.desktopProvider.apiKey,
+        } : {}),
         ...(options.extraModels?.length
           ? { HARNESS_EXTRA_MODELS: options.extraModels.join(",") }
           : {}),

@@ -58,7 +58,7 @@ const api: DesktopApi = {
     status: () => ipcRenderer.invoke("auth:status"),
     readApiKey: (provider) => ipcRenderer.invoke("auth:read-api-key", provider),
     saveApiKey: (provider, key, baseUrl, model) => ipcRenderer.invoke("auth:save-api-key", provider, key, baseUrl, model),
-    listModels: (baseUrl, apiKey) => ipcRenderer.invoke("auth:list-models", baseUrl, apiKey),
+    listModels: (baseUrl, apiKey, apiStyle) => ipcRenderer.invoke("auth:list-models", baseUrl, apiKey, apiStyle),
     profiles: () => ipcRenderer.invoke("auth:profiles"),
     saveProfiles: (profiles) => ipcRenderer.invoke("auth:save-profiles", profiles),
     logout: (provider) => ipcRenderer.invoke("auth:logout", provider),
@@ -72,6 +72,17 @@ const api: DesktopApi = {
     onError: (listener) => subscribe<string>("agent:error", listener),
   },
   onAppCommand: (listener) => subscribe<string>("app:command", listener),
+  providers: {
+    list: () => ipcRenderer.invoke("providers:list"),
+    defaults: () => ipcRenderer.invoke("providers:defaults"),
+    create: (input) => ipcRenderer.invoke("providers:create", input),
+    update: (input) => ipcRenderer.invoke("providers:update", input),
+    delete: (id) => ipcRenderer.invoke("providers:delete", id),
+    setDefault: (providerId, modelId) => ipcRenderer.invoke("providers:set-default", providerId, modelId),
+    test: (id) => ipcRenderer.invoke("providers:test", id),
+    discover: (input) => ipcRenderer.invoke("providers:discover", input),
+    testConnection: (input) => ipcRenderer.invoke("providers:test-connection", input),
+  },
 };
 
 contextBridge.exposeInMainWorld("harness", api);

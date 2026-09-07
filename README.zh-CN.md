@@ -71,7 +71,13 @@ Pi ecosystem
 
 ## 模型与图片
 
-桌面端默认面向 DeepSeek，并允许填写自定义 OpenAI 兼容 Base URL。`tether-agent-core` 还包含 OpenAI、Anthropic、OpenRouter、Z.AI、Kimi、MiniMax、xAI 等 provider 基础能力；桌面设置页会逐步开放这些配置。
+在「设置 → AI 服务」中添加模型供应商：选择预设或自定义服务，填写名称、API URL 和密钥，再发现模型或手动输入模型 ID。预设地址和接口格式也可以编辑。每个模型可设置上下文、最大输出、图片输入与推理等级。
+
+- 支持 Chat Completions、Responses、Anthropic Messages、Google Generative AI，以及按 Chat Completions 接入的 OpenCode Go。只提供当前运行时支持的格式，不包含 Codex OAuth 登录。
+- 可编辑、删除、启用/禁用服务，并选择默认服务与模型；同一厂商可添加多个独立服务。未设置桌面服务时保留原有 DeepSeek 配置。
+- 「测试连接」会向所选模型发送一次短生成请求，可能产生少量费用；模型列表获取成功不代表模型一定可以生成。
+- 每个服务使用独立凭据条目，密钥不写入供应商元数据。凭据由 `tether-agent-core` CredentialStore 管理（具体使用系统凭据库还是文件存储取决于运行时配置）；元数据位于 Electron userData 下的 `providers.json`。
+- 修改服务后关闭设置，在下一次发送时应用配置。原生 PDF 配置和跨模型自动调度不在本功能范围；PDF 继续使用现有 OCR 流程。
 
 粘贴图片时：
 

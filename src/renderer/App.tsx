@@ -353,11 +353,17 @@ function AccountMenu({
   );
 }
 
+function activeChatProvider(accounts: ProviderStatus[]) {
+  return accounts.find((item) => item.serviceId && item.preferred) ?? accounts.find((item) => item.id === "deepseek");
+}
+
 export function App() {
   const { t, locale } = useI18n();
   const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  const runtimeProviderRef = useRef<ProviderStatus["id"]>("deepseek");
+  const runtimeServiceRef = useRef("");
   const [workspace, setWorkspace] = useState<string>();
   const [activeSession, setActiveSession] = useState<string>();
   const [model, setModel] = useState("");
@@ -466,7 +472,7 @@ export function App() {
   const todos = chatTodos.length ? chatTodos : featureTodos;
   const planApproval = planAwaitingApproval(permission, running, todos);
   const darwin = window.harness.platform === "darwin";
-  const connected = providers.find((item) => item.id === "deepseek");
+  const connected = activeChatProvider(providers);
   const waiting = running && (groups.length === 0 || groups.at(-1)?.type === "user");
   const suggestions = workspace
     ? [
@@ -566,7 +572,7 @@ export function App() {
     }
     if (seq !== startSeq.current) return false;
     setProviders(accounts);
-    const chat = accounts.find((item) => item.id === "deepseek");
+    const chat = activeChatProvider(accounts);
     if (!chat?.configured) {
       setLoginOpen(true);
       setToast(t("toast.fillConfig"));
@@ -582,7 +588,8 @@ export function App() {
         sessionRef.current = sessionPath;
       }
     }
-    const modelId = modelRef.current.trim() || chat.defaultModel;
+    const requestedModel = modelRef.current.trim();
+    const modelId = chat.serviceId && !chat.models?.includes(requestedModel) ? chat.defaultModel : requestedModel || chat.defaultModel;
     const extraModels = [...new Set([modelId, ...chatModelsRef.current].filter(Boolean))];
     if (!resume) {
       if (cwd) {
@@ -603,7 +610,8 @@ export function App() {
       const snapshot = await window.harness.agent.start({
         ...(cwd ? { cwd } : {}),
         project: asProject,
-        provider: "deepseek",
+        provider: chat.id,
+        ...(chat.serviceId ? { serviceId: chat.serviceId } : {}),
         ...(modelId ? { model: modelId } : {}),
         ...(chat.baseUrl ? { baseUrl: chat.baseUrl } : {}),
         effort: effortRef.current || DEFAULT_EFFORT,
@@ -635,16 +643,19 @@ export function App() {
         }
       }
       live.current = true;
+      runtimeProviderRef.current = chat.id;
+      runtimeServiceRef.current = `${chat.serviceId ?? ""}:${chat.serviceVersion ?? ""}`;
       agentCwd.current = snapshot.cwd ?? cwd ?? agentCwd.current;
       agentModelsRef.current = snapshot.models ?? [];
       agentModelIdsRef.current = agentModelsRef.current.map((item) => item.id).filter(Boolean);
       if (modelId) {
         setModel(modelId);
-        await window.harness.agent.command("set_model", { provider: "deepseek", modelId }).catch(() => undefined);
+        await window.harness.agent.command("set_model", { provider: chat.id, modelId });
       }
       applyThinkingForModel(modelId);
       const nextEffort = effortRef.current;
       await window.harness.agent.command("set_thinking_level", { level: nextEffort }).catch(() => undefined);
+      await syncAgentThinking();
       await window.harness.agent.command("set_auto_compaction", { enabled: true }).catch(() => undefined);
       if (seq !== startSeq.current) return false;
       const file = sessionFileOf(snapshot) ?? sessionPath;
@@ -669,7 +680,7 @@ export function App() {
     } finally {
       if (seq === startSeq.current) setLoading(false);
     }
-  }, [applyThinkingForModel, permission, refreshAgentSkills, resolveSandbox, t]);
+  }, [applyThinkingForModel, permission, refreshAgentSkills, resolveSandbox, syncAgentThinking, t]);
 
   const openSession = useCallback((session: SessionSummary) => {
     // Allow re-open when the row is highlighted but the transcript failed to load.
@@ -679,11 +690,16 @@ export function App() {
 
   const ensureModelReady = useCallback(async (): Promise<boolean> => {
     if (!agentCwd.current) return true;
+    const current = activeChatProvider(await window.harness.auth.status());
+    if (`${current?.serviceId ?? ""}:${current?.serviceVersion ?? ""}` !== runtimeServiceRef.current) {
+      await window.harness.agent.stop();
+      return startAgent(workspace, sessionRef.current, Boolean(workspace), true);
+    }
     const next = modelRef.current.trim();
     if (!next) return true;
     if (agentModelIdsRef.current.includes(next)) {
       try {
-        await window.harness.agent.command("set_model", { provider: "deepseek", modelId: next });
+        await window.harness.agent.command("set_model", { provider: runtimeProviderRef.current, modelId: next });
         await syncAgentThinking();
         return true;
       } catch (error) {
@@ -700,7 +716,7 @@ export function App() {
     modelRef.current = next;
     applyThinkingForModel(next);
     if (agentCwd.current && agentModelIdsRef.current.includes(next)) {
-      void window.harness.agent.command("set_model", { provider: "deepseek", modelId: next })
+      void window.harness.agent.command("set_model", { provider: runtimeProviderRef.current, modelId: next })
         .then(() => syncAgentThinking())
         .catch(() => undefined);
     }
@@ -1017,7 +1033,8 @@ export function App() {
 
       if (!images?.length) {
         await window.harness.agent.command("prompt", { message: question });
-      } else if (modelSupportsVision(modelRef.current)) {
+      } else if (agentModelsRef.current.find((item) => item.provider === runtimeProviderRef.current && item.id === modelRef.current)?.input?.includes("image")
+        ?? modelSupportsVision(modelRef.current)) {
         try {
           await window.harness.agent.command("prompt", {
             message: question,
@@ -1050,14 +1067,15 @@ export function App() {
 
   useEffect(() => {
     void refresh().then((status) => {
-      const current = status.find((item) => item.id === "deepseek");
+      const current = activeChatProvider(status);
       if (current?.configured) setModel(current.defaultModel);
       if (!current?.configured) setLoginOpen(true);
     });
   }, []);
 
   useEffect(() => {
-    const chat = providers.find((item) => item.id === "deepseek");
+    const chat = activeChatProvider(providers);
+    if (chat?.serviceId) { setChatModels(chat.models ?? []); return; }
     if (!chat?.configured || !chat.baseUrl) return;
     let cancelled = false;
     void window.harness.auth.readApiKey("deepseek").then((key) => {
@@ -1517,16 +1535,19 @@ export function App() {
       )}
       {loginOpen && (
         <Login
-          configured={Boolean(connected?.configured)}
-          model={model}
-          baseUrl={connected?.baseUrl}
           agentSkills={agentSkills}
           onRefreshSkills={() => void refreshAgentSkills()}
-          onClose={() => setLoginOpen(false)}
+          onClose={() => {
+            setLoginOpen(false);
+            void refresh().then((status) => {
+              const current = activeChatProvider(status);
+              if (current?.configured) { modelRef.current = current.defaultModel; setModel(current.defaultModel); }
+            }).catch((error) => setToast(friendlyAgentError(error)));
+          }}
           onSaved={async () => {
             const status = await window.harness.auth.status();
             setProviders(status);
-            const current = status.find((item) => item.id === "deepseek");
+            const current = activeChatProvider(status);
             if (current?.configured) {
               const nextModel = current.defaultModel;
               modelRef.current = nextModel;

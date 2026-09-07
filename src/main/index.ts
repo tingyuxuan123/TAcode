@@ -35,7 +35,7 @@ import {
 import { AgentHost } from "./agent-host";
 import { isPathInsideRoot } from "./workspace-path";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
-import { apiBaseUrl, listOpenAiModels } from "../shared/openai-models";
+import { apiBaseUrl, listModels } from "../shared/openai-models";
 import {
   activeChat,
   activeCustomProfile,
@@ -320,6 +320,8 @@ function installMenu(): void {
     ]),
   );
 }
+
+import { registerProviderIpcHandlers, desktopProviderStatus, resolveDesktopProvider } from "./providers";
 
 function registerIpc(): void {
   ipcMain.handle("app:version", () => app.getVersion());
@@ -657,7 +659,8 @@ function registerIpc(): void {
     );
     const stored = getStoredModelSelection();
     const deepseekUrl = getStoredDeepSeekBaseUrl();
-    return SUPPORTED_PROVIDER_IDS.filter((id) => id !== "openai-codex").map(
+    const desktop = await desktopProviderStatus();
+    const builtIn = SUPPORTED_PROVIDER_IDS.filter((id) => id !== "openai-codex").map(
       (id) => {
         const hasStore = storedProviders.has(id);
         const environmentKey = providerEnvironmentKey(id);
@@ -682,6 +685,7 @@ function registerIpc(): void {
         };
       },
     );
+    return desktop ? [desktop, ...builtIn.filter((p) => p.id !== desktop.id)] : builtIn;
   });
   ipcMain.handle(
     "auth:read-api-key",
@@ -714,10 +718,10 @@ function registerIpc(): void {
   });
   ipcMain.handle(
     "auth:list-models",
-    async (_event, baseUrl: string, apiKey: string) => {
+    async (_event, baseUrl: string, apiKey: string, apiStyle?: string) => {
       if (typeof baseUrl !== "string" || typeof apiKey !== "string")
         throw new Error("先填写 API URL 和 Key");
-      return listOpenAiModels(baseUrl, apiKey);
+      return listModels(baseUrl, apiKey, apiStyle);
     },
   );
   ipcMain.handle(
@@ -726,6 +730,8 @@ function registerIpc(): void {
       await removeStoredProviderCredential(provider);
     },
   );
+
+  registerProviderIpcHandlers();
 
   ipcMain.handle("agent:start", async (_event, options: AgentStartOptions) => {
     const tasksDir = path.resolve(path.join(userDataPath, "tasks"));
@@ -769,6 +775,8 @@ function registerIpc(): void {
     const profiles = await loadChatProfiles();
     const maxTokens = activeCustomProfile(profiles)?.maxTokens;
     const baseUrl = rawUrl ? apiBaseUrl(rawUrl) : undefined;
+    const desktopProvider = startOptions.serviceId
+      ? await resolveDesktopProvider(startOptions.serviceId, startOptions.model) : undefined;
     const snapshot = await agentHost!.start({
       ...startOptions,
       ...(sessionPath ? { sessionPath } : {}),
@@ -779,6 +787,14 @@ function registerIpc(): void {
       visionUploads: visionUploadsDir(),
       ...(baseUrl ? { baseUrl } : {}),
       ...(maxTokens ? { maxTokens } : {}),
+      ...(desktopProvider ? {
+        provider: "openai" as const,
+        model: desktopProvider.model,
+        baseUrl: desktopProvider.config.baseUrl,
+        maxTokens: undefined,
+        providerExtension: path.join(currentDirectory, "../extensions/provider.js"),
+        desktopProvider,
+      } : {}),
     });
     activeSessionPath = sessionFileOf(snapshot);
     return { ...snapshot, cwd };
