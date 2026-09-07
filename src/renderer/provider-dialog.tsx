@@ -28,6 +28,35 @@ const API_STYLE_LABELS: Record<CatalogApiStyle, string> = {
   opencode_go: "OpenCode Go",
 };
 
+// --- 模型发现结果缓存 ---
+
+type ModelDiscoveryCache = {
+  discovered?: string[];
+  bindings?: ProviderModelBinding[];
+};
+
+function discoveryCacheKey(baseUrl: string, apiStyle: CatalogApiStyle, providerId?: string): string {
+  const id = providerId ?? `new:${apiStyle}:${baseUrl.trim()}`;
+  return `provider-model-discovery:v1:${id}`;
+}
+
+function readDiscoveryCache(key: string): ModelDiscoveryCache | null {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as ModelDiscoveryCache) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDiscoveryCache(key: string, value: ModelDiscoveryCache): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // 忽略写入失败（如隐私模式）
+  }
+}
+
 // --- 模型发现 Hook ---
 
 function useModelDiscovery(
@@ -36,7 +65,7 @@ function useModelDiscovery(
   apiStyle: CatalogApiStyle,
   providerId?: string,
 ) {
-  const [models, setModels] = useState<string[]>([]);
+  const [models, setModels] = useState<string[]>(() => readDiscoveryCache(discoveryCacheKey(baseUrl, apiStyle, providerId))?.discovered ?? []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const requestSeq = useRef(0);
@@ -471,10 +500,15 @@ export function ProviderSetupDialog({
   const [apiStyle, setApiStyle] = useState<CatalogApiStyle>(
     (provider?.apiStyle as CatalogApiStyle) ?? "chat_completions",
   );
-  const [models, setModels] = useState<ProviderModelBinding[]>(provider?.models ?? []);
+  const [models, setModels] = useState<ProviderModelBinding[]>(() => {
+    if (provider?.models?.length) return provider.models;
+    return readDiscoveryCache(discoveryCacheKey(baseUrl, apiStyle, provider?.id))?.bindings ?? [];
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [defaultModelId, setDefaultModelId] = useState(provider?.defaultModelId ?? provider?.models[0]?.id ?? "");
+  const [defaultModelId, setDefaultModelId] = useState(
+    provider?.defaultModelId ?? provider?.models[0]?.id ?? readDiscoveryCache(discoveryCacheKey(baseUrl, apiStyle, provider?.id))?.bindings?.[0]?.id ?? "",
+  );
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -490,6 +524,14 @@ export function ProviderSetupDialog({
     resolvedApiStyle,
     provider?.id,
   );
+
+  // 保留上次发现结果与选中配置：打开弹窗时从缓存恢复，避免每次重新手动发现。
+  useEffect(() => {
+    if (!resolvedBaseUrl.trim()) return;
+    const key = discoveryCacheKey(resolvedBaseUrl, resolvedApiStyle, provider?.id);
+    const existing = readDiscoveryCache(key) ?? {};
+    writeDiscoveryCache(key, { ...existing, discovered: discoveredModels, bindings: models });
+  }, [discoveredModels, models, resolvedBaseUrl, resolvedApiStyle, provider?.id]);
 
   useEffect(() => {
     setTestResult(null);

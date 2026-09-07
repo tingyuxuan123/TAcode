@@ -5216,6 +5216,7 @@ kbd {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
+  flex-shrink: 0;
 }
 
 .provider-form-col {
@@ -5390,8 +5391,7 @@ kbd {
 /* Model Selection */
 
 .provider-model-selection {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  display: flex;
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
@@ -5405,6 +5405,7 @@ kbd {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  flex: 1 1 0;
 }
 
 .provider-model-picker {
@@ -5744,7 +5745,7 @@ kbd {
   }
 
   .provider-model-selection {
-    grid-template-columns: minmax(0, 1fr);
+    flex-direction: column;
   }
 
   .provider-model-picker {
