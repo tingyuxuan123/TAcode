@@ -12,12 +12,14 @@ import { applyTheme, readStoredTheme, THEMES, type ThemeId } from "../shared/the
 import { effortLabelKey, reasoningLevelsAvailable } from "../shared/thinking";
 import type { ModelOption } from "../shared/model-selection";
 import { EffortPicker, ModelPicker } from "./composer-pickers";
-import { approvalTitle, baseName, cacheHitRate, collectFileChanges, collapseThinking, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, omitFinalReply, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolSummary, toolWritePreview, traceRows, turnWork, assistantReplyText, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
+import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolSummary, toolWritePreview, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
 import { tokenizeCode } from "./highlight";
 import type { AgentSkillCommand } from "../shared/skills";
 import { PROJECT_SKILL_ROOTS, USER_SKILL_ROOTS, skillSlashCommand } from "../shared/skills";
 import { useI18n } from "./i18n";
 import type { MessageKey } from "../shared/i18n";
+import { ExecutionFlow } from "./execution-flow";
+import { buildTurnPresentation, toolRow } from "./conversation";
 import logo from "./logo.svg";
 
 const MAX_UPLOAD_IMAGES = 4;
@@ -1076,23 +1078,33 @@ export function StreamingText({
   );
 }
 
+const renderFlowText = (text: string, streaming?: boolean) => <Markdown streaming={streaming}>{text}</Markdown>;
+const renderFlowTool = (tool: ToolActivity) => traceDetail(toolRow(tool));
+
 export const AssistantTurn = memo(function AssistantTurn({
   messages,
+  running = false,
+  awaiting = false,
+  stopping = false,
+  canAutoCollapse,
   onOpenFile,
   errorRecovered = false,
   recoverableFailStreak = 0,
   onRetry,
 }: {
   messages: ChatMessage[];
+  running?: boolean;
+  awaiting?: boolean;
+  stopping?: boolean;
+  canAutoCollapse(): boolean;
   onOpenFile?(file: FileChange): void;
   errorRecovered?: boolean;
   recoverableFailStreak?: number;
   onRetry?(): void;
 }) {
-  const thinking = collapseThinking(...messages.map((item) => item.thinking));
-  const tools = [...new Map(messages.flatMap((item) => item.tools).map((tool) => [tool.id, tool])).values()];
-  const work = turnWork(messages);
-  const text = assistantReplyText(messages);
+  const view = useMemo(() => buildTurnPresentation(messages), [messages]);
+  const tools = view.tools;
+  const text = view.replyText;
   const rawError = messages.map((item) => item.error).find(Boolean);
   const recoverable = isRecoverableRequestError(rawError);
   const errorTone = rawError
@@ -1101,33 +1113,30 @@ export const AssistantTurn = memo(function AssistantTurn({
       : "strong")
     : "hidden";
   const error = errorTone === "hidden" ? undefined : rawError;
-  const live = messages.some((item) => item.streaming) || tools.some((item) => item.status === "running");
+  const live = running || awaiting;
+  const streaming = !stopping && messages.some((item) => item.streaming);
+  const interrupted = messages.some((item) => item.interrupted) || tools.some((tool) => tool.interrupted);
   const started = messages.find((item) => item.timestamp)?.timestamp ?? tools[0]?.startedAt;
-  const ended = Math.max(0, ...messages.map((item) => item.timestamp ?? 0), ...tools.map((item) => item.endedAt ?? 0));
-  const changes = collectFileChanges(tools);
-  // Keep inter-tool text inside the trace (same as a live merged turn); only the last reply is outside.
-  const traceWork = thinking || tools.length > 0
-    ? omitFinalReply(work, text)
-    : work.filter((item) => item.type !== "text");
+  const ended = Math.max(0, ...messages.map((item) => item.endedAt ?? 0));
+  const changes = useMemo(() => collectFileChanges(tools), [tools]);
   return (
-    <article className="turn" onCopy={copyMarkdownPlain}>
-      {(live || thinking || error || traceWork.length > 0 || tools.length > 0) && (
-        <div className="turn-trace">
-          <Thinking
-            text={thinking}
-            work={traceWork}
-            tools={tools}
-            live={live}
-            startedAt={started}
-            endedAt={ended || undefined}
-            error={error}
-            errorTone={errorTone === "weak" ? "weak" : "strong"}
-            onRetry={onRetry}
-          />
-        </div>
-      )}
+    <article className="turn" data-scroll-anchor={messages[0]?.id} onCopy={copyMarkdownPlain}>
+      <ExecutionFlow
+        view={view}
+        live={live}
+        streaming={streaming}
+        awaiting={awaiting}
+        stopping={stopping}
+        interrupted={interrupted}
+        error={error}
+        errorTone={errorTone === "weak" ? "weak" : "strong"}
+        clock={live || ended ? <Elapsed start={started} end={ended || undefined} live={live} /> : null}
+        canAutoCollapse={canAutoCollapse}
+        onRetry={onRetry}
+        renderText={renderFlowText}
+        renderTool={renderFlowTool}
+      />
       <ChangeSummary files={changes} onOpen={onOpenFile} />
-      <StreamingText text={text} streaming={live} />
       {!live && text.trim() && (
         <div className="bubble-actions assistant">
           <CopyAction text={text} />

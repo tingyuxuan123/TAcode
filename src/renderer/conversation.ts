@@ -63,6 +63,8 @@ export interface ToolActivity {
   args?: unknown;
   output?: string;
   details?: unknown;
+  resultRecorded?: boolean;
+  interrupted?: boolean;
 }
 
 export interface ChatImage {
@@ -88,6 +90,11 @@ export interface ChatMessage {
   images: ChatImage[];
   tools: ToolActivity[];
   work: WorkItem[];
+  /** Start of the current model message inside a live merged turn. */
+  workOffset?: number;
+  stopReason?: string;
+  endedAt?: number;
+  interrupted?: boolean;
   error?: string;
 }
 
@@ -133,27 +140,47 @@ export function turnWork(messages: ChatMessage[]): WorkItem[] {
   const slots = new Map<string, WorkItem>();
   for (const message of messages) {
     message.work.forEach((item, index) => {
-      slots.set(item.type === "tool" ? item.toolId : `${message.id}:${index}`, item);
+      const id = item.type === "tool" ? `tool-${item.toolId}` : `${message.id}:${item.id}:${index}`;
+      slots.set(item.type === "tool" ? item.toolId : id, { ...item, id });
     });
   }
   return [...slots.values()];
 }
 
-/**
- * Live merge keeps only the latest non-empty assistant text (`incoming.text || previous`).
- * Reloaded turns are several messages, so joining every text dumps inter-tool narration into
- * the reply bubble — use the same last-wins rule for the visible answer.
- */
-export function assistantReplyText(messages: ChatMessage[]): string {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const text = messages[index]!.text.trim();
-    if (text) return text;
+/** Project ordered content into process history and the contiguous trailing answer. */
+export function buildTurnPresentation(messages: ChatMessage[]) {
+  const tools = [...new Map(messages.flatMap((message) => message.tools).map((tool) => [tool.id, tool])).values()];
+  const items = turnWork(messages);
+  if (!items.length) {
+    const thinking = collapseThinking(...messages.map((message) => message.thinking));
+    if (thinking) items.push({ type: "thinking", id: "fallback-thinking", text: thinking });
+    for (const tool of tools) items.push({ type: "tool", id: `tool-${tool.id}`, toolId: tool.id });
+    const text = [...messages].reverse().find((message) => message.text.trim())?.text ?? "";
+    if (text) items.push({ type: "text", id: "fallback-text", text });
   }
-  return "";
+  const recorded = new Set(items.flatMap((item) => item.type === "tool" ? [item.toolId] : []));
+  for (const tool of tools) {
+    if (!recorded.has(tool.id)) items.push({ type: "tool", id: `tool-${tool.id}`, toolId: tool.id });
+  }
+  let boundary = items.length;
+  while (boundary > 0 && items[boundary - 1]!.type === "text") boundary -= 1;
+  const reply = items.slice(boundary).filter((item): item is Extract<WorkItem, { type: "text" }> => item.type === "text");
+  return {
+    items,
+    process: items.slice(0, boundary),
+    reply,
+    replyText: reply.map((item) => item.text).join("\n\n"),
+    tools,
+  };
+}
+
+export function assistantReplyText(messages: ChatMessage[]): string {
+  return buildTurnPresentation(messages).replyText;
 }
 
 export function assistantGroupSucceeded(messages: ChatMessage[]): boolean {
-  return Boolean(assistantReplyText(messages));
+  const last = messages.at(-1);
+  return Boolean(assistantReplyText(messages)) && !last?.interrupted && !last?.error;
 }
 
 export function assistantGroupHasRecoverableError(messages: ChatMessage[]): boolean {
@@ -291,7 +318,7 @@ export function approvalTitle(heading: string | undefined, lastTurn?: string): s
   return line;
 }
 
-export function groupConversation(messages: ChatMessage[]): ConversationGroup[] {
+export function groupConversation(messages: ChatMessage[], previousGroups: ConversationGroup[] = []): ConversationGroup[] {
   const groups: ConversationGroup[] = [];
   for (const message of messages) {
     const previous = groups.at(-1);
@@ -303,7 +330,14 @@ export function groupConversation(messages: ChatMessage[]): ConversationGroup[] 
       ? { type: "user", id: message.id, message }
       : { type: "assistant", id: message.id, messages: [message] });
   }
-  return groups;
+  return groups.map((group, index) => {
+    const previous = previousGroups[index];
+    if (previous?.type === "user" && group.type === "user" && previous.message === group.message) return previous;
+    if (previous?.type === "assistant" && group.type === "assistant"
+      && previous.messages.length === group.messages.length
+      && previous.messages.every((message, i) => message === group.messages[i])) return previous;
+    return group;
+  });
 }
 
 export function turnAnchorId(id: string): string {
@@ -327,7 +361,9 @@ export function turnAnchors(groups: ConversationGroup[]): Array<{ id: string; la
 
 export function applyAgentEvent(messages: ChatMessage[], event: AgentEvent): ChatMessage[] {
   if (event.type === "agent_settled") {
-    return finalizeInterruptedTurn(messages);
+    return finalizeInterruptedTurn(messages).map((message, index) => index === messages.length - 1 && message.role === "assistant"
+      ? { ...message, endedAt: message.endedAt ?? Date.now() }
+      : message);
   }
 
   if (event.type === "agent_end" && event.willRetry !== true) {
@@ -386,7 +422,7 @@ export function applyAgentEvent(messages: ChatMessage[], event: AgentEvent): Cha
     if (last?.role === "assistant") {
       const streaming = event.type !== "message_end" || !incoming.text.trim();
       return messages.map((message, index) =>
-        index === messages.length - 1 ? mergeAssistant(message, incoming, streaming) : message,
+        index === messages.length - 1 ? mergeAssistant(message, incoming, streaming, event.type === "message_start") : message,
       );
     }
 
@@ -409,6 +445,7 @@ export function applyAgentEvent(messages: ChatMessage[], event: AgentEvent): Cha
     activity.output = stringifyToolResult(event.result)
       ?? stringifyToolResult(event.error)
       ?? stringifyToolResult(event.message);
+    activity.resultRecorded = true;
     activity.details = toolDetails(event.result) ?? toolDetails(event);
     if (activity.name === "vision") activity.title = visionToolTitle(activity.details);
     if (activity.name === "delegate") activity.title = delegateToolTitle(activity);
@@ -468,6 +505,8 @@ function messageFromRecord(value: JsonRecord, id: string): ChatMessage | undefin
     ...(thinking ? { thinking } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(error ? { error } : {}),
+    ...(typeof value.stopReason === "string" ? { stopReason: value.stopReason } : {}),
+    ...(value.stopReason === "aborted" ? { interrupted: true } : {}),
     tools,
     work,
   };
@@ -511,6 +550,7 @@ function getTools(content: unknown, startedAt?: number): ToolActivity[] {
       name: part.name,
       title: toolTitle(part.name, part.arguments),
       status: "complete" as const,
+      resultRecorded: false,
       ...(startedAt !== undefined ? { startedAt } : {}),
       args: part.arguments,
     }];
@@ -553,6 +593,7 @@ function attachStoredToolResult(messages: ChatMessage[], result: JsonRecord): vo
     tools[toolIndex] = {
       ...tools[toolIndex]!,
       status: result.isError === true ? "error" : "complete",
+      resultRecorded: true,
       ...(endedAt !== undefined ? { endedAt } : {}),
       ...(output ? { output } : {}),
     };
@@ -702,6 +743,7 @@ function upsertLastAssistantTool(messages: ChatMessage[], activity: ToolActivity
       : message.tools.map((tool, current) => current === toolIndex ? {
         ...tool,
         ...activity,
+        startedAt: tool.startedAt ?? activity.startedAt,
         title: preferToolTitle(activity.title, tool.title),
         args: activity.args ?? tool.args,
         output: activity.output ?? tool.output,
@@ -715,15 +757,20 @@ function upsertLastAssistantTool(messages: ChatMessage[], activity: ToolActivity
   });
 }
 
-function mergeAssistant(message: ChatMessage, incoming: ChatMessage, streaming: boolean): ChatMessage {
+function mergeAssistant(message: ChatMessage, incoming: ChatMessage, streaming: boolean, startsMessage = false): ChatMessage {
+  const workOffset = startsMessage ? message.work.length : message.workOffset ?? 0;
   return {
     ...message,
     streaming,
+    interrupted: incoming.interrupted ?? false,
+    stopReason: incoming.stopReason,
+    endedAt: undefined,
+    workOffset,
     text: incoming.text || message.text,
     thinking: joinThinking(message.thinking, incoming.thinking),
     timestamp: message.timestamp ?? incoming.timestamp,
     images: incoming.images.length > 0 ? incoming.images : message.images,
-    work: mergeWork(message.work, incoming.work, message.tools),
+    work: mergeWork(message.work, incoming.work, message.tools, workOffset),
     ...(incoming.error ? { error: incoming.error } : incoming.text.trim() ? { error: undefined } : {}),
   };
 }
@@ -778,7 +825,7 @@ function formatThinkBody(text: string): string {
 }
 
 /** Stop streaming and mark any still-running tools as interrupted when the turn ends abruptly. */
-export function finalizeInterruptedTurn(messages: ChatMessage[]): ChatMessage[] {
+export function finalizeInterruptedTurn(messages: ChatMessage[], interrupted = false): ChatMessage[] {
   return messages.map((message, index) => {
     const last = index === messages.length - 1 && message.role === "assistant";
     const hadRunning = last && message.tools.some((tool) => tool.status === "running");
@@ -788,19 +835,37 @@ export function finalizeInterruptedTurn(messages: ChatMessage[]): ChatMessage[] 
           ? {
             ...tool,
             status: "error" as const,
+            interrupted: true,
             endedAt: tool.endedAt ?? Date.now(),
             output: tool.output?.trim() || ct("error.interrupted"),
           }
           : tool,
       )
       : message.tools;
-    if (!message.streaming && !message.queued && !hadRunning) return message;
-    return { ...message, streaming: false, queued: false, tools };
+    if (!message.streaming && !message.queued && !hadRunning && !(last && interrupted)) return message;
+    return { ...message, streaming: false, queued: false, tools, endedAt: message.endedAt ?? Date.now(), interrupted: message.interrupted || hadRunning || (last && interrupted) };
   });
 }
 
-function mergeWork(current: WorkItem[], incoming: WorkItem[], tools: ToolActivity[]): WorkItem[] {
-  const merged = incoming.length > 0 ? graftWork(current, incoming) : current;
+export function settleStoppedTurn(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages.at(-1);
+  if (last?.role === "assistant" && last.stopReason === "stop") return finalizeInterruptedTurn(messages);
+  if (last?.role === "user") {
+    const now = Date.now();
+    return [...messages, { id: `${last.id}:stopped`, role: "assistant", text: "", work: [], tools: [], images: [], interrupted: true, timestamp: now, endedAt: now }];
+  }
+  return finalizeInterruptedTurn(messages, true);
+}
+
+export function failActiveTurn(messages: ChatMessage[], error: string): ChatMessage[] {
+  const settled = settleStoppedTurn(messages);
+  return settled.map((message, index) => index === settled.length - 1 && message.role === "assistant"
+    ? { ...message, error, interrupted: true, streaming: false }
+    : message);
+}
+
+function mergeWork(current: WorkItem[], incoming: WorkItem[], tools: ToolActivity[], offset = 0): WorkItem[] {
+  const merged = incoming.length > 0 ? [...current.slice(0, offset), ...graftWork(current.slice(offset), incoming)] : current;
   const toolIds = new Set(merged.flatMap((item) => item.type === "tool" ? [item.toolId] : []));
   const missingTools = tools
     .filter((tool) => !toolIds.has(tool.id))
@@ -826,13 +891,9 @@ function graftWork(current: WorkItem[], incoming: WorkItem[]): WorkItem[] {
 
 function sameSlot(previous: WorkItem, next: WorkItem): boolean {
   if (previous.type === "tool" && next.type === "tool") return previous.toolId === next.toolId;
-  if (previous.type === "thinking" && next.type === "thinking") return overlaps(previous.text, next.text);
-  if (previous.type === "text" && next.type === "text") return overlaps(previous.text, next.text);
+  if (previous.type === "thinking" && next.type === "thinking") return previous.id === next.id;
+  if (previous.type === "text" && next.type === "text") return previous.id === next.id;
   return false;
-}
-
-function overlaps(previous: string, next: string): boolean {
-  return next.includes(previous) || previous.includes(next);
 }
 
 function findLastAssistant(messages: ChatMessage[], streamingOnly: boolean): number {
@@ -1273,7 +1334,7 @@ export function traceRows(work: WorkItem[], tools: ToolActivity[], fallback = ""
   return rows;
 }
 
-function toolRow(tool: ToolActivity, index: number): TraceRow {
+export function toolRow(tool: ToolActivity, index = 0): TraceRow {
   const base = { id: `row-${index}-${tool.id}`, status: tool.status, tool, mono: true };
   const name = tool.name.toLowerCase();
   if (name === "delegate") {

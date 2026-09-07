@@ -735,6 +735,11 @@ describe("conversation events", () => {
       type: "message_start",
       message: { role: "assistant", content: [{ type: "text", text: "再改链接" }] },
     } as never);
+    // A distinct narration/final message has its own message_start boundary.
+    messages = applyAgentEvent(messages, {
+      type: "message_start",
+      message: { role: "assistant", content: [{ type: "text", text: "完成。" }] },
+    } as never);
     messages = applyAgentEvent(messages, {
       type: "message_end",
       message: { role: "assistant", content: [{ type: "text", text: "完成。" }] },

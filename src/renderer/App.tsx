@@ -26,6 +26,8 @@ import {
   collectWorkingFiles,
   dropLastTurn,
   finalizeInterruptedTurn,
+  settleStoppedTurn,
+  failActiveTurn,
   friendlyAgentError,
   isTransientStreamError,
   assistantErrorRecovered,
@@ -64,6 +66,9 @@ import {
   TurnNav,
   UserTurn,
 } from "./ui";
+import { ArrowDown } from "lucide-react";
+import { createStreamScheduler } from "./stream-scheduler";
+import { useFollowScroll } from "./use-follow-scroll";
 import logo from "./logo.svg";
 import { useI18n } from "./i18n";
 import { composerModelOptions, modelOptionKey } from "../shared/model-selection";
@@ -384,6 +389,9 @@ export function App() {
   }, []);
   const [steering, setSteering] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [transcriptKey, setTranscriptKey] = useState("empty");
+  const eventQueue = useRef<ReturnType<typeof createStreamScheduler> | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [sandboxAsk, setSandboxAsk] = useState<{ cwd: string; message: string }>();
@@ -405,7 +413,6 @@ export function App() {
   const agentCwd = useRef<string | undefined>(undefined);
   const sessionRef = useRef<string | undefined>(undefined);
   const sending = useRef(false);
-  const stick = useRef(true);
   const dock = useRef<HTMLDivElement>(null);
   const live = useRef(false);
   const pendingUndo = useRef<{ files: RestoreFile[] } | undefined>(
@@ -420,6 +427,7 @@ export function App() {
   const agentModelIdsRef = useRef<string[]>([]);
   const agentModelsRef = useRef<AgentSnapshot["models"]>([]);
   const startSeq = useRef(0);
+  const runEpoch = useRef(0);
   const permissionBeforePlan = useRef<Exclude<PermissionMode, "plan">>("auto");
 
   const applyThinkingForModel = useCallback((modelId: string, accounts = providers) => {
@@ -476,7 +484,18 @@ export function App() {
     void window.harness.agent.command("set_thinking_level", { level: next }).catch(() => undefined);
   }, []);
 
-  const groups = useMemo(() => groupConversation(messages), [messages]);
+  const groupCache = useRef<ReturnType<typeof groupConversation>>([]);
+  const groups = useMemo(() => {
+    const next = groupConversation(messages, groupCache.current);
+    groupCache.current = next;
+    return next;
+  }, [messages]);
+  const follow = useFollowScroll(`${workspace ?? ""}:${transcriptKey}`, !loading);
+  const setScroller = useCallback((node: HTMLDivElement | null) => {
+    scroller.current = node;
+    follow.viewportRef(node);
+  }, [follow.viewportRef]);
+  const canAutoCollapse = useCallback(() => follow.following.current, [follow.following]);
   const recoverableStreaks = useMemo(() => recoverableFailStreaks(groups), [groups]);
   const anchors = useMemo(() => turnAnchors(groups), [groups]);
   const tools = useMemo(() => sessionTools(messages), [messages]);
@@ -578,6 +597,10 @@ export function App() {
     storagePath?: string,
   ) => {
     const seq = ++startSeq.current;
+    eventQueue.current?.clear();
+    live.current = false;
+    setStopping(false);
+    setTranscriptKey(sessionPath ?? seedMessage?.id ?? `session-${seq}`);
     setLoading(true);
     setUiRequest(undefined);
     let accounts: ProviderStatus[];
@@ -1052,6 +1075,7 @@ export function App() {
 
       // Paint the user turn immediately so first-send doesn't sit on the home screen.
       optimistic = optimisticUserMessage(question, false, thumbs);
+      runEpoch.current += 1;
       fillPrompt("");
       setMessages((current) => [...current, optimistic!]);
       setRunning(true);
@@ -1132,9 +1156,17 @@ export function App() {
   }, [providers, applyThinkingForModel]);
 
   useEffect(() => {
+    const queue = createStreamScheduler((events) => {
+      const seq = startSeq.current;
+      setMessages((current) => live.current && seq === startSeq.current
+        ? events.reduce(applyAgentEvent, current)
+        : current);
+    });
+    eventQueue.current = queue;
     const offEvent = window.harness.agent.onEvent((event) => {
-      if (!live.current) return;
-      if (event.type === "agent_start") setRunning(true);
+      if (!live.current) { queue.clear(); return; }
+      if (event.type !== "message_update" && event.type !== "tool_execution_update") queue.flush();
+      if (event.type === "agent_start") { runEpoch.current += 1; setRunning(true); setStopping(false); }
       if (event.type === "desktop_snapshot_meta") {
         if (Array.isArray(event.models)) {
           agentModelsRef.current = event.models as typeof agentModelsRef.current;
@@ -1146,9 +1178,12 @@ export function App() {
       }
       if (event.type === "agent_settled") {
         setRunning(false);
+        setStopping(false);
         setUiRequest(undefined);
+        const seq = startSeq.current;
+        const epoch = runEpoch.current;
         void window.harness.agent.command<AgentSessionStats>("get_session_stats").then((nextStats) => {
-          if (!live.current) return;
+          if (!live.current || seq !== startSeq.current || epoch !== runEpoch.current) return;
           setStats(nextStats);
           if (typeof nextStats?.sessionFile !== "string") return;
           sessionRef.current = nextStats.sessionFile;
@@ -1177,14 +1212,16 @@ export function App() {
         if (request.method === "notify") setToast(request.message ?? t("toast.notify"));
         else if (["select", "confirm", "input", "editor"].includes(request.method)) setUiRequest(request);
       }
-      setMessages((current) => (live.current ? applyAgentEvent(current, event) : current));
+      queue.push(event);
     });
     const offError = window.harness.agent.onError((message) => {
       if (!live.current) return;
       if (/Agent session closed/.test(message) || isTransientStreamError(message)) return;
+      queue.flush();
+      setStopping(false);
       setRunning(false);
-      setMessages((current) => finalizeInterruptedTurn(current));
       const text = friendlyAgentError(message);
+      setMessages((current) => failActiveTurn(current, text || message));
       if (text) setToast(text);
     });
     const offCommand = window.harness.onAppCommand((command) => {
@@ -1194,6 +1231,9 @@ export function App() {
       if (command === "fullscreen-off") setFullscreen(false);
     });
     return () => {
+      queue.flush();
+      queue.dispose();
+      if (eventQueue.current === queue) eventQueue.current = undefined;
       offEvent();
       offError();
       offCommand();
@@ -1230,13 +1270,13 @@ export function App() {
 
     const pin = () => {
       const overlay = dock.current?.offsetHeight ?? 0;
-      if (overlay > 0) node.style.setProperty("--dock-clearance", `${overlay + 24}px`);
-      if (stick.current) node.scrollTop = node.scrollHeight;
+      if (overlay > 0) {
+        node.style.setProperty("--dock-clearance", `${overlay + 24}px`);
+        node.parentElement?.style.setProperty("--dock-clearance", `${overlay + 24}px`);
+      }
     };
 
-    const content = node.querySelector(".messages");
     const ro = new ResizeObserver(pin);
-    if (content) ro.observe(content);
     if (dock.current) ro.observe(dock.current);
     pin();
     return () => ro.disconnect();
@@ -1253,11 +1293,23 @@ export function App() {
       fillToken={promptFill.token}
       onSubmit={(text, images) => void sendMessage(text, images)}
       onStop={() => {
+        const seq = startSeq.current;
+        const epoch = runEpoch.current;
+        eventQueue.current?.flush();
+        setStopping(true);
         setToast(t("toast.stopping"));
         void window.harness.agent.command("abort")
-          .catch(() => undefined)
-          .finally(() => {
+          .then(() => {
+            if (seq !== startSeq.current || epoch !== runEpoch.current || !live.current) return;
+            eventQueue.current?.flush();
+            setMessages((current) => epoch === runEpoch.current ? settleStoppedTurn(current) : current);
             setRunning(false);
+            setStopping(false);
+          })
+          .catch((error) => {
+            if (seq !== startSeq.current || epoch !== runEpoch.current) return;
+            setStopping(false);
+            setToast(friendlyAgentError(error));
           });
       }}
       steering={steering}
@@ -1418,11 +1470,7 @@ export function App() {
       >
         <div
           className={home ? "conversation home" : "conversation"}
-          ref={scroller}
-          onScroll={(event) => {
-            const node = event.currentTarget;
-            stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 96;
-          }}
+          ref={setScroller}
         >
           {home && (
             <div className="empty">
@@ -1485,7 +1533,7 @@ export function App() {
             </div>
           )}
           {groups.length > 0 && (
-            <div className="messages">
+            <div className="messages" ref={follow.contentRef}>
               {groups.map((group, index) => {
                 if (group.type === "user") {
                   return (
@@ -1507,6 +1555,10 @@ export function App() {
                   <AssistantTurn
                     key={group.id}
                     messages={group.messages}
+                    running={isLastGroup && running}
+                    awaiting={isLastGroup && Boolean(uiRequest)}
+                    stopping={isLastGroup && stopping}
+                    canAutoCollapse={canAutoCollapse}
                     errorRecovered={recovered}
                     recoverableFailStreak={recoverableStreaks[index] ?? 0}
                     onOpenFile={setPreview}
@@ -1552,6 +1604,7 @@ export function App() {
             </div>
           )}
         </div>
+        {!home && groups.length > 0 && !follow.atBottom && <button type="button" className="conversation-latest" title={t("flow.latest")} aria-label={t("flow.latest")} onClick={follow.followLatest}><ArrowDown size={17} /></button>}
         {toast && (
           <button type="button" className="toast" onClick={() => setToast(undefined)}>
             <Icon path="M9 18h6M10 22h4M12 2a7 7 0 0 1 4 12c-.8.8-1 1.5-1 3H9c0-1.5-.2-2.2-1-3A7 7 0 0 1 12 2z" size={16} />
