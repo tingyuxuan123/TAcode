@@ -183,7 +183,17 @@ export function ModelSelectionPanes({
   const [search, setSearch] = useState("");
   const [customModelId, setCustomModelId] = useState("");
   const [customModelError, setCustomModelError] = useState("");
-  const [editingModelId, setEditingModelId] = useState<string | null>(null);
+  const [focusModelId, setFocusModelId] = useState<string | null>(null);
+  const panelRefs = useRef<Record<string, HTMLElement | null>>({});
+
+  useEffect(() => {
+    if (!focusModelId) return;
+    const node = panelRefs.current[focusModelId];
+    if (!node) return;
+    node.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    const timer = setTimeout(() => setFocusModelId(null), 1600);
+    return () => clearTimeout(timer);
+  }, [focusModelId]);
 
   const availableIds = useMemo(() => {
     const byId = new Map<string, string>();
@@ -213,6 +223,11 @@ export function ModelSelectionPanes({
     }
   };
 
+  const editModel = (modelId: string, isSelected: boolean) => {
+    if (!isSelected) toggleModel(modelId);
+    setFocusModelId(modelId);
+  };
+
   const updateModel = (modelId: string, fields: Partial<ProviderModelBinding>) => {
     onModelsChange(selectedModels.map((model) => (
       model.id === modelId ? { ...model, ...fields } : model
@@ -239,11 +254,21 @@ export function ModelSelectionPanes({
     return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
   };
 
+  const limitsLabel = (model: ProviderModelBinding): string => {
+    const ctx = model.contextWindow;
+    const max = model.maxTokens;
+    const fmt = (n: number) => (n >= 1000 ? `${Math.floor(n / 1000)}K` : String(n));
+    if (ctx && max) return `${fmt(ctx)} · ${fmt(max)}`;
+    if (ctx) return fmt(ctx);
+    if (max) return fmt(max);
+    return t("settings.defaultLimits");
+  };
+
   return (
     <div className="provider-model-selection">
       <div className="provider-model-picker">
         <div className="provider-model-pane-head">
-          <h4>{t("settings.availableModels")}</h4>
+          <h4>{t("settings.serviceModels")}</h4>
           {loading && <span className="shimmer">{t("settings.discoveringModels")}</span>}
         </div>
         <div className="provider-model-search">
@@ -271,6 +296,19 @@ export function ModelSelectionPanes({
                   onChange={() => toggleModel(modelId)}
                 />
                 <code>{modelId}</code>
+                <button
+                  type="button"
+                  className="provider-model-edit-button"
+                  title={t("settings.editModel")}
+                  aria-label={t("settings.editModel")}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    editModel(modelId, isSelected);
+                  }}
+                >
+                  <Icon path="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" size={13} />
+                </button>
               </label>
             );
           })}
@@ -285,79 +323,80 @@ export function ModelSelectionPanes({
           <h4>{t("settings.modelConfigurations")}</h4>
           <span>{t("settings.selectedModels", { n: selectedModels.length })}</span>
         </div>
-        <div className="provider-model-config-list">
-          {selectedModels.map((model) => {
-            const editing = editingModelId === model.id;
-            return (
-              <div key={model.id} className="provider-model-config-row">
-                <div className="provider-model-config-summary">
-                  <code>{model.id}</code>
-                  <span>
-                    {model.contextWindow ? model.contextWindow.toLocaleString() : t("settings.defaultLimits")}
-                    {model.maxTokens ? ` · ${model.maxTokens.toLocaleString()}` : ""}
-                  </span>
-                  <button
-                    type="button"
-                    className="provider-model-icon-button"
-                    title={t("settings.editModel")}
-                    aria-label={t("settings.editModel")}
-                    onClick={() => setEditingModelId(editing ? null : model.id)}
-                  >
-                    <Icon path="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" size={13} />
-                  </button>
-                  <button
-                    type="button"
-                    className="provider-model-icon-button danger"
-                    title={t("settings.removeModel")}
-                    aria-label={t("settings.removeModel")}
-                    onClick={() => onModelsChange(selectedModels.filter((entry) => entry.id !== model.id))}
-                  >
-                    <Icon path="M6 6l12 12M18 6L6 18" size={13} />
-                  </button>
-                </div>
-                {editing && (
-                  <div className="provider-model-limits">
-                    <label>
-                      <span>{t("settings.contextWindow")}</span>
-                      <input
-                        type="number"
-                        min="1"
-                        value={model.contextWindow ?? ""}
-                        onChange={(event) => updateModel(model.id, { contextWindow: readPositiveNumber(event.target.value) })}
-                      />
-                    </label>
-                    <label>
-                      <span>{t("settings.maxOutput")}</span>
-                      <input
-                        type="number"
-                        min="1"
-                        value={model.maxTokens ?? ""}
-                        onChange={(event) => updateModel(model.id, { maxTokens: readPositiveNumber(event.target.value) })}
-                      />
-                    </label>
-                    <label className="provider-capability">
-                      <input type="checkbox" checked={model.supportsImages ?? false} onChange={(e) => updateModel(model.id, { supportsImages: e.target.checked })} />
-                      <span>{t("settings.supportsImages")}</span>
-                    </label>
-                    <label className="provider-capability">
-                      <input type="checkbox" checked={model.reasoning ?? false} onChange={(e) => updateModel(model.id, { reasoning: e.target.checked })} />
-                      <span>{t("settings.supportsReasoning")}</span>
-                    </label>
-                    {model.reasoning && <fieldset className="provider-thinking-levels">
-                      <legend>{t("settings.serviceThinkingLevels")}</legend>
-                      {SERVICE_THINKING_LEVELS.map((level) => <label className="provider-capability" key={level}>
+        <div className="provider-model-panels">
+          {selectedModels.map((model) => (
+            <div
+              key={model.id}
+              ref={(el) => { panelRefs.current[model.id] = el; }}
+              className={`provider-model-panel${focusModelId === model.id ? " focus" : ""}`}
+            >
+              <div className="provider-model-panel-head">
+                <code>{model.id}</code>
+                <span className="provider-model-badge">{limitsLabel(model)}</span>
+                <button
+                  type="button"
+                  className="provider-model-icon-button danger"
+                  title={t("settings.removeModel")}
+                  aria-label={t("settings.removeModel")}
+                  onClick={() => onModelsChange(selectedModels.filter((entry) => entry.id !== model.id))}
+                >
+                  <Icon path="M6 6l12 12M18 6L6 18" size={13} />
+                </button>
+              </div>
+
+              <div className="provider-model-limits">
+                <label>
+                  <span>{t("settings.contextWindow")}</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={model.contextWindow ?? ""}
+                    onChange={(event) => updateModel(model.id, { contextWindow: readPositiveNumber(event.target.value) })}
+                  />
+                </label>
+                <label>
+                  <span>{t("settings.maxOutput")}</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={model.maxTokens ?? ""}
+                    onChange={(event) => updateModel(model.id, { maxTokens: readPositiveNumber(event.target.value) })}
+                  />
+                </label>
+              </div>
+
+              <div className="provider-model-subsection">
+                <div className="provider-model-subhead">{t("settings.serviceThinkingLevels")}</div>
+                <label className="provider-capability">
+                  <input type="checkbox" checked={model.reasoning ?? false} onChange={(e) => updateModel(model.id, { reasoning: e.target.checked })} />
+                  <span>{t("settings.supportsReasoning")}</span>
+                </label>
+                {model.reasoning && (
+                  <fieldset className="provider-thinking-levels">
+                    <legend>{t("settings.serviceThinkingLevels")}</legend>
+                    {SERVICE_THINKING_LEVELS.map((level) => (
+                      <label className="provider-capability" key={level}>
                         <input type="checkbox" checked={model.thinkingLevels?.includes(level) ?? true}
                           onChange={(e) => updateModel(model.id, { thinkingLevels: e.target.checked
                             ? [...(model.thinkingLevels ?? SERVICE_THINKING_LEVELS), level]
                             : (model.thinkingLevels ?? SERVICE_THINKING_LEVELS).filter((value) => value !== level) })} />
                         <span>{level}</span>
-                      </label>)}
-                    </fieldset>}
-                  </div>
+                      </label>
+                    ))}
+                  </fieldset>
                 )}
               </div>
-            );
-          })}
+
+              <div className="provider-model-subsection">
+                <div className="provider-model-subhead">{t("settings.capability")}</div>
+                <label className="provider-capability">
+                  <input type="checkbox" checked={model.supportsImages ?? false} onChange={(e) => updateModel(model.id, { supportsImages: e.target.checked })} />
+                  <span>{t("settings.supportsImages")}</span>
+                </label>
+                <p className="provider-hint">{t("settings.serviceCapabilityHint")}</p>
+              </div>
+            </div>
+          ))}
           {selectedModels.length === 0 && (
             <div className="provider-model-empty">{t("settings.noModelsChosen")}</div>
           )}
@@ -498,63 +537,78 @@ export function ProviderSetupDialog({
       <div className="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title">
         <div className="provider-dialog-head">
           <h2 id="provider-dialog-title">{editing ? t("settings.editProviderTitle") : t("settings.addProviderTitle")}</h2>
-          <button type="button" className="provider-dialog-close" disabled={saving || testing} onClick={onClose} aria-label={t("common.close")}>
-            <Icon path="M6 6l12 12M18 6L6 18" />
-          </button>
+          <div className="provider-dialog-head-actions">
+            <button type="button" className="ghost" disabled={saving || testing || !selectedDefault} onClick={async () => {
+              setTesting(true); setTestResult(null);
+              try { setTestResult(await window.harness.providers.testConnection({ id: provider?.id, baseUrl, apiKey, apiStyle, modelId: selectedDefault })); }
+              catch (err) { setTestResult({ ok: false, message: err instanceof Error ? err.message : String(err) }); }
+              finally { setTesting(false); }
+            }}>{testing ? t("settings.testingConnection") : t("settings.testConnection")}</button>
+            <button type="button" className="ghost" onClick={onClose} disabled={saving || testing}>
+              {t("common.cancel")}
+            </button>
+            <button type="button" className="primary" onClick={save} disabled={saving || testing}>
+              {saving ? t("settings.saving") : (editing ? t("settings.saveProvider") : t("settings.addProvider"))}
+            </button>
+            <button type="button" className="provider-dialog-close" disabled={saving || testing} onClick={onClose} aria-label={t("common.close")}>
+              <Icon path="M6 6l12 12M18 6L6 18" />
+            </button>
+          </div>
         </div>
 
-        <fieldset className="provider-dialog-body" disabled={saving || testing}>
-          <label className="provider-field">
-            <span>{t("settings.serviceProvider")}</span>
-            <ServicePicker value={service} onChange={(id) => {
-              setService(id);
-              const preset = NAMED_ENDPOINT_PRESETS.find((p) => p.id === id);
-              if (preset) { setName(preset.name); setBaseUrl(preset.baseUrl); setApiStyle(preset.apiStyle); }
-              setApiKey(""); setModels([]); setDefaultModelId("");
-            }} />
-          </label>
-
-          <label className="provider-field">
-            <span>{t("settings.profileName")}</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={namedPreset?.name ?? t("settings.profileNamePlaceholder")}
-            />
-          </label>
-
-          <label className="provider-field">
-            <span>{t("settings.baseUrl")}</span>
-            <input
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://api.example.com/v1"
-            />
-          </label>
-
-          <label className="provider-field">
-            <span>{t("settings.apiKey")}</span>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={editing ? t("settings.apiKeyEditHint") : t("settings.apiKeyPlaceholder")}
-            />
-          </label>
-
-          {(
-            <label className="provider-field">
-              <span>{t("settings.apiStyle")}</span>
-              <select
-                value={apiStyle}
-                onChange={(e) => setApiStyle(e.target.value as CatalogApiStyle)}
-              >
-                {Object.entries(API_STYLE_LABELS).filter(([value]) => SUPPORTED_SERVICE_STYLES.includes(value as CatalogApiStyle)).map(([value, label]) => (
-                  <option key={value} value={value}>{label}</option>
-                ))}
-              </select>
-            </label>
-          )}
+        <div className="provider-dialog-body" inert={saving || testing}>
+          <div className="provider-form-grid">
+            <div className="provider-form-col">
+              <label className="provider-field">
+                <span>{t("settings.serviceProvider")}</span>
+                <ServicePicker value={service} onChange={(id) => {
+                  setService(id);
+                  const preset = NAMED_ENDPOINT_PRESETS.find((p) => p.id === id);
+                  if (preset) { setName(preset.name); setBaseUrl(preset.baseUrl); setApiStyle(preset.apiStyle); }
+                  setApiKey(""); setModels([]); setDefaultModelId("");
+                }} />
+              </label>
+              <label className="provider-field">
+                <span>{t("settings.profileName")}</span>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder={namedPreset?.name ?? t("settings.profileNamePlaceholder")}
+                />
+              </label>
+              <label className="provider-field">
+                <span>{t("settings.apiKey")}</span>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={editing ? t("settings.apiKeyEditHint") : t("settings.apiKeyPlaceholder")}
+                />
+              </label>
+            </div>
+            <div className="provider-form-col">
+              <label className="provider-field">
+                <span>{t("settings.baseUrl")}</span>
+                <input
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder="https://api.example.com/v1"
+                />
+              </label>
+              <label className="provider-field">
+                <span>{t("settings.apiStyle")}</span>
+                <select
+                  value={apiStyle}
+                  onChange={(e) => setApiStyle(e.target.value as CatalogApiStyle)}
+                >
+                  {Object.entries(API_STYLE_LABELS).filter(([value]) => SUPPORTED_SERVICE_STYLES.includes(value as CatalogApiStyle)).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </label>
+              <p className="provider-hint">{t("settings.styleHint")}</p>
+            </div>
+          </div>
 
           <div className="provider-section">
             <h3>{t("settings.models")}</h3>
@@ -572,9 +626,8 @@ export function ProviderSetupDialog({
                 {models.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
               </select>
             </label>}
-            <p className="provider-hint">{t("settings.serviceCapabilityHint")}</p>
           </div>
-        </fieldset>
+        </div>
 
         {error && (
           <div className="provider-error">
@@ -582,21 +635,6 @@ export function ProviderSetupDialog({
             <span>{error}</span>
           </div>
         )}
-
-        <div className="provider-dialog-actions">
-          <button type="button" className="ghost" disabled={saving || testing || !selectedDefault} onClick={async () => {
-            setTesting(true); setTestResult(null);
-            try { setTestResult(await window.harness.providers.testConnection({ id: provider?.id, baseUrl, apiKey, apiStyle, modelId: selectedDefault })); }
-            catch (err) { setTestResult({ ok: false, message: err instanceof Error ? err.message : String(err) }); }
-            finally { setTesting(false); }
-          }}>{testing ? t("settings.testingConnection") : t("settings.testConnection")}</button>
-          <button type="button" className="ghost" onClick={onClose} disabled={saving || testing}>
-            {t("common.cancel")}
-          </button>
-          <button type="button" className="primary" onClick={save} disabled={saving || testing}>
-            {saving ? t("settings.saving") : (editing ? t("settings.saveProvider") : t("settings.addProvider"))}
-          </button>
-        </div>
         {testResult && <p role="status" className={testResult.ok ? "provider-test-success" : "provider-error"}>{testResult.message}</p>}
         <p className="provider-hint provider-test-hint">{t("settings.serviceTestHint")}</p>
       </div>
