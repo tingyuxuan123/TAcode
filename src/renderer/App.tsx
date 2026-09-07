@@ -60,6 +60,7 @@ import {
   Icon,
   InspectPanel,
   Login,
+  PanelTabs,
   PromptBar,
   SidebarNav,
   Thinking,
@@ -406,6 +407,7 @@ export function App() {
   const [fullscreen, setFullscreen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FileChange>();
+  const [panelTab, setPanelTab] = useState("inspect");
   const [featureTodos, setFeatureTodos] = useState<SessionTodo[]>([]);
   const [agentSkills, setAgentSkills] = useState<AgentSkillCommand[]>([]);
   const [stoppedJobs, setStoppedJobs] = useState<string[]>([]);
@@ -1437,35 +1439,42 @@ export function App() {
         composer={home ? undefined : composer}
         nav={<TurnNav items={anchors} />}
         inspect={workspace ? (
-          <InspectPanel
-            files={workingFiles}
-            todos={todos}
-            terminals={terminals}
-            folder={baseName(workspace)}
-            workspace={workspace}
-            refresh={running}
-            running={running}
-            planApproval={planApproval}
-            onApprovePlan={() => void approvePlan()}
-            onRefinePlan={(text) => void refinePlan(text)}
-            onOpen={setPreview}
-            onUndo={() => void undoLastTurn()}
-            onStopTerminal={(id) => {
-              setStoppedJobs((current) => current.includes(id) ? current : [...current, id]);
-              void stopJobs(`/stop-job ${id}`).catch((error) => {
-                setStoppedJobs((current) => current.filter((item) => item !== id));
-                setToast(error instanceof Error ? error.message : String(error));
-              });
-            }}
-            onStopAllTerminals={() => {
-              const ids = terminals.map((job) => job.id);
-              setStoppedJobs((current) => [...new Set([...current, ...ids])]);
-              void stopJobs("/stop-jobs").catch((error) => {
-                setStoppedJobs((current) => current.filter((item) => !ids.includes(item)));
-                setToast(error instanceof Error ? error.message : String(error));
-              });
-            }}
-          />
+          <PanelTabs
+            tabs={[{ id: "inspect", label: t("inspect.title") }]}
+            active={panelTab}
+            onSelect={setPanelTab}
+            onAdd={() => setToast(t("inspect.addTabSoon"))}
+          >
+            <InspectPanel
+              files={workingFiles}
+              todos={todos}
+              terminals={terminals}
+              folder={baseName(workspace)}
+              workspace={workspace}
+              refresh={running}
+              running={running}
+              planApproval={planApproval}
+              onApprovePlan={() => void approvePlan()}
+              onRefinePlan={(text) => void refinePlan(text)}
+              onOpen={setPreview}
+              onUndo={() => void undoLastTurn()}
+              onStopTerminal={(id) => {
+                setStoppedJobs((current) => current.includes(id) ? current : [...current, id]);
+                void stopJobs(`/stop-job ${id}`).catch((error) => {
+                  setStoppedJobs((current) => current.filter((item) => item !== id));
+                  setToast(error instanceof Error ? error.message : String(error));
+                });
+              }}
+              onStopAllTerminals={() => {
+                const ids = terminals.map((job) => job.id);
+                setStoppedJobs((current) => [...new Set([...current, ...ids])]);
+                void stopJobs("/stop-jobs").catch((error) => {
+                  setStoppedJobs((current) => current.filter((item) => !ids.includes(item)));
+                  setToast(error instanceof Error ? error.message : String(error));
+                });
+              }}
+            />
+          </PanelTabs>
         ) : undefined}
       >
         <div

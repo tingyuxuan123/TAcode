@@ -1154,6 +1154,58 @@ function treeChange(path: string, changes: SessionFile[]) {
   return changes.find((item) => item.path === path || item.path.endsWith(`/${path}`) || path.endsWith(`/${item.path}`));
 }
 
+export type PanelTab = { id: string; label: string };
+
+/**
+ * Right-side feature tab container. Renders a sticky tab bar on top and the
+ * active tab panel below. New features (Browser, etc.) become new tabs.
+ */
+export function PanelTabs({
+  tabs,
+  active,
+  onSelect,
+  onAdd,
+  children,
+}: {
+  tabs: PanelTab[];
+  active: string;
+  onSelect(id: string): void;
+  onAdd?(): void;
+  children: ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="inspect">
+      <div className="inspect-tabs" role="tablist">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={tab.id === active}
+            className={tab.id === active ? "inspect-tab active" : "inspect-tab"}
+            onClick={() => onSelect(tab.id)}
+          >
+            <span>{tab.label}</span>
+          </button>
+        ))}
+        {onAdd && (
+          <button
+            type="button"
+            className="inspect-tab-add"
+            aria-label={t("inspect.addTab")}
+            title={t("inspect.addTab")}
+            onClick={onAdd}
+          >
+            <Icon path="M12 5v14M5 12h14" size={14} />
+          </button>
+        )}
+      </div>
+      <div className="inspect-body">{children}</div>
+    </div>
+  );
+}
+
 export function InspectPanel({
   files = [],
   todos,
@@ -1221,7 +1273,7 @@ export function InspectPanel({
   const visible = filterMentionPaths(entries, prefix).filter((file) => file !== prefix);
   if (!workspace && todos.length === 0 && !planApproval) return null;
   return (
-    <aside className="inspect">
+    <div className="inspect-pane">
       {planApproval && onApprovePlan && (
         <div className="plan-approval">
           <p>{t("plan.approvalHint")}</p>
@@ -1406,7 +1458,7 @@ export function InspectPanel({
           </div>
         </Fold>
       )}
-    </aside>
+    </div>
   );
 }
 
