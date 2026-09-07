@@ -233,7 +233,6 @@ textarea::selection,
   color: var(--ink);
 }
 .nav-btn.new {
-  background: var(--hover);
   color: var(--ink);
   font-weight: 500;
 }
@@ -366,11 +365,11 @@ textarea::selection,
 .session-item:hover {
   background: var(--hover);
 }
+.session-item.active {
+  background: var(--hover-2);
+}
 .session-item.active .session-row {
   color: var(--ink);
-}
-.session-item.active .session-row span {
-  font-weight: 500;
 }
 .session-row {
   min-width: 0;
@@ -3006,7 +3005,7 @@ textarea::selection,
 .prompt-input {
   display: block;
   width: 100%;
-  min-height: 28px;
+  min-height: 46px;
   max-height: 160px;
   overflow-y: auto;
   border: 0;
@@ -3018,10 +3017,7 @@ textarea::selection,
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.prompt-input.empty {
-  min-height: 46px;
-}
-.prompt-wrap.hero .prompt-input.empty {
+.prompt-wrap.hero .prompt-input {
   min-height: 72px;
 }
 .prompt-input.empty::before {
@@ -3323,14 +3319,15 @@ textarea::selection,
   align-items: center;
   justify-content: center;
   gap: 6px;
-  width: 72px;
+  min-width: 44px;
+  width: auto;
   height: 28px;
-  padding: 0 6px;
+  padding: 0 8px;
   border-radius: 6px;
   color: var(--ink-2);
   font-size: 12px;
 }
-.effort-trigger[lang="en"] { width: 110px; }
+.effort-trigger[lang="en"] { min-width: 56px; }
 .effort-trigger svg { flex: none; }
 .effort-trigger span { min-width: 0; white-space: nowrap; }
 .effort-trigger.off { color: var(--ink-3); }
@@ -3414,6 +3411,7 @@ textarea::selection,
 }
 .prompt .combo-trigger,
 .prompt .combo-input {
+  min-width: 0;
   max-width: 280px;
 }
 .combo-trigger:hover,
