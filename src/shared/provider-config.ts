@@ -6,6 +6,12 @@ export const SUPPORTED_SERVICE_STYLES: CatalogApiStyle[] = [
 ];
 export const SERVICE_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
+export function serviceThinkingLevels(model: ProviderModelBinding, style: CatalogApiStyle): string[] {
+  return model.thinkingLevels ?? (style === "anthropic_messages"
+    ? ["minimal", "low", "medium", "high"]
+    : SERVICE_THINKING_LEVELS);
+}
+
 export function serviceBaseUrl(value: string, style: CatalogApiStyle): string {
   const raw = value.trim().replace(/\/+$/, "");
   let url: URL;
@@ -70,7 +76,14 @@ export function serviceRuntimeConfig(provider: ProviderRecord) {
       contextWindow: model.contextWindow ?? 128_000,
       maxTokens: model.maxTokens ?? Math.min(8192, model.contextWindow ?? 128_000),
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      ...(model.thinkingLevels ? { thinkingLevelMap: Object.fromEntries(SERVICE_THINKING_LEVELS.map((level) => [level, model.thinkingLevels!.includes(level) ? level : null])) } : {}),
+      ...(model.reasoning ? { thinkingLevelMap: Object.fromEntries(SERVICE_THINKING_LEVELS.map((level) => [level,
+        serviceThinkingLevels(model, provider.apiStyle).includes(level)
+          ? (api === "anthropic-messages" && level === "minimal" ? "low" : level)
+          : null,
+      ])) } : {}),
+      // Explicit max/xhigh support declares adaptive effort, not a high-token budget.
+      ...(api === "anthropic-messages" && model.reasoning && model.thinkingLevels?.some((level) => level === "max" || level === "xhigh")
+        ? { compat: { forceAdaptiveThinking: true } } : {}),
       ...(api === "openai-completions" ? { compat: { supportsStore: false, supportsDeveloperRole: false, supportsStrictMode: false } } : {}),
     })),
   };

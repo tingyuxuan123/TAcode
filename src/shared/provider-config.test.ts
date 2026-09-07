@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { serviceBaseUrl, serviceRuntimeConfig, validateService } from "./provider-config";
+import { SERVICE_THINKING_LEVELS, serviceBaseUrl, serviceRuntimeConfig, serviceThinkingLevels, validateService } from "./provider-config";
 import type { ProviderRecord } from "./types";
 
 const provider: ProviderRecord = { id: "test", name: "Test", vendorKey: "custom", apiStyle: "chat_completions", baseUrl: "https://example.test/v1", models: [{ id: "custom-model", maxTokens: 4096, contextWindow: 64000, reasoning: true, supportsImages: true, thinkingLevels: ["low", "high"] }], isEnabled: true, createdAt: "", updatedAt: "" };
@@ -14,6 +14,28 @@ describe("service runtime configuration", () => {
     expect(config.models[0]).toMatchObject({ id: "custom-model", api, input: ["text", "image"], maxTokens: 4096, contextWindow: 64000,
       thinkingLevelMap: { low: "low", high: "high", medium: null } });
     expect(config).not.toHaveProperty("apiKey");
+  });
+  it("uses adaptive Anthropic effort only when higher tiers are explicitly configured", () => {
+    const [model] = serviceRuntimeConfig({ ...provider, apiStyle: "anthropic_messages", models: [{ id: "deepseek-v4-flash-vision-exp", reasoning: true, thinkingLevels: ["minimal", "high", "max"] }] }).models;
+    expect(model).toMatchObject({ compat: { forceAdaptiveThinking: true }, thinkingLevelMap: { minimal: "low", high: "high", max: "max", xhigh: null } });
+    const [budget] = serviceRuntimeConfig({ ...provider, apiStyle: "anthropic_messages", models: [{ id: "legacy-reasoner", reasoning: true }] }).models;
+    expect(budget).not.toHaveProperty("compat");
+    expect(budget.thinkingLevelMap).toMatchObject({ minimal: "low", low: "low", medium: "medium", high: "high", max: null, xhigh: null });
+  });
+  it("uses the same default level selection in settings and runtime", () => {
+    for (const style of ["chat_completions", "responses", "anthropic_messages", "google_generative_ai"] as const) {
+      const model = { id: "custom", reasoning: true };
+      const runtime = serviceRuntimeConfig({ ...provider, apiStyle: style, models: [model] }).models[0];
+      const levels = SERVICE_THINKING_LEVELS.filter((level) => runtime.thinkingLevelMap?.[level] != null);
+      expect(levels).toEqual(serviceThinkingLevels(model, style));
+    }
+  });
+  it("does not enable reasoning or adaptive mode from stale disabled-model levels", () => {
+    const [model] = serviceRuntimeConfig({ ...provider, apiStyle: "anthropic_messages", models: [{ id: "plain", reasoning: false, thinkingLevels: ["max"] }] }).models;
+    expect(model).not.toHaveProperty("compat");
+    expect(model).not.toHaveProperty("thinkingLevelMap");
+    const [empty] = serviceRuntimeConfig({ ...provider, models: [{ id: "empty", reasoning: true, thinkingLevels: [] }] }).models;
+    expect(Object.values(empty.thinkingLevelMap ?? {})).toEqual(SERVICE_THINKING_LEVELS.map(() => null));
   });
   it("normalizes full endpoint URLs for the selected protocol", () => {
     expect(serviceBaseUrl("https://a.test/v1/responses", "responses")).toBe("https://a.test/v1");

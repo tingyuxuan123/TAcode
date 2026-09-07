@@ -36,7 +36,7 @@ export async function desktopProviderStatus(): Promise<ProviderStatus | undefine
   if (!provider) return undefined;
   return { id: "openai", serviceId: provider.id, serviceVersion: provider.updatedAt, name: provider.name, configured: true, preferred: true,
     defaultModel: store.defaultModelId ?? provider.defaultModelId ?? provider.models[0].id,
-    models: provider.models.map((m) => m.id), baseUrl: provider.baseUrl };
+    models: provider.models.map((m) => m.id), modelCapabilities: serviceRuntimeConfig(provider).models, baseUrl: provider.baseUrl };
 }
 
 export async function resolveDesktopProvider(id: string, modelId?: string) {

@@ -7,6 +7,13 @@ export type ThinkingLevelMap = Partial<
   Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>
 >;
 
+export interface ModelReasoningCapabilities {
+  id: string;
+  reasoning?: boolean;
+  thinkingLevels?: string[];
+  thinkingLevelMap?: ThinkingLevelMap;
+}
+
 const EXTENDED_THINKING_LEVELS = [
   "off",
   "minimal",
@@ -18,11 +25,12 @@ const EXTENDED_THINKING_LEVELS = [
 ] as const;
 
 const EFFORT_LABEL_KEYS: Record<string, MessageKey> = {
+  minimal: "effort.minimal",
   low: "effort.low",
   medium: "effort.medium",
   high: "effort.high",
   xhigh: "effort.xhigh",
-  max: "effort.xhigh",
+  max: "effort.max",
 };
 
 export function reasoningLevelsAvailable(levels: string[]): boolean {
@@ -68,26 +76,25 @@ export function thinkingMapForModelId(modelId: string): ThinkingLevelMap | undef
 
 export function levelsForModel(
   modelId: string,
-  catalog?: Array<{ id: string; reasoning?: boolean }>,
+  catalog?: ModelReasoningCapabilities[],
 ): string[] {
   const entry = catalog?.find((item) => item.id === modelId);
   if (entry?.reasoning === false) return ["off"];
+  if (entry?.thinkingLevels !== undefined) {
+    const levels = pickEffortOptions(entry.thinkingLevels);
+    return levels.length ? levels : ["off"];
+  }
+  if (entry?.thinkingLevelMap) return levelsFromThinkingMap(entry.thinkingLevelMap);
   if (entry?.reasoning === true || inferModelReasoning(modelId)) {
     return levelsFromThinkingMap(thinkingMapForModelId(modelId));
   }
   return ["off"];
 }
 
-/** UI order: 轻度 / 中 / 高 / 极高 (xhigh or max). */
+/** Keep configured tiers distinct and ordered; off is not a reasoning effort. */
 export function pickEffortOptions(levels: string[]): string[] {
   const set = new Set(levels);
-  const options: string[] = [];
-  for (const level of ["low", "medium", "high"] as const) {
-    if (set.has(level)) options.push(level);
-  }
-  if (set.has("xhigh")) options.push("xhigh");
-  else if (set.has("max")) options.push("max");
-  return options;
+  return EXTENDED_THINKING_LEVELS.filter((level) => level !== "off" && set.has(level));
 }
 
 export function effortLabelKey(level: string): MessageKey {
@@ -99,7 +106,7 @@ export function normalizeEffort(value: string, levels: string[]): string {
   if (options.includes(value)) return value;
   if (options.includes(DEFAULT_EFFORT)) return DEFAULT_EFFORT;
   if (options.includes("high")) return "high";
-  return options[0] ?? DEFAULT_EFFORT;
+  return options[0] ?? "off";
 }
 
 export function readStoredEffort(): string {

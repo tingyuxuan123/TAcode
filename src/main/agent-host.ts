@@ -128,6 +128,9 @@ export class AgentHost {
         PI_TELEMETRY: "0",
         PI_SKIP_VERSION_CHECK: "1",
         ...(options.desktopProvider ? {
+          // The CLI checks built-in auth before loading the service extension.
+          // Bootstrap only this worker; the extension supplies the real credential.
+          OPENAI_API_KEY: "desktop-session-key",
           TETHER_DESKTOP_PROVIDER_CONFIG: JSON.stringify(options.desktopProvider.config),
           TETHER_DESKTOP_PROVIDER_KEY: options.desktopProvider.apiKey,
         } : {}),

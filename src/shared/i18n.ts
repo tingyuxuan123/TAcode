@@ -168,10 +168,12 @@ const zh = {
   "slash.login": "设置",
 
   "perm.plan": "仅规划",
+  "effort.minimal": "最低",
   "effort.low": "轻度",
   "effort.medium": "中",
   "effort.high": "高",
   "effort.xhigh": "极高",
+  "effort.max": "最高",
   "perm.planDesc": "只读分析与规划；诊断命令可在只读沙箱中运行，不修改文件。",
   "perm.ask": "编辑时询问",
   "perm.askDesc": "除只读探查外，执行命令或改文件前都会询问。",
@@ -689,10 +691,12 @@ const en: Record<MessageKey, string> = {
   "slash.login": "Settings",
 
   "perm.plan": "Plan only",
+  "effort.minimal": "Minimal",
   "effort.low": "Light",
   "effort.medium": "Medium",
   "effort.high": "High",
-  "effort.xhigh": "Max",
+  "effort.xhigh": "Extra High",
+  "effort.max": "Max",
   "perm.planDesc":
     "Read-only analysis and planning; diagnostic commands may run in a read-only sandbox.",
   "perm.ask": "Ask before edits",

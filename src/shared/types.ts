@@ -1,5 +1,6 @@
 import type { Locale } from "./i18n";
 import type { AgentSkillCommand } from "./skills";
+import type { ModelReasoningCapabilities } from "./thinking";
 
 /** Previews load through their own origin so page storage works without reaching the app. */
 export const PREVIEW_SCHEME = "harness-preview";
@@ -58,6 +59,7 @@ export interface ProviderStatus {
   serviceId?: string;
   serviceVersion?: string;
   models?: string[];
+  modelCapabilities?: ModelReasoningCapabilities[];
 }
 
 export interface AgentStartOptions {
@@ -107,7 +109,7 @@ export interface AgentSessionStats {
 export interface AgentSnapshot {
   state: Record<string, unknown>;
   messages: unknown[];
-  models: Array<{ provider: string; id: string; contextWindow?: number; reasoning?: boolean; input?: string[] }>;
+  models: Array<ModelReasoningCapabilities & { provider: string; contextWindow?: number; input?: string[] }>;
   thinkingLevels: string[];
   stats?: AgentSessionStats;
   cwd?: string;

@@ -13,7 +13,8 @@ import {
   type CatalogApiStyle,
 } from "../shared/provider-presets";
 import type { ProviderRecord, ProviderModelBinding } from "../shared/types";
-import { SERVICE_THINKING_LEVELS, SUPPORTED_SERVICE_STYLES } from "../shared/provider-config";
+import { SERVICE_THINKING_LEVELS, serviceThinkingLevels, SUPPORTED_SERVICE_STYLES } from "../shared/provider-config";
+import { effortLabelKey } from "../shared/thinking";
 
 // --- 常量 ---
 
@@ -170,12 +171,14 @@ export function ModelSelectionPanes({
   availableModels,
   selectedModels,
   onModelsChange,
+  apiStyle,
   loading,
   error,
 }: {
   availableModels: string[];
   selectedModels: ProviderModelBinding[];
   onModelsChange: (models: ProviderModelBinding[]) => void;
+  apiStyle: CatalogApiStyle;
   loading: boolean;
   error: string;
 }) {
@@ -376,11 +379,11 @@ export function ModelSelectionPanes({
                     <legend>{t("settings.serviceThinkingLevels")}</legend>
                     {SERVICE_THINKING_LEVELS.map((level) => (
                       <label className="provider-capability" key={level}>
-                        <input type="checkbox" checked={model.thinkingLevels?.includes(level) ?? true}
+                        <input type="checkbox" checked={serviceThinkingLevels(model, apiStyle).includes(level)}
                           onChange={(e) => updateModel(model.id, { thinkingLevels: e.target.checked
-                            ? [...(model.thinkingLevels ?? SERVICE_THINKING_LEVELS), level]
-                            : (model.thinkingLevels ?? SERVICE_THINKING_LEVELS).filter((value) => value !== level) })} />
-                        <span>{level}</span>
+                            ? [...serviceThinkingLevels(model, apiStyle), level]
+                            : serviceThinkingLevels(model, apiStyle).filter((value) => value !== level) })} />
+                        <span>{t(effortLabelKey(level))} ({level})</span>
                       </label>
                     ))}
                   </fieldset>
@@ -617,6 +620,7 @@ export function ProviderSetupDialog({
               availableModels={discoveredModels}
               selectedModels={models}
               onModelsChange={setModels}
+              apiStyle={resolvedApiStyle}
               loading={discovering}
               error={discoveryError}
             />

@@ -362,6 +362,8 @@ export function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  const providersRef = useRef(providers);
+  providersRef.current = providers;
   const runtimeProviderRef = useRef<ProviderStatus["id"]>("deepseek");
   const runtimeServiceRef = useRef("");
   const [workspace, setWorkspace] = useState<string>();
@@ -417,22 +419,30 @@ export function App() {
   const startSeq = useRef(0);
   const permissionBeforePlan = useRef<Exclude<PermissionMode, "plan">>("auto");
 
-  const applyThinkingForModel = useCallback((modelId: string) => {
-    const levels = levelsForModel(modelId, agentModelsRef.current);
+  const applyThinkingForModel = useCallback((modelId: string, accounts = providers) => {
+    const chat = activeChatProvider(accounts);
+    const levels = levelsForModel(modelId, chat?.modelCapabilities ?? agentModelsRef.current);
     setThinkingLevels(levels);
     const next = normalizeEffort(effortRef.current, levels);
     effortRef.current = next;
     setEffort(next);
     writeStoredEffort(next);
-  }, []);
+  }, [providers]);
 
   const syncAgentThinking = useCallback(async () => {
     if (!agentCwd.current) return;
+    const seq = startSeq.current;
+    const currentService = activeChatProvider(providersRef.current);
+    if (`${currentService?.serviceId ?? ""}:${currentService?.serviceVersion ?? ""}` !== runtimeServiceRef.current) return;
+    const requestedModel = modelRef.current;
+    const requestedEffort = effortRef.current;
     try {
       const [levelsResp, stateResp] = await Promise.all([
         window.harness.agent.command<{ levels: string[] }>("get_available_thinking_levels"),
         window.harness.agent.command<{ thinkingLevel?: string; model?: { id?: string } }>("get_state"),
       ]);
+      if (seq !== startSeq.current || requestedModel !== modelRef.current || requestedEffort !== effortRef.current) return;
+      if (stateResp?.model?.id && stateResp.model.id !== requestedModel) return;
       const levels = Array.isArray(levelsResp?.levels) ? levelsResp.levels : ["off"];
       setThinkingLevels(levels);
       const activeLevel = typeof stateResp?.thinkingLevel === "string"
@@ -456,6 +466,8 @@ export function App() {
     effortRef.current = next;
     setEffort(next);
     writeStoredEffort(next);
+    const currentService = activeChatProvider(providersRef.current);
+    if (!agentCwd.current || `${currentService?.serviceId ?? ""}:${currentService?.serviceVersion ?? ""}` !== runtimeServiceRef.current) return;
     void window.harness.agent.command("set_thinking_level", { level: next }).catch(() => undefined);
   }, []);
 
@@ -649,10 +661,11 @@ export function App() {
       agentModelsRef.current = snapshot.models ?? [];
       agentModelIdsRef.current = agentModelsRef.current.map((item) => item.id).filter(Boolean);
       if (modelId) {
+        modelRef.current = modelId;
         setModel(modelId);
         await window.harness.agent.command("set_model", { provider: chat.id, modelId });
       }
-      applyThinkingForModel(modelId);
+      applyThinkingForModel(modelId, accounts);
       const nextEffort = effortRef.current;
       await window.harness.agent.command("set_thinking_level", { level: nextEffort }).catch(() => undefined);
       await syncAgentThinking();
@@ -715,7 +728,9 @@ export function App() {
     setModel(next);
     modelRef.current = next;
     applyThinkingForModel(next);
-    if (agentCwd.current && agentModelIdsRef.current.includes(next)) {
+    const currentService = activeChatProvider(providersRef.current);
+    if (agentCwd.current && `${currentService?.serviceId ?? ""}:${currentService?.serviceVersion ?? ""}` === runtimeServiceRef.current
+      && agentModelIdsRef.current.includes(next)) {
       void window.harness.agent.command("set_model", { provider: runtimeProviderRef.current, modelId: next })
         .then(() => syncAgentThinking())
         .catch(() => undefined);
@@ -1075,7 +1090,11 @@ export function App() {
 
   useEffect(() => {
     const chat = activeChatProvider(providers);
-    if (chat?.serviceId) { setChatModels(chat.models ?? []); return; }
+    if (chat?.serviceId) {
+      setChatModels(chat.models ?? []);
+      applyThinkingForModel(modelRef.current || chat.defaultModel, providers);
+      return;
+    }
     if (!chat?.configured || !chat.baseUrl) return;
     let cancelled = false;
     void window.harness.auth.readApiKey("deepseek").then((key) => {
@@ -1085,7 +1104,7 @@ export function App() {
       if (!cancelled && ids?.length) setChatModels(ids);
     }).catch(() => undefined);
     return () => { cancelled = true; };
-  }, [providers]);
+  }, [providers, applyThinkingForModel]);
 
   useEffect(() => {
     const offEvent = window.harness.agent.onEvent((event) => {
@@ -1096,6 +1115,7 @@ export function App() {
           agentModelsRef.current = event.models as typeof agentModelsRef.current;
           agentModelIdsRef.current = agentModelsRef.current.map((item) => item.id).filter(Boolean);
         }
+        if (Array.isArray(event.thinkingLevels)) void syncAgentThinking();
         if (Array.isArray(event.skills)) setAgentSkills(event.skills as AgentSkillCommand[]);
         if (event.stats && typeof event.stats === "object") setStats(event.stats as AgentSessionStats);
       }
@@ -1153,7 +1173,7 @@ export function App() {
       offError();
       offCommand();
     };
-  }, [newThread, openFolder, t, workspace]);
+  }, [newThread, openFolder, syncAgentThinking, t, workspace]);
 
   useEffect(() => {
     if (!workspace) {
@@ -1541,7 +1561,11 @@ export function App() {
             setLoginOpen(false);
             void refresh().then((status) => {
               const current = activeChatProvider(status);
-              if (current?.configured) { modelRef.current = current.defaultModel; setModel(current.defaultModel); }
+              if (current?.configured) {
+                modelRef.current = current.defaultModel;
+                setModel(current.defaultModel);
+                applyThinkingForModel(current.defaultModel, status);
+              }
             }).catch((error) => setToast(friendlyAgentError(error)));
           }}
           onSaved={async () => {
@@ -1552,7 +1576,7 @@ export function App() {
               const nextModel = current.defaultModel;
               modelRef.current = nextModel;
               setModel(nextModel);
-              applyThinkingForModel(nextModel);
+              applyThinkingForModel(nextModel, status);
               setLoginOpen(false);
               await window.harness.agent.stop().catch(() => undefined);
               if (workspace || agentCwd.current) {
