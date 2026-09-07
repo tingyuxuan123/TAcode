@@ -8,7 +8,7 @@ import { visibleUserText, visionResultSections, visionToolChips } from "../share
 import { defaultCustomProfile, type CustomApiProfile } from "../shared/chat-profiles";
 import { ProviderListPage, ProviderSetupDialog } from "./provider-dialog";
 import type { ProviderRecord } from "../shared/types";
-import { applyTheme, readStoredTheme, THEMES, type ThemeId } from "../shared/theme";
+import { AppearanceSettings } from "./appearance-settings";
 import { effortLabelKey, reasoningLevelsAvailable } from "../shared/thinking";
 import type { ModelOption } from "../shared/model-selection";
 import { EffortPicker, ModelPicker } from "./composer-pickers";
@@ -2885,18 +2885,6 @@ function ApiProfilesEditor({
 
 type SettingsPane = "providers" | "vision" | "appearance" | "shortcuts" | "skills" | "about";
 
-const THEME_LABEL: Record<ThemeId, MessageKey> = {
-  white: "settings.themeWhite",
-  paper: "settings.themePaper",
-  dark: "settings.themeDark",
-};
-
-const THEME_DESC: Record<ThemeId, MessageKey> = {
-  white: "settings.themeWhiteDesc",
-  paper: "settings.themePaperDesc",
-  dark: "settings.themeDarkDesc",
-};
-
 function settingsNav(t: ReturnType<typeof useI18n>["t"]): Array<{ label: string; items: Array<{ id: SettingsPane; label: string; icon: string }> }> {
   return [
   {
@@ -2948,7 +2936,6 @@ export function Login({
 }) {
   const { t } = useI18n();
   const [pane, setPane] = useState<SettingsPane>("providers");
-  const [theme, setTheme] = useState<ThemeId>(readStoredTheme);
   const [visionProfiles, setVisionProfiles] = useState<CustomApiProfile[]>([]);
   const [activeVisionId, setActiveVisionId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -3159,49 +3146,7 @@ export function Login({
                 )}
               </>
             )}
-            {pane === "appearance" && (
-              <div className="theme-page">
-                <p className="settings-hint">{t("settings.themeHint")}</p>
-                <div className="theme-picks">
-                  {THEMES.map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      className={`theme-pick theme-pick-${id}${theme === id ? " on" : ""}`}
-                      onClick={() => setTheme(applyTheme(id))}
-                    >
-                      <span className="theme-pick-preview" aria-hidden>
-                        <span className="theme-pick-side" />
-                        <span className="theme-pick-main">
-                          <span className="theme-pick-bar" />
-                          <span className="theme-pick-bubble user" />
-                          <span className="theme-pick-bubble" />
-                        </span>
-                      </span>
-                      <span className="theme-pick-meta">
-                        <b>{t(THEME_LABEL[id])}</b>
-                        <small>{t(THEME_DESC[id])}</small>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <div className="theme-live">
-                  <div className="theme-live-label">{t("settings.themePreview")}</div>
-                  <div className="theme-live-frame">
-                    <aside>
-                      <i /><i /><i />
-                    </aside>
-                    <main>
-                      <div className="user-turn">
-                        <article className="user">{t("settings.themePreviewUser")}</article>
-                      </div>
-                      <article className="turn">{t("settings.themePreviewBot")}</article>
-                      <div className="theme-live-input">{t("settings.themePreviewInput")}</div>
-                    </main>
-                  </div>
-                </div>
-              </div>
-            )}
+            {pane === "appearance" && <AppearanceSettings />}
 
             {pane === "skills" && (
               <>

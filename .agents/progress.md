@@ -85,3 +85,14 @@
 - 新增25项测试均通过。`pnpm test`为230/231，唯一失败仍为原有 `conversation.test.ts:308` 识图标题断言。原阶段说明测试补齐分立模型消息的message_start事件，未弱化内容顺序断言。`pnpm typecheck`、`pnpm build:renderer`和`git diff --check`通过，仍有现有renderer大chunk警告。
 - 工作台 `3902fd90-16b8-4ee1-912f-59ee01eccd97/preview/` 用真实App和隔离IPC检查运行/完成、工具详情保持、等待确认、手动回看不跳及切会话无旧文本污染；查看1440/1024/760px及白色/深色/纸面主题截图。400余条历史消息追加80次快照，被监测历史正文DOM未变化，回放无捕获到的运行时异常。详细证据见该会话 `verification.md`。
 - 减少动态效果分支已实现但未切换真实OS设置验收；没有真实云端请求、打包安装或发布。保留项目现有 `127.0.0.1:5177` 开发服务，已更新renderer生产构建。未修改主进程、用户服务数据、AGENTS.md或依赖版本，未提交。
+
+## 2026-09-07：主题与字体设置（字体 + 字号）
+
+- 在现有“主题”页新增字体与字号区：两字体选择器（界面与正文 / 代码）、三字号步进框（界面 / 对话 / 代码）、自定义字体名、恢复默认；配色与字体字号同页独立分区，底部预览展示实际效果。
+- 新增 `shared/typography.ts` 管理配置校验、localStorage 保存与 CSS 变量：`--sans`/`--mono` 随字体切换；`--ui/--chat/--code-font-scale` 按比例套用，默认均为 1，不改变现有字号层级。启动前在 renderer/main.tsx 恢复。
+- 字号用 `calc(<px> * var(--<scale>))` 接入：正文/对话为 chat，代码块、终端、路径为 code，按钮/侧栏等界面元数据为 ui；行内 `code` 保留原文比例。修正 `.markdown pre code` 让内层 code 继承外层字体（原来被浏览器默认 monospace 覆盖，导致代码字体切换看不出效果）。
+- 字体可用性用本地 canvas 测量判定；未安装提醒并回退默认；非等宽字体在代码分类被拒绝。代码字体预设含 Menlo / Monaco / Courier New / Consolas / JetBrains Mono（本机未装则置灰标注未安装）。自定义字体留空时提示需填名称。
+- 翻译补齐中/英文；`settings.appearance` 改名“主题与字体”。
+- 16 项新增 typography 单测通过；类型检查、`pnpm build:renderer`、`git diff --check` 通过。全量 `pnpm test` 仍为 246/247，唯一失败为修改前已存在的 `conversation.test.ts:308` 识图标题断言，未改动该测试。
+- 隔离 IPC fixture 加载真实 App 完成浏览器验收：切换代码字体为 Menlo 后代码块计算字体跟随（`code` 由 monospace 变为 Menlo 栈）、代码字号步进即时生效、重载后从 localStorage 恢复（menlo / 13px）、无运行时错误；截图确认三区块布局与窄窗口。未读取真实凭据、未请求云端模型。
+- 预览工具对相同 URL 有资源缓存，旧 CSS 在旧标签残留属工具现象；源码与生产构建产物均已确认包含 `font-family: inherit` 修复。未提交、未发布、未改 AGENTS.md。
