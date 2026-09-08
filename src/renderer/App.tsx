@@ -74,6 +74,7 @@ import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
 import logo from "./logo.svg";
 import { useI18n } from "./i18n";
+import { PreviewContext } from "./file-path-chip";
 import { composerModelOptions, modelOptionKey } from "../shared/model-selection";
 import type { MessageKey } from "../shared/i18n";
 
@@ -1370,6 +1371,7 @@ export function App() {
   );
 
   return (
+    <PreviewContext.Provider value={(filePath) => setPreview({ path: filePath, additions: 0, deletions: 0 })}>
     <div className={["app", darwin && "darwin", fullscreen && "fullscreen"].filter(Boolean).join(" ")}>
       <SidebarNav
         collapsed={sidebarLayout.collapsed}
@@ -1688,5 +1690,6 @@ export function App() {
         />
       )}
     </div>
+    </PreviewContext.Provider>
   );
 }
