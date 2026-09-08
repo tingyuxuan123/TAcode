@@ -109,3 +109,4 @@
 - Layer C 核心完成（commit 210043f）：`src/main/browser/passwords.ts` 密码保险库（safeStorage 包裹 AES-256 主密钥 + AES-256-GCM 记录库，~/.tether/browser-passwords，临时文件 + rename 原子写，safeStorage 不可用拒绝落盘）；guest preload 扩展自动填充/提交捕获（`browser-passwords:find/save` 带 webview sender + senderFrame origin 双重校验）；管理 IPC list/get/save/delete/delete-batch 仅限窗口渲染进程。`tetherPasswordBridge` 暴露给页面脚本。
 - Layer C 余项：密码管理设置 UI、登录态归档（依赖 CDP，随 D 层）、浏览器数据导入（Snow 为 Rust/DPAPI/Keychain，TS 仅 macOS Chromium 现实可行，需产品决策降级边界）。
 - Layer D/E 未开始（计划与会话工作台 plan/snow-browser-port.md 同步）。
+- 白屏修复（commit daf3009）：沙箱 preload 无 __dirname，guest preload 路径改由主进程 `browser:webview-preload-path` 提供（file: URL），BrowserPanel 拿到路径后再挂 webview；同时修正独立窗口 preload/icon/page 的 bundle 相对路径（tsup 单入口把 browser/* 并入 dist-electron/main，基准是该目录而非 browser/ 子目录）。ELECTRON_ENABLE_LOGGING 复现验证：preload 正常、React 正常挂载。
