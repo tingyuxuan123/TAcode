@@ -200,3 +200,33 @@
 - 用户附红框截图，要求去掉底部待办进度胶囊右侧的圆形 ↓ 按钮。progress-overlay.tsx 删除任务存在时并排渲染的 progress-overlay-jump 按钮，styles.css 移除对应两条规则并更正区块注释；无任务时的独立回到底部箭头（conversation-latest）保留，atBottom/onFollowLatest 仍为该分支服务。
 - 顺手修复全量测试唯一红项：conversation.test.ts:308 识图标题断言仍期望 ca17ab5（8-21）多供应商改造前的「GLM-4V 识图」前缀，与 vision-api.test.ts 及现实现（「识图 · 模型」）不一致，HEAD 上即失败；已对齐为「识图 · glm-4v-flash · MinerU OCR」。
 - pnpm typecheck 通过；pnpm test 全量 352/352 通过。含上一会话未提交的进度浮层聚合改动（collectProgressTasks + ProgressOverlay）。未提交/发布，未改AGENTS.md。
+
+## 2026-09-08：优化回到底部按钮与任务列表浮层样式（18:52，Asia/Shanghai）
+
+- 回到底部独立箭头（conversation-latest）从右缘 26px 方钮改为居中 32px 圆形悬浮钮：与进度胶囊同视觉语言（line-strong 描边、88% 表面模糊、raised 阴影），hover 上浮 1px，不再贴着滚动条。
+- 任务列表浮层（progress-overlay-popover）：12px 圆角 + 94% 表面模糊；表头粘性置顶带底部分隔线，右侧新增「完成数/总数」计数 chip（progress-overlay.tsx）；任务行加高至 7px 8px、8px 圆角，运行中行加 accent 7% 底色高亮，已完成文字弱化为 ink-3，失败状态文字标红。
+- 新增浮层区域 prefers-reduced-motion 守卫：禁用相关过渡与 progress-spinner 旋转，hover 不再位移。
+- pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
+
+## 2026-09-08：移除停止时的「正在停止…」toast（19:13，Asia/Shanghai）
+
+- 用户附截图红框，要求暂停/停止时不再弹出提示。App.tsx 停止流程（agent abort）删除 setToast(t("toast.stopping"))；i18n.ts 移除中英 toast.stopping 词条（已无引用）。stopping 状态本身保留，仍用于流式收尾与 ExecutionFlow 状态文案。
+- pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
+
+## 2026-09-08：进度胶囊兼任一键回到底部（19:17，Asia/Shanghai）
+
+- 用户反馈：任务浮层显示期间没有回到底部入口（上一轮移除了胶囊旁的箭头）。方案：不新增悬浮钮，进度胶囊按状态分流——不在底部时点胶囊/回车即回到底部（先收起已展开列表再 followLatest，title 为「回到最新」）；已在底部时维持原行为展开任务列表。
+- 胶囊尾部图标随状态切换：非底部显示 ↓（提示回到底部），底部显示 ›/⌄（提示展开列表）。
+- pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
+
+## 2026-09-08：一键到底滚动动画丝滑化（19:21，Asia/Shanghai）
+
+- 原实现（use-follow-scroll.ts followLatest）：每帧走剩余距离 50%，但距离超过一屏直接 done=true 瞬移到底——用户反馈一键到底不丝滑的根因。
+- 改为时间基动画：指数趋近（时间常数 45ms，帧间隔换算、帧率无关）叠加每帧限速（max(48, 视口高 30%) px/帧@60fps 等比缩放），近距离指数收尾、远距离有界匀速滑行，任何距离都不瞬移；流式追加内容时 target 每帧重算持续跟随；reduced-motion 仍瞬时到位；保留 lastAssigned/currentTop 记账避免 scroll 监听把程序滚动误判为用户意图。
+- pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
+
+## 2026-09-08：到底部后继续滚动不再误显回到底部箭头（19:23，Asia/Shanghai）
+
+- 根因：use-follow-scroll.ts 的 intent（wheel/touchstart/pointerdown/方向键）无条件判为「离开底部」，已贴底时继续向下滚或触控板回弹也触发，箭头误显示。
+- 修复：intent 先算当前距底距离，≤16px（与滞回恢复阈值一致）直接返回，不打断跟随；真正离开底部后才取消跟随并显示箭头。
+- pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。

@@ -33,15 +33,30 @@ export function useFollowScroll(scope: string, enabled = true) {
     setAtBottom(true);
     cancel();
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const advance = () => {
+    let lastFrame: number | undefined;
+    const advance = (now: number) => {
       if (!following.current) return;
+      if (lastFrame === undefined) lastFrame = now;
+      const dt = Math.min(64, Math.max(1, now - lastFrame));
+      lastFrame = now;
       const target = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
       const distance = target - viewport.scrollTop;
-      const done = reduced || Math.abs(distance) < 2 || Math.abs(distance) > viewport.clientHeight;
-      viewport.scrollTop = done ? target : viewport.scrollTop + distance * 0.5;
+      if (reduced || Math.abs(distance) < 1) {
+        viewport.scrollTop = target;
+        lastAssigned.current = viewport.scrollTop;
+        currentTop.current = viewport.scrollTop;
+        frame.current = undefined;
+        return;
+      }
+      // 指数趋近 + 限速：近距离平滑收尾，远距离有界匀速滑行，任何距离都不瞬移；
+      // 步长按帧间隔换算，不同刷新率下速度一致。流式追加内容时 target 每帧重算，持续跟随。
+      let step = distance * (1 - Math.exp(-dt / 45));
+      const maxStep = Math.max(48, viewport.clientHeight * 0.3) * (dt / 16.7);
+      if (Math.abs(step) > maxStep) step = maxStep * Math.sign(step);
+      viewport.scrollTop += step;
       lastAssigned.current = viewport.scrollTop;
       currentTop.current = viewport.scrollTop;
-      frame.current = done ? undefined : requestAnimationFrame(advance);
+      frame.current = requestAnimationFrame(advance);
     };
     frame.current = requestAnimationFrame(advance);
   }, [viewport, enabled, cancel]);
@@ -58,6 +73,9 @@ export function useFollowScroll(scope: string, enabled = true) {
 
     const intent = () => {
       if (viewport.scrollHeight <= viewport.clientHeight + 1) return;
+      // 已在底部附近（如到底后再向下滚、触控板回弹）不视为离开，避免箭头误显示。
+      const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      if (distance <= 16) return;
       cancel();
       following.current = false;
       lastAssigned.current = undefined;

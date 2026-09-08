@@ -129,16 +129,47 @@ export const ProgressOverlay = memo(function ProgressOverlay({
 
   return (
     <div ref={rootRef} className={`progress-overlay${fading ? " fading" : ""}`}>
-      <div className="progress-overlay-trigger" role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen((value) => !value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpen((value) => !value); } }}>
+      {/* 不在底部时点击胶囊直接回到底部；已在底部时点击展开任务列表。 */}
+      <div
+        className="progress-overlay-trigger"
+        role="button"
+        tabIndex={0}
+        aria-expanded={atBottom ? open : undefined}
+        title={atBottom ? undefined : t("flow.latest")}
+        onClick={() => {
+          if (!atBottom) {
+            setOpen(false);
+            onFollowLatest();
+            return;
+          }
+          setOpen((value) => !value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            if (!atBottom) {
+              setOpen(false);
+              onFollowLatest();
+              return;
+            }
+            setOpen((value) => !value);
+          }
+        }}
+      >
         {statusGlyph(liveActive ?? (active && isTerminal(active.status) ? active : undefined))}
         <span className="progress-overlay-count">{completed}/{tasks.length}</span>
         <span className="progress-overlay-title">{pillLabel}</span>
         {statusText && <span className="progress-overlay-status">{statusText}</span>}
-        <ChevronRight size={14} className={open ? "progress-chevron-rotated" : "progress-chevron"} aria-hidden="true" />
+        {atBottom
+          ? <ChevronRight size={14} className={open ? "progress-chevron-rotated" : "progress-chevron"} aria-hidden="true" />
+          : <ArrowDown size={14} className="progress-chevron" aria-hidden="true" />}
       </div>
       {open && (
         <div className="progress-overlay-popover">
-          <div className="progress-overlay-head">{t("inspect.progress")}</div>
+          <div className="progress-overlay-head">
+            <span>{t("inspect.progress")}</span>
+            <span className="progress-overlay-head-count">{completed}/{tasks.length}</span>
+          </div>
           <ul className="progress-overlay-list">
             {tasks.map((task) => {
               // 非流式（收尾态）不把任务当作进行中，避免继续转圈。

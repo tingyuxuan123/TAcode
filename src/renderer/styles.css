@@ -2416,9 +2416,10 @@ textarea::selection,
 .flow-error > svg { flex: none; margin-top: 3px; }
 .flow-error.weak { color: var(--ink-3); }
 .flow-error .ghost { flex: none; margin-left: auto; }
-.conversation-latest { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink-2); box-shadow: var(--shadow-hairline); }
-.conversation-latest { position: absolute; right: 2px; width: 26px; height: 26px; bottom: calc(var(--dock-clearance, 160px) + 8px); z-index: 4; }
-.conversation-latest:hover { background: var(--hover); }
+/* 回到底部：居中悬浮圆钮，与进度胶囊同一视觉语言 */
+.conversation-latest { position: absolute; left: 50%; bottom: calc(var(--dock-clearance, 160px) + 10px); transform: translateX(-50%); display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--line-strong); border-radius: 999px; background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--ink-2); box-shadow: var(--shadow-raised); backdrop-filter: blur(6px); transition: background 160ms ease, transform 160ms ease; z-index: 4; }
+.conversation-latest:hover { background: var(--hover); transform: translateX(-50%) translateY(-1px); }
+.conversation-latest:active { transform: translateX(-50%); }
 /* 复合浮层：任务进度单条胶囊；无任务且不在底部时退化为独立回到底部箭头（对齐 Proma-main TaskProgressOverlay） */
 .progress-overlay { position: absolute; left: 50%; bottom: calc(var(--dock-clearance, 160px) + 8px); transform: translateX(-50%); display: flex; align-items: center; gap: 6px; z-index: 4; transition: opacity 200ms ease; }
 .progress-overlay.fading { opacity: 0; pointer-events: none; }
@@ -2433,17 +2434,27 @@ textarea::selection,
 .progress-spinner { animation: flow-spin 1.1s linear infinite; color: var(--accent, var(--link)); }
 .progress-ok { color: var(--green, #2ec27e); }
 .progress-err { color: var(--red); }
-.progress-overlay-popover { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 2rem)); max-height: 300px; overflow-y: auto; padding: 8px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-overlay); }
-.progress-overlay-head { padding: 2px 6px 6px; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); font-weight: 600; }
-.progress-overlay-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.progress-task { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 6px; border-radius: 6px; color: var(--ink-2); }
+.progress-overlay-popover { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 2rem)); max-height: 300px; overflow-y: auto; padding: 0 6px 6px; border: 1px solid var(--line-strong); border-radius: 12px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: var(--shadow-overlay); backdrop-filter: blur(8px); }
+.progress-overlay-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 6px; background: var(--surface); color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); font-weight: 600; letter-spacing: 0.02em; }
+.progress-overlay-head-count { flex: none; color: var(--ink-3); font-variant-numeric: tabular-nums; font-weight: 500; }
+.progress-overlay-list { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.progress-task { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 8px; border-radius: 8px; color: var(--ink-2); transition: background 120ms ease; }
 .progress-task:hover { background: var(--hover); }
+.progress-task.running { background: color-mix(in srgb, var(--accent, var(--link)) 7%, transparent); }
+.progress-task.running:hover { background: color-mix(in srgb, var(--accent, var(--link)) 11%, transparent); }
+.progress-task.completed .progress-task-text { color: var(--ink-3); }
+.progress-task.failed .progress-task-status { color: var(--red); }
 .progress-task.removed { opacity: 0.5; }
 .progress-task-glyph, .progress-task-glyph > svg { flex: none; }
 .progress-task-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12.5px * var(--ui-font-scale)); }
 .progress-task-status { margin-left: auto; flex: none; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); white-space: nowrap; }
 .flow-spinner { animation: flow-spin 1.1s linear infinite; }
 @keyframes flow-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .conversation-latest, .progress-overlay, .progress-overlay-trigger, .progress-task { transition: none; }
+  .conversation-latest:hover { transform: translateX(-50%); }
+  .progress-spinner { animation: none; }
+}
 @media (max-width: 800px) {
   .flow-header { gap: 6px; flex-wrap: wrap; }
   .flow-header time { flex-shrink: 0; }

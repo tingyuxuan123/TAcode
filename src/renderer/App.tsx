@@ -1340,7 +1340,6 @@ export function App() {
         const epoch = runEpoch.current;
         eventQueue.current?.flush();
         setStopping(true);
-        setToast(t("toast.stopping"));
         void window.harness.agent.command("abort")
           .then(() => {
             if (seq !== startSeq.current || epoch !== runEpoch.current || !live.current) return;

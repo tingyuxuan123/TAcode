@@ -139,7 +139,6 @@ const zh = {
   "toast.errorNetwork": "连接模型服务失败，请检查网络和 Base URL 后重试",
   "toast.errorTimeout": "模型响应超时，请稍后重试",
   "toast.errorStreamInterrupted": "模型流中断了（常见于停止委派后立刻继续）。点「继续」再试一次，或换个更稳的模型。",
-  "toast.stopping": "正在停止…",
   "toast.steered": "已插话",
   "composer.retryContinue": "请从中断处继续，不要重复已完成的步骤。",
   "toast.errorEndpoint":
@@ -759,7 +758,6 @@ const en: Record<MessageKey, string> = {
   "toast.errorTimeout": "The model timed out. Please try again.",
   "toast.errorStreamInterrupted":
     "The model stream broke (common after stopping a delegate). Click Continue, or switch to a more stable model.",
-  "toast.stopping": "Stopping…",
   "toast.steered": "Steered",
   "composer.retryContinue": "Continue from where we left off. Do not redo completed steps.",
   "toast.errorEndpoint":
