@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PREVIEW_HOST, PREVIEW_SCHEME, type AgentSessionStats, type ExtensionUiRequest, type PermissionMode } from "../shared/types";
@@ -1166,6 +1167,7 @@ export function PanelTabs({
   active,
   onSelect,
   onAdd,
+  onCloseTab,
   flush = false,
   children,
 }: {
@@ -1173,6 +1175,8 @@ export function PanelTabs({
   active: string;
   onSelect(id: string): void;
   onAdd?(): void;
+  /** Show a close control per tab (open panels can be dismissed). */
+  onCloseTab?(id: string): void;
   /** No padding/scroll body — for full-bleed panes like the browser. */
   flush?: boolean;
   children: ReactNode;
@@ -1191,14 +1195,28 @@ export function PanelTabs({
             onClick={() => onSelect(tab.id)}
           >
             <span>{tab.label}</span>
+            {onCloseTab && (
+              <span
+                className="inspect-tab-close"
+                role="button"
+                aria-label={t("panel.closeTab")}
+                title={t("panel.closeTab")}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCloseTab(tab.id);
+                }}
+              >
+                <X size={11} strokeWidth={2.2} />
+              </span>
+            )}
           </button>
         ))}
         {onAdd && (
           <button
             type="button"
             className="inspect-tab-add"
-            aria-label={t("inspect.addTab")}
-            title={t("inspect.addTab")}
+            aria-label={t("panel.openTab")}
+            title={t("panel.openTab")}
             onClick={onAdd}
           >
             <Icon path="M12 5v14M5 12h14" size={14} />
@@ -1206,6 +1224,69 @@ export function PanelTabs({
         )}
       </div>
       <div className={flush ? "inspect-body flush" : "inspect-body"}>{children}</div>
+    </div>
+  );
+}
+
+export type TabPickerItem = {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  disabled?: boolean;
+  hint?: string;
+};
+
+/**
+ * 「打开标签页」选择器：点侧边面板的 + 后弹出，以卡片形式列出可打开的面板。
+ * 覆盖全窗口的暗色遮罩 + 居中内容（对齐设计稿），Esc 或点击遮罩关闭。
+ */
+export function TabPicker({
+  title,
+  subtitle,
+  items,
+  onPick,
+  onClose,
+}: {
+  title: string;
+  subtitle: string;
+  items: TabPickerItem[];
+  onPick(id: string): void;
+  onClose(): void;
+}) {
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="tab-picker-overlay" onClick={onClose}>
+      <div
+        className="tab-picker"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 className="tab-picker-title">{title}</h2>
+        <p className="tab-picker-subtitle">{subtitle}</p>
+        <div className="tab-picker-list">
+          {items.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="tab-picker-item"
+              disabled={item.disabled}
+              onClick={() => onPick(item.id)}
+            >
+              <span className="tab-picker-icon">{item.icon}</span>
+              <span className="tab-picker-label">{item.label}</span>
+              {item.hint && <span className="tab-picker-hint">{item.hint}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

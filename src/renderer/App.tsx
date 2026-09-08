@@ -64,12 +64,13 @@ import {
   PanelTabs,
   PromptBar,
   SidebarNav,
+  TabPicker,
   Thinking,
   TurnNav,
   UserTurn,
 } from "./ui";
 import { BrowserPanel } from "./browser/browser-panel";
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, FilePlus2, Globe, SquareTerminal } from "lucide-react";
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
 import logo from "./logo.svg";
@@ -411,7 +412,7 @@ export function App() {
     const offRestore = window.harness.browser.onRestoreToMain((payload) => {
       setBrowserDetached(false);
       setBrowserRestore({ tabs: payload.tabs, key: Date.now() });
-      setPanelTab("browser");
+      openPanelTab("browser");
     });
     const offClosed = window.harness.browser.onDetachedWindowClosed(() => {
       setBrowserDetached(false);
@@ -420,12 +421,28 @@ export function App() {
       offRestore();
       offClosed();
     };
+    // openPanelTab 由 useCallback 稳定引用
+  }, []);
+
+  const openPanelTab = useCallback((id: string) => {
+    setOpenPanelTabs((current) => (current.includes(id) ? current : [...current, id]));
+    setPanelTab(id);
+    setTabPickerOpen(false);
+  }, []);
+  const closePanelTab = useCallback((id: string) => {
+    setOpenPanelTabs((current) => {
+      const next = current.filter((item) => item !== id);
+      setPanelTab((active) => (active === id ? next[next.length - 1] ?? "" : active));
+      return next;
+    });
   }, []);
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
   const [fullscreen, setFullscreen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FileChange>();
+  const [openPanelTabs, setOpenPanelTabs] = useState<string[]>(["inspect"]);
   const [panelTab, setPanelTab] = useState("inspect");
+  const [tabPickerOpen, setTabPickerOpen] = useState(false);
   const [browserDetached, setBrowserDetached] = useState(false);
   const [browserRestore, setBrowserRestore] = useState<{ tabs: BrowserTabSnapshot[]; key: number }>();
   const [featureTodos, setFeatureTodos] = useState<SessionTodo[]>([]);
@@ -1713,6 +1730,19 @@ export function App() {
               }
             }
           }}
+        />
+      )}
+      {tabPickerOpen && (
+        <TabPicker
+          title={t("picker.title")}
+          subtitle={t("picker.subtitle")}
+          items={[
+            { id: "inspect", label: t("inspect.title"), icon: <FilePlus2 size={18} strokeWidth={1.8} /> },
+            { id: "terminal", label: t("tabs.terminal"), icon: <SquareTerminal size={18} strokeWidth={1.8} />, disabled: true, hint: t("picker.terminalSoon") },
+            { id: "browser", label: t("browser.tab"), icon: <Globe size={18} strokeWidth={1.8} /> },
+          ]}
+          onPick={openPanelTab}
+          onClose={() => setTabPickerOpen(false)}
         />
       )}
     </div>
