@@ -1157,8 +1157,9 @@ function treeChange(path: string, changes: SessionFile[]) {
 export type PanelTab = { id: string; label: string };
 
 /**
- * Right-side feature tab container. Renders a sticky tab bar on top and the
- * active tab panel below. New features (Browser, etc.) become new tabs.
+ * Feature tab container for the right-hand panel. Renders a tab bar across the
+ * top of the panel (tabs left, "+" right) with the active tab panel below.
+ * New features (Browser, etc.) become new tabs.
  */
 export function PanelTabs({
   tabs,
