@@ -235,6 +235,9 @@ export function Chat({
 }) {
   const { t } = useI18n();
   const [drawer, setDrawer] = useState(true);
+  useEffect(() => window.harness.browser.onAgentPresentation((event) => {
+    if (event.action !== "close") setDrawer(true);
+  }), []);
   const [inspectWidth, setInspectWidth] = useState(readInspectWidth);
   const widthRef = useRef(inspectWidth);
   widthRef.current = inspectWidth;
@@ -287,8 +290,8 @@ export function Chat({
           {children}
           {composer}
         </div>
-        {drawer && inspect && (
-          <div className="inspect-shell" style={{ width: inspectWidth }}>
+        {inspect && (
+          <div className="inspect-shell" style={{ width: inspectWidth, display: drawer ? undefined : "none" }}>
             <div
               className="inspect-resize"
               role="separator"
@@ -1188,24 +1191,49 @@ export function PanelTabs({
   children: ReactNode;
 }) {
   const { t } = useI18n();
-  const [addOpen, setAddOpen] = useState(false);
+  const [addMenuPos, setAddMenuPos] = useState<{ top: number; left: number } | null>(null);
   const addWrapRef = useRef<HTMLDivElement>(null);
+  const addMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!addOpen) return;
+    if (!addMenuPos) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (addWrapRef.current && !addWrapRef.current.contains(event.target as Node)) setAddOpen(false);
+      const target = event.target as Node;
+      if (
+        (addWrapRef.current && addWrapRef.current.contains(target)) ||
+        (addMenuRef.current && addMenuRef.current.contains(target))
+      ) {
+        return;
+      }
+      setAddMenuPos(null);
     };
     const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setAddOpen(false);
+      if (event.key === "Escape") setAddMenuPos(null);
     };
+    const close = () => setAddMenuPos(null);
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
     };
-  }, [addOpen]);
+  }, [addMenuPos]);
+
+  const openAddMenu = (): void => {
+    const rect = addWrapRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = 184;
+    const estimatedHeight = (addItems?.length ?? 0) * 40 + 8;
+    let top = rect.bottom + 6;
+    if (top + estimatedHeight > window.innerHeight - 8) {
+      top = Math.max(8, rect.top - estimatedHeight - 6);
+    }
+    setAddMenuPos({ top, left: Math.max(8, rect.right - width) });
+  };
 
   return (
     <div className="inspect">
@@ -1240,37 +1268,44 @@ export function PanelTabs({
           <div className="inspect-add-wrap" ref={addWrapRef}>
             <button
               type="button"
-              className={`inspect-tab-add${addOpen ? " on" : ""}`}
+              className="inspect-tab-add"
               aria-label={t("panel.openTab")}
               title={t("panel.openTab")}
-              aria-expanded={addOpen}
-              onClick={() => setAddOpen((open) => !open)}
+              aria-expanded={addMenuPos !== null}
+              onClick={() => (addMenuPos ? setAddMenuPos(null) : openAddMenu())}
             >
               <Icon path="M12 5v14M5 12h14" size={14} />
             </button>
-            {addOpen && (
-              <div className="panel-add-menu" role="menu">
-                {addItems.map((item) => (
-                  <button
-                    key={item.type}
-                    type="button"
-                    className="panel-add-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setAddOpen(false);
-                      onPickType(item.type);
-                    }}
-                  >
-                    <span className="panel-add-item-icon">{item.icon}</span>
-                    <span>{item.label}</span>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         )}
       </div>
       <div className={flush ? "inspect-body flush" : "inspect-body"}>{children}</div>
+      {addMenuPos &&
+        createPortal(
+          <div
+            ref={addMenuRef}
+            className="panel-add-menu"
+            style={{ top: addMenuPos.top, left: addMenuPos.left }}
+            role="menu"
+          >
+            {(addItems ?? []).map((item) => (
+              <button
+                key={item.type}
+                type="button"
+                className="panel-add-item"
+                role="menuitem"
+                onClick={() => {
+                  setAddMenuPos(null);
+                  onPickType?.(item.type);
+                }}
+              >
+                <span className="panel-add-item-icon">{item.icon}</span>
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

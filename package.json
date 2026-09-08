@@ -16,6 +16,7 @@
     "build": "pnpm build:electron && pnpm build:renderer",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:browser": "pnpm build && node scripts/test-browser.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "pack": "pnpm build && electron-builder --mac --win",
     "pack:mac": "pnpm build && electron-builder --mac",

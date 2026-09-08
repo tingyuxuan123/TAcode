@@ -454,6 +454,15 @@ export function App() {
   const [activePanelTab, setActivePanelTab] = useState("inspect");
   const [browserDetached, setBrowserDetached] = useState<Record<string, boolean>>({});
   const [browserRestore, setBrowserRestore] = useState<Record<string, { tabs: BrowserTabSnapshot[]; key: number }>>({});
+  useEffect(() => window.harness.browser.onAgentPresentation((event) => {
+    if (event.action === "open") {
+      setBrowserRestore((current) => ({ ...current, [event.instanceId]: { tabs: [{ url: event.url, title: "" }], key: Date.now() } }));
+      setPanelTabs((current) => [...current, { id: event.instanceId, type: "browser" }]);
+      setActivePanelTab(event.instanceId);
+    } else if (event.action === "select") {
+      setActivePanelTab(event.instanceId);
+    }
+  }), []);
   const [featureTodos, setFeatureTodos] = useState<SessionTodo[]>([]);
   const [agentSkills, setAgentSkills] = useState<AgentSkillCommand[]>([]);
   const [stoppedJobs, setStoppedJobs] = useState<string[]>([]);
@@ -1554,25 +1563,28 @@ export function App() {
                 />
                 );
               }
-              if (active.type === "browser") {
-                return browserDetached[active.id] ? (
-                  <div className="browser-detached-notice">{t("browser.detachedNotice")}</div>
-                ) : (
-                  <BrowserPanel
-                    key={browserRestore[active.id]?.key ?? active.id}
-                    instanceId={active.id}
-                    initialUrl=""
-                    isActive
-                    initialTabs={browserRestore[active.id]?.tabs}
-                    onOpenDetached={(url, tabs) => {
-                      void window.harness.browser.openDetachedWindow(active.id, url, tabs);
-                      setBrowserDetached((current) => ({ ...current, [active.id]: true }));
-                    }}
-                  />
-                );
-              }
               return null;
             })()}
+              {panelTabs.filter((tab) => tab.type === "browser").map((tab) => (
+                <div key={tab.id} style={{ display: tab.id === activePanelTab ? "flex" : "none", flex: 1, minHeight: 0 }}>
+                  {browserDetached[tab.id] ? (
+                    <div className="browser-detached-notice">{t("browser.detachedNotice")}</div>
+                  ) : (
+                    <BrowserPanel
+                      key={browserRestore[tab.id]?.key ?? tab.id}
+                      instanceId={tab.id}
+                      initialUrl=""
+                      isActive={tab.id === activePanelTab}
+                      initialTabs={browserRestore[tab.id]?.tabs}
+                      onOpenDetached={(url, tabs) => {
+                        void window.harness.browser.openDetachedWindow(tab.id, url, tabs).then(() => {
+                          setBrowserDetached((current) => ({ ...current, [tab.id]: true }));
+                        }).catch((error) => setToast(String(error)));
+                      }}
+                    />
+                  )}
+                </div>
+              ))}
             </PanelTabs>
           )
         ) : undefined}

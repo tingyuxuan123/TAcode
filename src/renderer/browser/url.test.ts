@@ -23,6 +23,14 @@ describe("normalizeUrl", () => {
     expect(normalizeUrl("example.com", "")).toBe("https://example.com");
   });
 
+  it("keeps blank pages and recognizes local development servers", () => {
+    expect(normalizeUrl("about:blank", "")).toBe("about:blank");
+    expect(normalizeUrl("localhost:5177/demo", "")).toBe("http://localhost:5177/demo");
+    expect(normalizeUrl("127.0.0.1:8080", "")).toBe("http://127.0.0.1:8080");
+    expect(normalizeUrl("[::1]:3000", "")).toBe("http://[::1]:3000");
+    expect(normalizeUrl("site:example.com 搜索词", "")).toContain("google.com/search?q=");
+  });
+
   it("searches for free-form text", () => {
     expect(normalizeUrl("electron webview", "")).toBe(
       "https://www.google.com/search?q=electron%20webview",

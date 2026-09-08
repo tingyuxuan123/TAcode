@@ -36,6 +36,7 @@ import { AgentHost } from "./agent-host";
 import { closeAllBrowserPopups } from "./browser/popups";
 import { closeAllDetachedBrowserWindows } from "./browser/windows";
 import { registerBrowserIpc } from "./browser/ipc";
+import { BrowserAutomation } from "./browser/automation";
 import { isPathInsideRoot } from "./workspace-path";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { apiBaseUrl, listModels } from "../shared/openai-models";
@@ -126,6 +127,7 @@ if (!fs.existsSync(userDataPath) && fs.existsSync(legacyUserDataPath)) {
 process.env.TETHER_CREDENTIALS_STORE = "file";
 
 let mainWindow: BrowserWindow | undefined;
+const browserAutomation = new BrowserAutomation(() => mainWindow);
 let agentHost: AgentHost | undefined;
 let activeAgentCwd: string | undefined;
 let activeSessionPath: string | undefined;
@@ -258,6 +260,8 @@ function createWindow(): void {
   agentHost = new AgentHost(
     (event) => mainWindow?.webContents.send("agent:event", event),
     (message) => mainWindow?.webContents.send("agent:error", message),
+    (tool, params, signal) => browserAutomation.execute(tool, params, signal),
+    () => browserAutomation.resetAgent(),
   );
 
   mainWindow.once("ready-to-show", () => {
@@ -791,6 +795,7 @@ function registerIpc(): void {
       cwd,
       sandbox,
       visionExtension: visionExtensionPath(),
+      browserExtension: path.join(currentDirectory, "../extensions/browser.js"),
       visionConfig: visionConfigPath(),
       visionUploads: visionUploadsDir(),
       ...(baseUrl ? { baseUrl } : {}),
@@ -1328,7 +1333,7 @@ app.whenReady().then(async () => {
   await loadLocale();
   protocol.handle(PREVIEW_SCHEME, servePreview);
   registerIpc();
-  registerBrowserIpc(() => mainWindow);
+  registerBrowserIpc(() => mainWindow, browserAutomation);
   installMenu();
   if (process.platform === "darwin") applyDockIcon();
   createWindow();

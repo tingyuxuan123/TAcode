@@ -84,6 +84,9 @@ const api: DesktopApi = {
     testConnection: (input) => ipcRenderer.invoke("providers:test-connection", input),
   },
   browser: {
+    presentationReady: (requestId) => ipcRenderer.send("browser:presentation-ready", requestId),
+    registerTab: (registration) => ipcRenderer.invoke("browser:register-tab", registration),
+    onAgentPresentation: (listener) => subscribe("browser:agent-presentation", listener),
     // The guest preload path is resolved by the main process — sandboxed
     // preloads have no __dirname.
     webviewPreloadPath: () => ipcRenderer.invoke("browser:webview-preload-path"),

@@ -22,7 +22,7 @@ export default defineConfig([
     outExtension: () => ({ js: ".cjs" }),
   },
   {
-    entry: { "extensions/vision": "src/extensions/vision.ts", "extensions/provider": "src/extensions/provider.ts" },
+    entry: { "extensions/vision": "src/extensions/vision.ts", "extensions/provider": "src/extensions/provider.ts", "extensions/browser": "src/extensions/browser.ts" },
     format: ["esm"],
     platform: "node",
     outDir: "dist-electron",

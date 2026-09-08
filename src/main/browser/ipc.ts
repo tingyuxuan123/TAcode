@@ -18,6 +18,8 @@ import {
 } from "./downloads";
 import { initBrowserPopupHandler } from "./popups";
 import { createDetachedBrowserWindow } from "./windows";
+import type { BrowserAutomation } from "./automation";
+import type { BrowserRegistration } from "../../shared/browser-tools";
 import {
   deletePasswordRecord,
   deletePasswordRecords,
@@ -99,7 +101,10 @@ const guestOriginFrom = (event: Electron.IpcMainInvokeEvent, origin: unknown): s
 
 export const registerBrowserIpc = (
   getMainWindow: () => BrowserWindow | undefined,
+  automation: BrowserAutomation,
 ): void => {
+  ipcMain.on("browser:presentation-ready", (event, requestId: string) => automation.presentationReady(event.sender, requestId));
+  ipcMain.handle("browser:register-tab", (event, registration: BrowserRegistration) => automation.register(event.sender, registration));
   installWebviewDownloadHandler();
   initBrowserPopupHandler();
 

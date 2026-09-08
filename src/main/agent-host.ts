@@ -5,6 +5,7 @@ import type { AgentEvent, AgentSessionStats, AgentSnapshot, AgentStartOptions } 
 import { parseSkillCommands } from "../shared/skills";
 import { killProcessTree } from "./process-tree";
 import { drainUtf8Lines } from "./rpc-lines";
+import { type BrowserParams, type BrowserRequest, type BrowserToolResult } from "../shared/browser-tools";
 
 interface PendingRequest {
   resolve(value: unknown): void;
@@ -28,6 +29,7 @@ const LONG_RUNNING_REQUESTS = new Set([
 
 export class AgentHost {
   private child?: ChildProcessWithoutNullStreams;
+  private browserRequests = new Map<string, AbortController>();
   private lineBuffer = Buffer.alloc(0);
   private stderr = "";
   private requestId = 0;
@@ -37,6 +39,8 @@ export class AgentHost {
   constructor(
     private readonly emitEvent: (event: AgentEvent) => void,
     private readonly emitError: (message: string) => void,
+    private readonly executeBrowser?: (tool: string, params: BrowserParams, signal: AbortSignal) => Promise<BrowserToolResult>,
+    private readonly resetBrowser?: () => void,
   ) {}
 
   isRunning(): boolean {
@@ -89,12 +93,14 @@ export class AgentHost {
   async start(options: AgentStartOptions & {
     cwd: string;
     visionExtension?: string;
+    browserExtension?: string;
     visionConfig?: string;
     visionUploads?: string;
     providerExtension?: string;
     desktopProvider?: { config: unknown; apiKey: string };
   }): Promise<AgentSnapshot> {
     await this.stop();
+    this.resetBrowser?.();
     const args = [
       getTetherRpcEntryPath(),
       "--mode",
@@ -117,6 +123,7 @@ export class AgentHost {
     if (options.sessionPath) args.push("--session", options.sessionPath);
     if (options.visionExtension) args.push("--extension", options.visionExtension);
     if (options.providerExtension) args.push("--extension", options.providerExtension);
+    if (options.browserExtension) args.push("--extension", options.browserExtension);
 
     this.lineBuffer = Buffer.alloc(0);
     this.stderr = "";
@@ -144,9 +151,24 @@ export class AgentHost {
           : {}),
       },
       detached: process.platform !== "win32",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+      stdio: ["pipe", "pipe", "pipe", "ipc"],
+    }) as ChildProcessWithoutNullStreams;
     this.child = child;
+    child.on("message", (message: unknown) => {
+      if (this.child !== child || !message || typeof message !== "object") return;
+      const request = message as BrowserRequest | { type: "tether:browser:cancel"; id: string };
+      if (typeof request.id !== "string") return;
+      if (request.type === "tether:browser:cancel") { this.browserRequests.get(request.id)?.abort(); return; }
+      if (request.type !== "tether:browser:request" || !this.executeBrowser || this.browserRequests.has(request.id)) return;
+      const controller = new AbortController();
+      this.browserRequests.set(request.id, controller);
+      const reply = (payload: object) => {
+        if (this.child === child && child.connected) child.send({ type: "tether:browser:response", id: request.id, ...payload }, () => {});
+      };
+      Promise.resolve().then(() => this.executeBrowser!(request.tool, request.params, controller.signal))
+        .then((result) => reply({ result }), (error) => reply({ error: error instanceof Error ? error.message : String(error) }))
+        .finally(() => this.browserRequests.delete(request.id));
+    });
     child.stdout.on("data", (chunk: Buffer) => this.handleChunk(chunk));
     child.stderr.on("data", (chunk: Buffer) => {
       this.stderr = `${this.stderr}${chunk.toString()}`.slice(-AgentHost.STDERR_CAP);
@@ -175,6 +197,7 @@ export class AgentHost {
   }
 
   async stop(): Promise<void> {
+    this.cancelBrowserRequests();
     const child = this.child;
     if (!child) return;
     this.child = undefined;
@@ -202,6 +225,8 @@ export class AgentHost {
   }
 
   async request<T>(type: string, data: Record<string, unknown> = {}): Promise<T> {
+    if (type === "abort" || type === "new_session") this.cancelBrowserRequests();
+    if (type === "new_session") this.resetBrowser?.();
     const child = this.child;
     if (!child || child.stdin.destroyed) throw new Error("No workspace session is active");
     const id = `desktop_${++this.requestId}`;
@@ -261,7 +286,13 @@ export class AgentHost {
     if (typeof data.type === "string") this.emitEvent(data as AgentEvent);
   }
 
+  private cancelBrowserRequests(): void {
+    for (const controller of this.browserRequests.values()) controller.abort();
+    this.browserRequests.clear();
+  }
+
   private handleExit(error: Error): void {
+    this.cancelBrowserRequests();
     const detail = this.stderr.trim();
     const message = detail ? `${error.message}\n${detail}` : error.message;
     for (const pending of this.pending.values()) {

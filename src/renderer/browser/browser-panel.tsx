@@ -63,8 +63,8 @@ const createWebviewTab = (url: string): BrowserWebviewTab => ({
  * browser:open-tab 通知在此新建标签页；窗口级弹出（OAuth 等）由主进程
  * 创建真实窗口。
  *
- * 与 Snow 的差异：MCP 命令桥、网页快照拖入聊天与元素选择器随 Layer D/E
- * 回归； homepage 存 localStorage 而非设置数据库。
+ * Agent 操作由主进程 CDP 控制器执行；本面板登记 guest 并处理标签展示。
+ * homepage 存 localStorage 而非设置数据库。
  */
 export const BrowserPanel = ({
   instanceId,
@@ -177,6 +177,7 @@ export const BrowserPanel = ({
       const handleDomReady = (): void => {
         try {
           webviewGuestIdToTabIdRef.current.set(webview.getWebContentsId(), tabId);
+          void window.harness.browser.registerTab({ instanceId, tabId, webContentsId: webview.getWebContentsId() }).catch(console.error);
         } catch {
           // guest 尚未就绪，忽略。
         }
@@ -236,7 +237,7 @@ export const BrowserPanel = ({
       webview.addEventListener("did-fail-load", handleDidFailLoad as EventListener);
       webview.addEventListener("found-in-page", handleFoundInPage);
     },
-    [updateWebviewTab, applyMutedState],
+    [updateWebviewTab, applyMutedState, instanceId],
   );
 
   /** 所有 webview 共用的稳定 ref callback（重渲染不重绑监听器）。 */
@@ -368,6 +369,36 @@ export const BrowserPanel = ({
       webview?.focus();
     }
   };
+
+  const [pendingPresentation, setPendingPresentation] = useState<{ requestId: string; tabId: string } | null>(null);
+  const agentPresentationRef = useRef({ select: handleActivateWebviewTab, close: handleCloseWebviewTab });
+  agentPresentationRef.current = { select: handleActivateWebviewTab, close: handleCloseWebviewTab };
+  useEffect(() => window.harness.browser.onAgentPresentation((event) => {
+    if (event.instanceId !== instanceId || event.action === "open") return;
+    if (event.action === "select") {
+      agentPresentationRef.current.select(event.tabId);
+      if (event.requestId) setPendingPresentation({ requestId: event.requestId, tabId: event.tabId });
+    }
+    else agentPresentationRef.current.close(event.tabId);
+  }), [instanceId]);
+
+  // Acknowledge only after React has selected the guest and the host layout is visible.
+  useEffect(() => {
+    if (!pendingPresentation || pendingPresentation.tabId !== activeWebviewTabId || !isActive) return;
+    let frame = 0;
+    const deadline = Date.now() + 5000;
+    const check = () => {
+      if (Date.now() > deadline) { setPendingPresentation(null); return; }
+      const guest = webviewElementsRef.current.get(pendingPresentation.tabId);
+      const bounds = guest?.getBoundingClientRect();
+      if (bounds && bounds.width > 0 && bounds.height > 0) {
+        window.harness.browser.presentationReady(pendingPresentation.requestId);
+        setPendingPresentation(null);
+      } else frame = requestAnimationFrame(check);
+    };
+    frame = requestAnimationFrame(check);
+    return () => cancelAnimationFrame(frame);
+  }, [pendingPresentation, activeWebviewTabId, isActive]);
 
   const handleNavigate = (rawInput?: string): void => {
     const currentTab = webviewTabsRef.current.find((tab) => tab.id === activeWebviewTabIdRef.current);

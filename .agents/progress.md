@@ -111,3 +111,15 @@
 - Layer D/E 未开始（计划与会话工作台 plan/snow-browser-port.md 同步）。
 - 白屏修复（commit daf3009）：沙箱 preload 无 __dirname，guest preload 路径改由主进程 `browser:webview-preload-path` 提供（file: URL），BrowserPanel 拿到路径后再挂 webview；同时修正独立窗口 preload/icon/page 的 bundle 相对路径（tsup 单入口把 browser/* 并入 dist-electron/main，基准是该目录而非 browser/ 子目录）。ELECTRON_ENABLE_LOGGING 复现验证：preload 正常、React 正常挂载。
 - 面板标签交互重构（对齐参考设计）：空态为面板内嵌「打开标签页」选择器（PanelPicker）；已有标签时「+」弹出锚定下拉菜单（panel-add-menu），单实例类型（审查）已打开即从菜单隐藏；审查单实例、浏览器可多开（每标签独立 instanceId/webview/独立窗口迁移）；独立窗口关闭广播携带 instanceId。全屏遮罩式 TabPicker 与 panel-empty 空态移除。
+
+
+## 2026-09-08：补齐 Agent 浏览器操作链（10:49，Asia/Shanghai）
+
+- 根因：已有 webview UI，但没有浏览器 Pi extension 与主进程 Agent 命令通道。参考 Proma 的工具/提示词/超时与引用机制，以及 Snow 的 AX 快照、原生输入与 guest 路由，补齐 Layer E 基础操作。
+- 新增 `src/extensions/browser.ts`、`src/shared/browser-tools.ts`、`src/main/browser/{automation,accessibility,page-operations}.ts`。17 个浏览器工具经 AgentHost 私有 Node IPC 驱动已登记 webview，无需外部 MCP 或 Playwright；现有 Runtime plan/ask/auto/full 权限 hook 继续生效。
+- 功能覆盖导航/搜索、Observe/Find/ref、点击/悬浮、完整字段填写、键盘、等待、正文分页、滚动、原生下拉、开放 Shadow DOM 固定 CSS 操作、截图和标签管理。Agent 工作标签与用户查看标签独立；浏览器面板/侧栏切换保留 guest；操作前等待 React 展示 ACK。
+- 可靠性：导航和新快照作废旧 ref；跨标签 ref 拒绝；观察期间导航拒绝；新 loader 就绪后返回导航结果；超时/停止取消排队动作；悬浮后重新验证原节点及点击点；大元素使用可见命中点；取消后短时释放可能按住的鼠标/键盘。独立审查发现的 3 项边界已修复。
+- UI 展示中文浏览器操作名称，修复 localhost/about:blank 解析；README 双语增加使用方式与权限说明。新增 `pnpm test:browser` 隔离 Electron smoke 命令。
+- 验证：`pnpm typecheck`、完整构建、真实 Electron BrowserPanel 本地页面 smoke、`git diff --check` 通过；真实 Agent RPC + 本地模型 fixture 验证工具可见性及 IPC 回环。新增 25 项浏览器相关单测全部通过；全量 278/279，唯一失败仍为 `conversation.test.ts:308` 既有识图标题断言。
+- 生效方式：重启 Tether 并重新启动 Agent 会话。未操作真实账号、未请求云端模型，未重启用户当前进程，未提交/发布。保留同期 UI 菜单/样式改动；AGENTS.md 未修改。详细证据在会话工作台 `3d29745f-5635-4f1b-96ca-3a1165dc7f29/verification.md`。
+- Layer D 网络/代理、Layer C 管理 UI/归档，以及文件上传/任意 JS 等未在本次实现；跨窗口迁移会重建 guest，需重新列出标签。

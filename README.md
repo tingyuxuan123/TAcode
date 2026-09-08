@@ -84,6 +84,16 @@ For pasted images:
 - Vision can use official DeepSeek Vision, or a compatible endpoint such as GLM-4V.
 - MinerU performs OCR by sending the image to the MinerU service; it is not offline local OCR.
 
+## Agent-controlled browser
+
+Desktop sessions automatically load `browser_*` tools for the visible embedded browser. Ask the agent to open `localhost:5177`, fill a search field, submit it, and verify the results. No additional browser MCP or Playwright installation is required.
+
+The tools provide accessibility snapshots with element references, semantic lookup, native clicks, full-text field filling, keyboard input, condition waits, paginated text extraction, scrolling, native selects, hover, fixed CSS operations, screenshots, and tab management. Screenshots require an image-capable model. The agent's working tab is independent of the tab the user is viewing; switching or collapsing the side panel preserves browser state. Detached browser windows are also addressable; moving a browser between windows recreates its guests, so the agent must list tabs again.
+
+Existing Runtime permissions still apply: Ask mode requests approval, and Plan mode currently blocks browser tools. Final actions such as sending, publishing, or purchasing require user authorization. Navigation accepts HTTP(S), local development servers, and `about:blank`; serve local files through a development server.
+
+After changing the desktop host or extension, restart Tether and start/restart the Agent session. Run `pnpm test:browser` for an isolated Electron smoke test against local fixture pages, without accessing real accounts or a cloud model.
+
 ## Permission modes
 
 | Mode | Behaviour |

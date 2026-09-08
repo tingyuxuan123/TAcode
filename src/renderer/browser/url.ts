@@ -13,8 +13,10 @@ export const normalizeBrowserHomepage = (value: unknown): string => {
 export const normalizeUrl = (input: string, homepage: string): string => {
   const trimmed = input.trim();
   if (!trimmed) return homepage || DEFAULT_BROWSER_HOMEPAGE;
-  if (/^(https?|file):\/\//i.test(trimmed)) return trimmed;
-  if (/^\S+\.\S+/.test(trimmed)) return `https://${trimmed}`;
+  if (trimmed === "about:blank") return trimmed;
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(trimmed)) return trimmed;
+  if (/^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(trimmed)) return `http://${trimmed}`;
+  if (/^[^\s/?#]+\.[^\s/?#]+(?::\d+)?(?:[/?#]\S*)?$/.test(trimmed)) return `https://${trimmed}`;
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
 };
 

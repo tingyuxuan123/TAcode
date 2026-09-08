@@ -1,5 +1,6 @@
 import type { AgentEvent, PermissionMode } from "../shared/types";
 import { sameUserSkillTurn } from "../shared/skills";
+import { BROWSER_TOOLS } from "../shared/browser-tools";
 import { parseWebSearchCard } from "../shared/integrations";
 import { DEFAULT_LOCALE, t, type Locale, type MessageKey } from "../shared/i18n";
 import { isVisionHandoff, mimeFromImagePath, visibleUserText, visionHandoffPaths, visionToolTitle, visionUploadUrl } from "../shared/vision-api";
@@ -638,6 +639,8 @@ function vagueToolTitle(title: string): boolean {
 
 function toolTitle(name: string, args: unknown): string {
   const record = isRecord(args) ? args : {};
+  const browser = BROWSER_TOOLS.find((tool) => tool.name === name);
+  if (browser) return activeLocale === "zh" ? browser.label : browser.name.replace(/^browser_/, "Browser ").replaceAll("_", " ");
   const command = stringField(record, "cmd") || stringField(record, "command");
   const target = patchTarget(stringField(record, "input"));
   const file = stringField(record, "path") || stringField(record, "file_path") || target?.path || "";
@@ -1337,6 +1340,10 @@ export function traceRows(work: WorkItem[], tools: ToolActivity[], fallback = ""
 export function toolRow(tool: ToolActivity, index = 0): TraceRow {
   const base = { id: `row-${index}-${tool.id}`, status: tool.status, tool, mono: true };
   const name = tool.name.toLowerCase();
+  if (name.startsWith("browser_")) {
+    const args = isRecord(tool.args) ? tool.args : {};
+    return { ...base, kind: "look", label: tool.title, chip: stringField(args, "url") || stringField(args, "name") || stringField(args, "selector") || stringField(args, "ref"), mono: false };
+  }
   if (name === "delegate") {
     const progress = delegateProgress(tool);
     const active = progress.tasks.find((item) => item.status === "running")

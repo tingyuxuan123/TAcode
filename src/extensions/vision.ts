@@ -40,7 +40,7 @@ function isVisualCapture(command: string) {
     || (/chrome|chromium/i.test(command) && /headless/i.test(command));
 }
 
-const NO_CAPTURE = "- 不要用 Chrome、headless 或截图做视觉验收，除非用户这一轮明确要求截图。改 HTML/CSS 写完即可。";
+const NO_CAPTURE = "- 不要用 Chrome、headless 或截图做视觉验收，除非用户这一轮明确要求截图。改 HTML/CSS 写完即可。用户要求浏览网页时，可使用内置 browser_* 工具；网页操作确需视觉信息时允许 browser_screenshot。";
 const LANG_ZH = "- 用户这一轮用中文。思考、计划、工具之间的说明、自检旁白和最终回复全部用简体中文，不要夹英文自言自语。代码、路径、命令、标识符保持原文。";
 const LANG_EN = "- The user is writing in English this turn. Think, plan, narrate between tools, and reply in English. Identifiers, paths, and commands stay as written.";
 
