@@ -24,7 +24,7 @@ const detachedWindows = new Map<string, BrowserWindow>();
 const appIconPath = (): string =>
   app.isPackaged
     ? path.join(process.resourcesPath, "icon.png")
-    : path.join(moduleDirectory, "../../../build/icon.png");
+    : path.join(moduleDirectory, "../../build/icon.png");
 
 const getWindowBackgroundColor = (): string =>
   nativeTheme.shouldUseDarkColors ? "#0a0a0a" : "#ffffff";
@@ -38,7 +38,7 @@ const buildPageUrl = (
   if (tabs && tabs.length > 0) query.set("tabs", JSON.stringify(tabs));
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) return `${devServerUrl}/browser-window.html?${query.toString()}`;
-  return `${pathToFileURL(path.join(moduleDirectory, "../../../dist/browser-window.html")).toString()}?${query.toString()}`;
+  return `${pathToFileURL(path.join(moduleDirectory, "../../dist/browser-window.html")).toString()}?${query.toString()}`;
 };
 
 /**
@@ -69,7 +69,7 @@ export const createDetachedBrowserWindow = (
     backgroundColor: getWindowBackgroundColor(),
     show: false,
     webPreferences: {
-      preload: path.join(moduleDirectory, "../../preload/index.cjs"),
+      preload: path.join(moduleDirectory, "../preload/index.cjs"),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,

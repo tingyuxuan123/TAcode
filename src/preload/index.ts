@@ -84,8 +84,9 @@ const api: DesktopApi = {
     testConnection: (input) => ipcRenderer.invoke("providers:test-connection", input),
   },
   browser: {
-    // Bundled by tsup next to this file: dist-electron/preload/webview-browser.cjs.
-    webviewPreloadPath: `${__dirname}/webview-browser.cjs`,
+    // The guest preload path is resolved by the main process — sandboxed
+    // preloads have no __dirname.
+    webviewPreloadPath: () => ipcRenderer.invoke("browser:webview-preload-path"),
     onOpenTab: (listener) =>
       subscribe("browser:open-tab", listener),
     listDownloads: () => ipcRenderer.invoke("browser:downloads-list"),

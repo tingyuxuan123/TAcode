@@ -105,3 +105,7 @@
 - i18n：`browser.*` 中英文案并入 `src/shared/i18n.ts`；PanelTabs 新增 flush 形态。
 - 验证：`pnpm typecheck` 通过；`pnpm test` 254 例中 253 过（`conversation.test.ts:308` 识图标题为存量失败，干净树复现，与移植无关）；`pnpm build` 通过，产物含 webview-browser.cjs 与 browser-window.html。
 - Layer C/D/E 未开始：C 需用 safeStorage+node:crypto 重写密码保险库与登录态归档（导入功能 Rust-only，计划按平台降级）；D 含网络记录/路由 mock/CDP 白名单/右键菜单/代理；E 为 Pi extension + 本地桥 + 渲染端执行器（browserMcpOperations 移植）。计划文档在会话工作台 plan/snow-browser-port.md。
+
+- Layer C 核心完成（commit 210043f）：`src/main/browser/passwords.ts` 密码保险库（safeStorage 包裹 AES-256 主密钥 + AES-256-GCM 记录库，~/.tether/browser-passwords，临时文件 + rename 原子写，safeStorage 不可用拒绝落盘）；guest preload 扩展自动填充/提交捕获（`browser-passwords:find/save` 带 webview sender + senderFrame origin 双重校验）；管理 IPC list/get/save/delete/delete-batch 仅限窗口渲染进程。`tetherPasswordBridge` 暴露给页面脚本。
+- Layer C 余项：密码管理设置 UI、登录态归档（依赖 CDP，随 D 层）、浏览器数据导入（Snow 为 Rust/DPAPI/Keychain，TS 仅 macOS Chromium 现实可行，需产品决策降级边界）。
+- Layer D/E 未开始（计划与会话工作台 plan/snow-browser-port.md 同步）。

@@ -238,8 +238,8 @@ export interface DesktopApi {
   };
   /** Built-in browser (webview) panel: navigation events, downloads, data and window management. */
   browser: {
-    /** Absolute path of the guest preload used by <webview preload>. */
-    readonly webviewPreloadPath: string;
+    /** Absolute path of the guest preload used by <webview preload> (main knows the bundled path; sandboxed preloads lack __dirname). */
+    webviewPreloadPath(): Promise<string>;
     /** A link/open request from a guest page should become a new in-panel tab. */
     onOpenTab(listener: (event: BrowserOpenTabEvent) => void): () => void;
     listDownloads(): Promise<BrowserDownloadItem[]>;

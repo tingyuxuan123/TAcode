@@ -135,7 +135,16 @@ export const BrowserPanel = ({
   const [findText, setFindText] = useState("");
   const [findResult, setFindResult] = useState<BrowserFindResult | null>(null);
   const [downloads, setDownloads] = useState<BrowserDownloadItem[]>([]);
+  // guest preload 路径由主进程提供（沙箱 preload 无 __dirname），就绪后才挂 webview。
+  const [webviewPreload, setWebviewPreload] = useState("");
   const { isCapturing, feedback, captureScreenshot } = useWebviewScreenshot(webviewRef);
+
+  useEffect(() => {
+    window.harness.browser
+      .webviewPreloadPath()
+      .then(setWebviewPreload)
+      .catch(() => {});
+  }, []);
 
   const activeTab = webviewTabs.find((tab) => tab.id === activeWebviewTabId) ?? webviewTabs[0];
 
@@ -573,17 +582,18 @@ export const BrowserPanel = ({
         </button>
       </div>
       <div className="browser-content">
-        {webviewTabs.map((tab) => (
-          <webview
-            key={tab.id}
-            data-tab-id={tab.id}
-            ref={handleWebviewRef}
-            src={tab.src}
-            className={`browser-webview ${tab.id === activeWebviewTabId ? "" : "is-hidden"}`}
-            preload={window.harness.browser.webviewPreloadPath}
-            webpreferences="sandbox=no,contextIsolation=yes,nodeIntegration=no"
-          />
-        ))}
+        {webviewPreload &&
+          webviewTabs.map((tab) => (
+            <webview
+              key={tab.id}
+              data-tab-id={tab.id}
+              ref={handleWebviewRef}
+              src={tab.src}
+              className={`browser-webview ${tab.id === activeWebviewTabId ? "" : "is-hidden"}`}
+              preload={webviewPreload}
+              webpreferences="sandbox=no,contextIsolation=yes,nodeIntegration=no"
+            />
+          ))}
         {findVisible && (
           <BrowserFindBar
             value={findText}

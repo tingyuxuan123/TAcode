@@ -7,6 +7,8 @@ import {
   webContents,
   type WebContents,
 } from "electron";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import path from "node:path";
 import { installWebviewDownloadHandler } from "./downloads";
 import {
   cancelDownload,
@@ -39,6 +41,17 @@ const numberArg = (value: unknown, name: string): number => {
   }
   return value;
 };
+
+// 本模块位于 dist-electron/main/browser/，guest preload 与主 preload 同目录
+// 打包在 dist-electron/preload/ 下。
+// 本模块被打包进 dist-electron/main/index.mjs（单入口 bundle），相对基准是
+// dist-electron/main：preload 在 dist-electron/preload/，渲染产物在 dist/。
+const WEBVIEW_PRELOAD_PATH = pathToFileURL(
+  path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../preload/webview-browser.cjs",
+  ),
+).toString();
 
 /** 仅允许操作 webview guest 的 webContents，避免任意进程句柄被滥用。 */
 const getBrowserWebContents = (webContentsId: number): WebContents => {
@@ -89,6 +102,8 @@ export const registerBrowserIpc = (
 ): void => {
   installWebviewDownloadHandler();
   initBrowserPopupHandler();
+
+  ipcMain.handle("browser:webview-preload-path", () => WEBVIEW_PRELOAD_PATH);
 
   ipcMain.handle("browser:clear-cache", async () => {
     await session.defaultSession.clearCache();
