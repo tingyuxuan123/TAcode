@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { BrowserAutomation } from "../src/main/browser/automation";
+import { verifyPanelResize } from "./panel-resize-smoke";
 import type { BrowserParams, BrowserPresentation, BrowserRegistration, BrowserToolResult } from "../src/shared/browser-tools";
 
 // Runs real BrowserPanel + Chromium guests against an ephemeral local fixture, never a user profile.
@@ -70,6 +71,8 @@ try {
   await new Promise<void>((resolve) => main.webContents.once("did-finish-load", resolve));
   // Wait for the actual React panel's first guest registration.
   while ((await run("browser_list_tabs")).tabs.length === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+  lastTool = "panel resize across native webview";
+  await verifyPanelResize(main);
   const first = (await run("browser_list_tabs")).tabs[0].tabId;
   await run("browser_select_tab", { tabId: first });
   const observed = await run("browser_navigate", { url });

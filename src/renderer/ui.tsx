@@ -20,6 +20,7 @@ import { PROJECT_SKILL_ROOTS, USER_SKILL_ROOTS, skillSlashCommand } from "../sha
 import { useI18n } from "./i18n";
 import type { MessageKey } from "../shared/i18n";
 import { ExecutionFlow } from "./execution-flow";
+import { startPanelResize } from "./panel-resize";
 import { buildTurnPresentation, toolRow } from "./conversation";
 import logo from "./logo.svg";
 
@@ -242,30 +243,26 @@ export function Chat({
   const widthRef = useRef(inspectWidth);
   widthRef.current = inspectWidth;
 
+  const finishResizeRef = useRef<(() => void) | null>(null);
+  const hasInspect = Boolean(inspect);
+  useEffect(() => {
+    if (!drawer || !hasInspect) finishResizeRef.current?.();
+    return () => { finishResizeRef.current?.(); };
+  }, [drawer, hasInspect]);
+
   const startInspectResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    event.preventDefault();
+    if (event.button !== 0 || event.isPrimary === false) return;
+    finishResizeRef.current?.();
     const startX = event.clientX;
     const startWidth = widthRef.current;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-
-    const onMove = (move: PointerEvent) => {
-      const next = clampInspectWidth(startWidth + startX - move.clientX);
+    finishResizeRef.current = startPanelResize(event.currentTarget, event, (clientX) => {
+      const next = clampInspectWidth(startWidth + startX - clientX);
       widthRef.current = next;
       setInspectWidth(next);
-    };
-    const onUp = () => {
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
+    }, () => {
+      finishResizeRef.current = null;
       writeInspectWidth(widthRef.current);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    });
   };
 
   return (

@@ -1404,6 +1404,17 @@ textarea::selection,
   z-index: 2;
   cursor: col-resize;
   touch-action: none;
+  -webkit-app-region: no-drag;
+}
+/* Keep release events in the host while a divider crosses embedded content. */
+.is-resizing-panel,
+.is-resizing-panel * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+.is-resizing-panel webview,
+.is-resizing-panel iframe {
+  pointer-events: none !important;
 }
 .inspect {
   width: 100%;
