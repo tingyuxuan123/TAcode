@@ -1,6 +1,6 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { Download, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PREVIEW_HOST, PREVIEW_SCHEME, type AgentSessionStats, type ExtensionUiRequest, type PermissionMode } from "../shared/types";
@@ -99,17 +99,29 @@ export function UserTurn({ text, images = [], anchor }: { text: string; images?:
   const skill = skillUserDisplay(text);
   const shown = skill ? skill.command : visibleUserText(text);
   const [view, setView] = useState<string>();
+  const single = images.length === 1;
   return (
     <div className="user-turn" id={anchor}>
       <article className="user">
         {images.length > 0 && (
-          <div className="user-images">
+          <div className={single ? "user-images single" : "user-images"}>
             {images.map((image, index) => {
               const src = image.src ?? `data:${image.mimeType};base64,${image.data}`;
               return (
-                <button key={`${image.mimeType}-${index}`} type="button" className="user-image" onClick={() => setView(src)}>
-                  <img src={src} alt="" />
-                </button>
+                <div key={`${image.mimeType}-${index}`} className="user-image-wrap">
+                  <button type="button" className={single ? "user-image single" : "user-image"} onClick={() => setView(src)}>
+                    <img src={src} alt="" />
+                  </button>
+                  <a
+                    className="user-image-save"
+                    href={src}
+                    download={`image-${index + 1}`}
+                    aria-label="保存图片"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <Download size={14} />
+                  </a>
+                </div>
               );
             })}
           </div>
@@ -1918,10 +1930,6 @@ function serializePrompt(root: HTMLElement): string {
   return out;
 }
 
-function collectPromptImages(root: HTMLElement): string[] {
-  return [...root.querySelectorAll<HTMLElement>("[data-image]")].map((node) => node.dataset.image!).filter(Boolean);
-}
-
 function caretOffset(root: HTMLElement): number {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || !sel.anchorNode || !root.contains(sel.anchorNode)) return serializePrompt(root).length;
@@ -1996,57 +2004,6 @@ function placeCaret(root: HTMLElement, offset: number): void {
   sel.addRange(range);
 }
 
-function promptSvg(path: string, size: number): SVGSVGElement {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("width", String(size));
-  svg.setAttribute("height", String(size));
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.75");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("aria-hidden", "true");
-  const item = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  item.setAttribute("d", path);
-  svg.append(item);
-  return svg;
-}
-
-function makeUploadChip(item: { id: string; name: string; dataUri: string }): HTMLSpanElement {
-  const chip = document.createElement("span");
-  chip.className = "prompt-upload";
-  chip.contentEditable = "false";
-  chip.dataset.image = item.dataUri;
-  chip.dataset.uploadId = item.id;
-  chip.tabIndex = -1;
-  chip.setAttribute("role", "button");
-  const img = document.createElement("img");
-  img.src = item.dataUri;
-  img.alt = "";
-  chip.append(img);
-  const close = document.createElement("span");
-  close.dataset.remove = "1";
-  close.append(promptSvg("M18 6L6 18M6 6l12 12", 11));
-  chip.append(close);
-  return chip;
-}
-
-function insertNodeAtCaret(root: HTMLElement, node: Node): void {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0 || !root.contains(sel.anchorNode)) {
-    root.append(node);
-    return;
-  }
-  const range = sel.getRangeAt(0);
-  range.deleteContents();
-  range.insertNode(node);
-  range.setStartAfter(node);
-  range.collapse(true);
-  sel.removeAllRanges();
-  sel.addRange(range);
-}
-
 function droppedAbsPath(file: File): string {
   const path = (file as File & { path?: string }).path;
   return typeof path === "string" ? path : "";
@@ -2068,7 +2025,7 @@ function flattenPromptBlocks(root: HTMLElement): void {
 }
 
 function isPromptEmpty(root: HTMLElement): boolean {
-  return !serializePrompt(root).trim() && collectPromptImages(root).length === 0;
+  return !serializePrompt(root).trim();
 }
 
 export function PromptBar({
@@ -2131,6 +2088,8 @@ export function PromptBar({
   const [picked, setPicked] = useState(0);
   const [dropOver, setDropOver] = useState(false);
   const [blank, setBlank] = useState(true);
+  const [attachments, setAttachments] = useState<Array<{ id: string; name: string; dataUri: string }>>([]);
+  const [attachmentView, setAttachmentView] = useState<string>();
   const skipHydrate = useRef(false);
   const area = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -2166,7 +2125,7 @@ export function PromptBar({
     flattenPromptBlocks(root);
     if (isPromptEmpty(root) && !root.querySelector("[data-url], [data-file], [data-image]")) root.replaceChildren();
     const next = serializePrompt(root);
-    setBlank(isPromptEmpty(root));
+    setBlank(isPromptEmpty(root) && attachments.length === 0);
     setCursor(caretOffset(root));
     skipHydrate.current = true;
     if (next !== value) setValue(next);
@@ -2213,12 +2172,10 @@ export function PromptBar({
     }
     if (serializePrompt(root) === value) return;
     hydratePrompt(root, value);
-    setBlank(isPromptEmpty(root));
+    setBlank(isPromptEmpty(root) && attachments.length === 0);
   }, [value]);
 
   const addUploads = async (list: FileList | File[]) => {
-    const root = area.current;
-    if (!root) return;
     const next: Array<{ id: string; name: string; dataUri: string }> = [];
     for (const file of [...list]) {
       if (!file.type.startsWith("image/")) continue;
@@ -2229,12 +2186,13 @@ export function PromptBar({
       });
     }
     if (next.length === 0) return;
-    const room = MAX_UPLOAD_IMAGES - collectPromptImages(root).length;
-    root.focus();
-    for (const item of next.slice(0, Math.max(0, room))) {
-      insertNodeAtCaret(root, makeUploadChip(item));
-    }
-    emit();
+    const room = MAX_UPLOAD_IMAGES - attachments.length;
+    setAttachments((prev) => [...prev, ...next].slice(0, MAX_UPLOAD_IMAGES));
+    if (room > 0) area.current?.focus();
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
   const insertFile = (file: string, confirm = false) => {
@@ -2284,11 +2242,12 @@ export function PromptBar({
     const root = area.current;
     if (!root || disabled) return;
     const text = serializePrompt(root).trim();
-    const refs = collectPromptImages(root);
+    const refs = attachments.map((item) => item.dataUri);
     if (!text && refs.length === 0) return;
     root.replaceChildren();
     setBlank(true);
     setValue("");
+    setAttachments([]);
     onSubmit(text, refs.length ? refs : undefined);
   };
 
@@ -2458,6 +2417,30 @@ export function PromptBar({
             sendNow();
           }}
         >
+        {attachments.length > 0 && (
+          <div className="prompt-attachments">
+            {attachments.map((item) => (
+              <div key={item.id} className="prompt-attachment">
+                <button
+                  type="button"
+                  className="prompt-attachment-img"
+                  aria-label={item.name}
+                  onClick={() => setAttachmentView(item.dataUri)}
+                >
+                  <img src={item.dataUri} alt={item.name} />
+                </button>
+                <button
+                  type="button"
+                  className="prompt-attachment-remove"
+                  aria-label={t("common.remove")}
+                  onClick={() => removeAttachment(item.id)}
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div
           ref={area}
           className={blank ? "prompt-input empty" : "prompt-input"}
@@ -2477,14 +2460,6 @@ export function PromptBar({
           }}
           onInput={emit}
           onKeyUp={() => area.current && setCursor(caretOffset(area.current))}
-          onClick={(event) => {
-            const remove = (event.target as HTMLElement).closest("[data-remove]");
-            if (!remove) return;
-            event.preventDefault();
-            remove.closest(".prompt-upload")?.remove();
-            emit();
-            area.current?.focus();
-          }}
           onKeyDown={onKey}
           onPaste={(event) => {
             const images = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
@@ -2556,7 +2531,7 @@ export function PromptBar({
             className="prompt-attach"
             aria-label={t("composer.uploadImage")}
             title={t("composer.uploadImage")}
-            disabled={(area.current ? collectPromptImages(area.current).length : 0) >= MAX_UPLOAD_IMAGES}
+            disabled={attachments.length >= MAX_UPLOAD_IMAGES}
             onClick={() => picker.current?.click()}
           >
             <Icon path="M12 5v14M5 12h14" size={15} />
@@ -2581,6 +2556,12 @@ export function PromptBar({
           )}
         </PromptToolbar>
       </form>
+      {attachmentView && createPortal(
+        <div className="modal" onClick={() => setAttachmentView(undefined)} onKeyDown={(event) => { if (event.key === "Escape") setAttachmentView(undefined); }}>
+          <img className="lightbox" src={attachmentView} alt="" />
+        </div>,
+        document.body,
+      )}
       </div>
     </div>
   );

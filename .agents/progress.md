@@ -230,3 +230,18 @@
 - 根因：use-follow-scroll.ts 的 intent（wheel/touchstart/pointerdown/方向键）无条件判为「离开底部」，已贴底时继续向下滚或触控板回弹也触发，箭头误显示。
 - 修复：intent 先算当前距底距离，≤16px（与滞回恢复阈值一致）直接返回，不打断跟随；真正离开底部后才取消跟随并显示箭头。
 - pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
+
+## 2026-09-08：输入框图片改为卡片式附件预览（参考 Proma-main AttachmentPreviewItem）（19:59，Asia/Shanghai）
+
+- 之前图片贴在 contentEditable 文本流里（.prompt-upload 行内 28px chip），改为独立状态数组 attachments + 输入区上方卡片行（68px 缩略图、圆角 10px、hover 右上角黑色半透明圆形 ×、点击开 lightbox）。
+- ui.tsx：新增 attachments 状态与 removeAttachment/addUploads（写 state 取代 DOM chip）；sendNow 用 attachments 生成 dataUri 列表；blank 与 attach 按钮 disabled 改用 attachments.length；移除 makeUploadChip/insertNodeAtCaret/collectPromptImages/promptSvg 死代码与 contentEditable 的 chip 删除 onClick；新增 lightbox portal（复用 .modal/.lightbox）。
+- styles.css：.prompt-upload 系规则替换为 .prompt-attachments/.prompt-attachment{,-img,-remove}；删掉 .prompt-input .prompt-upload 两条。
+- 发送后消息气泡里的图片展示（UserTurn 缩略图）暂保留原样，后续再按 Proma MessageAttachments 对齐。
+- pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
+
+## 2026-09-08：发送后用户消息图片展示对齐 Proma MessageAttachments（20:04，Asia/Shanghai）
+
+- ui.tsx UserTurn：图片区分单/多图——单图较大等比缩放（≤500px，object-contain），多图 280px 方块网格（object-cover），均圆角 12px 点击看大图；每张 hover 底部右下角黑色半透明「保存」悬浮按钮（Download 图标，data-URI 直接下载）。新增 Download 导入。
+- styles.css：.user-images 改为 flex-wrap gap 8px；新增 .user-image-wrap/{single}/.user-image-save；单图 object-contain、多图 object-cover 规则替换原统一 140px。
+- 注：Proma 的保存走 electronAPI.saveImageAs(localPath)，Tether 无此桥接，改用锚点下载 data-URI；无左右翻页（图片数据即 data-URI，可后续按需加）。
+- pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。

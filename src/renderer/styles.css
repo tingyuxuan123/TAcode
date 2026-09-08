@@ -1639,21 +1639,58 @@ textarea::selection,
 .user-images {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin: 0 0 8px;
 }
-.user-image {
-  padding: 0;
-  border-radius: 10px;
+.user-image-wrap {
+  position: relative;
+  display: inline-block;
   line-height: 0;
+}
+.user-image {
+  display: block;
+  padding: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--inset);
   cursor: zoom-in;
 }
 .user-images img {
-  max-width: 140px;
-  max-height: 140px;
-  border-radius: 10px;
-  object-fit: cover;
   display: block;
+  border-radius: 12px;
+  object-fit: cover;
+}
+/* 单图：较大、等比缩放（对齐 Proma 单图 max 500px） */
+.user-images.single img {
+  max-width: min(500px, 100%);
+  max-height: min(500px, 48vh);
+  object-fit: contain;
+}
+/* 多图：等大小方块网格（对齐 Proma 280px） */
+.user-images:not(.single) img {
+  width: 280px;
+  max-height: 280px;
+}
+.user-image-save {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #000 50%, transparent);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 160ms ease, background 160ms ease;
+}
+.user-image-wrap:hover .user-image-save,
+.user-image-save:focus-visible {
+  opacity: 1;
+}
+.user-image-save:hover {
+  background: color-mix(in srgb, #000 70%, transparent);
 }
 .lightbox {
   max-width: min(92vw, 1100px);
@@ -3760,29 +3797,61 @@ textarea::selection,
 .prompt-tag.link {
   background: var(--accent-tint);
 }
-.prompt-upload {
+.prompt-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 6px 0;
+}
+.prompt-attachment {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: 68px;
+  height: 68px;
   padding: 0;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--inset);
+  border: 1px solid var(--line);
 }
-.prompt-upload img {
+.prompt-attachment-img {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  line-height: 0;
+}
+.prompt-attachment-img img {
   width: 100%;
   height: 100%;
   display: block;
   object-fit: cover;
+  border-radius: 9px;
 }
-.prompt-upload svg {
+.prompt-attachment-remove {
   position: absolute;
-  top: 3px;
-  right: 3px;
-  padding: 2px;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 80%, transparent);
-  color: var(--ink);
+  background: color-mix(in srgb, #000 50%, transparent);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 160ms ease, background 160ms ease;
+  cursor: pointer;
+}
+.prompt-attachment:hover .prompt-attachment-remove,
+.prompt-attachment-remove:focus-visible {
+  opacity: 1;
+}
+.prompt-attachment-remove:hover {
+  background: color-mix(in srgb, #000 70%, transparent);
 }
 .prompt-attach {
   width: 30px;
@@ -3823,17 +3892,11 @@ textarea::selection,
   color: var(--ink-3);
   pointer-events: none;
 }
-.prompt-input .prompt-tag,
-.prompt-input .prompt-upload {
+.prompt-input .prompt-tag {
   vertical-align: 2px;
   margin: 0 2px;
   -webkit-user-select: none;
   user-select: none;
-}
-.prompt-input .prompt-upload {
-  display: inline-block;
-  width: 28px;
-  height: 28px;
 }
 .prompt-bar {
   display: flex;
