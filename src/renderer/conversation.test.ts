@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { visionAgentPrompt } from "../shared/vision-api";
-import { applyAgentEvent, approvalTitle, assistantErrorRecovered, assistantGroupSucceeded, assistantReplyText, baseName, cacheHitRate, collectFileChanges, collectTodos, collectWorkingFiles, delegateProgress, dropLastTurn, filterMentionPaths, formatCommand, formatThinking, friendlyAgentError, groupConversation, hasNewCheckpointUndo, isRecoverableRequestError, isTransientStreamError, lastTurnRestoreFiles, liveStatus, mentionedFiles, normalizeFilePath, normalizeMessages, omitFinalReply, optimisticUserMessage, parseFeaturesJson, planAwaitingApproval, recoverableFailStreaks, repairMarkdownTables, sessionTerminals, splitHttpUrls, splitPromptChips, splitPatch, stripEmptyMarkdown, terminalLabel, thoughtSteps, toolErrorText, toolSummary, toolWritePreview, takeTrailingUrl, isHttpUrl, urlChipLabel, spliceFileMention, traceRows, turnAnchorId, turnAnchors, turnWork, undoDialogTitle, workspaceRelative, type ChatMessage } from "./conversation";
+import { applyAgentEvent, approvalTitle, assistantErrorRecovered, assistantGroupSucceeded, assistantReplyText, baseName, cacheHitRate, collectFileChanges, collectTodos, collectWorkingFiles, delegateProgress, dropLastTurn, filterMentionPaths, formatCommand, formatThinking, friendlyAgentError, groupConversation, hasNewCheckpointUndo, isRecoverableRequestError, isTransientStreamError, lastTurnRestoreFiles, liveStatus, mentionedFiles, normalizeFilePath, normalizeMessages, omitFinalReply, optimisticUserMessage, parseFeaturesJson, planAwaitingApproval, recoverableFailStreaks, repairMarkdownTables, sessionTerminals, splitHttpUrls, splitPromptChips, splitPatch, stripEmptyMarkdown, terminalLabel, thoughtSteps, toolErrorText, toolSummary, toolWritePreview, takeTrailingUrl, isHttpUrl, urlChipLabel, spliceFileMention, traceRows, turnAnchorId, turnAnchors, turnWork, undoDialogTitle, upsertSessionSummary, workspaceRelative, type ChatMessage } from "./conversation";
 
 describe("conversation events", () => {
   it("calculates prompt cache hit rate from reported token usage", () => {
@@ -1204,5 +1204,55 @@ describe("conversation events", () => {
     expect(baseName("D:\\code\\agnes-images")).toBe("agnes-images");
     expect(baseName("D:\\code\\agnes-images\\")).toBe("agnes-images");
     expect(baseName("src/renderer/ui.tsx")).toBe("ui.tsx");
+  });
+});
+
+describe("upsertSessionSummary", () => {
+  const existing = (id: string, path: string) => ({
+    path,
+    storagePath: path,
+    id,
+    cwd: "/repo",
+    title: `thread-${id}`,
+    createdAt: "2026-09-08T00:00:00.000Z",
+    updatedAt: "2026-09-08T00:00:00.000Z",
+    messageCount: 3,
+    pinned: false,
+    archived: false,
+  });
+
+  it("prepends a placeholder row for a just-started thread", () => {
+    const seed = { path: "/repo/.tether/2026-09-08T08-00-00Z_abc.jsonl", cwd: "/repo", title: "当前项目你觉得现在最该优化的是什么" };
+    const next = upsertSessionSummary([existing("old", "/repo/.tether/old.jsonl")], seed, 1_752_000_000_000);
+    expect(next).toHaveLength(2);
+    expect(next[0]?.id).toBe("2026-09-08T08-00-00Z_abc");
+    expect(next[0]?.path).toBe(seed.path);
+    expect(next[0]?.title).toBe("当前项目你觉得现在最该优化的是什么");
+    expect(next[0]?.cwd).toBe("/repo");
+    expect(next[0]?.messageCount).toBe(1);
+    expect(next[0]?.pinned).toBe(false);
+    expect(next[1]?.id).toBe("old");
+  });
+
+  it("replaces an existing row that already carries the same thread path", () => {
+    const path = "/repo/.tether/2026-09-08T08-00-00Z_abc.jsonl";
+    const dup = existing("2026-09-08T08-00-00Z_abc", path);
+    const next = upsertSessionSummary([dup], { path, cwd: "/repo", title: "new title" }, 1_752_000_000_000);
+    expect(next).toHaveLength(1);
+    expect(next[0]?.title).toBe("new title");
+    expect(next[0]?.messageCount).toBe(1);
+  });
+
+  it("keeps the other rows in order", () => {
+    const a = existing("a", "/repo/.tether/a.jsonl");
+    const b = existing("b", "/repo/.tether/b.jsonl");
+    const next = upsertSessionSummary([a, b], { path: "/repo/.tether/c.jsonl", cwd: "/repo", title: "c" });
+    expect(next.map((item) => item.id)).toEqual(["c", "a", "b"]);
+  });
+
+  it("crops a long title to keep the row compact", () => {
+    const longTitle = "x".repeat(200);
+    const [row] = upsertSessionSummary([], { path: "/repo/.tether/a.jsonl", cwd: "/repo", title: longTitle });
+    expect(row?.title.length).toBeLessThanOrEqual(96);
   });
 });

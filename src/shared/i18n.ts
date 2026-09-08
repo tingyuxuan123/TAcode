@@ -83,6 +83,7 @@ const zh = {
   "nav.noThreads": "还没有对话",
   "nav.removeProject": "移除项目",
   "nav.sessionMenu": "对话菜单",
+  "nav.sessionRunning": "执行中",
   "nav.sectionProjects": "项目",
   "nav.recentActive": "最近活跃",
 
@@ -693,6 +694,7 @@ const en: Record<MessageKey, string> = {
   "nav.noThreads": "No chats yet",
   "nav.removeProject": "Remove project",
   "nav.sessionMenu": "Chat menu",
+  "nav.sessionRunning": "Running",
   "nav.sectionProjects": "Projects",
   "nav.recentActive": "Recently active",
 

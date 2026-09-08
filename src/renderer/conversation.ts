@@ -1,4 +1,4 @@
-import type { AgentEvent, PermissionMode } from "../shared/types";
+import type { AgentEvent, PermissionMode, SessionSummary } from "../shared/types";
 import { sameUserSkillTurn } from "../shared/skills";
 import { BROWSER_TOOLS } from "../shared/browser-tools";
 import { parseWebSearchCard } from "../shared/integrations";
@@ -1814,6 +1814,44 @@ function stringField(value: JsonRecord, key: string): string {
 
 function crop(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length - 1)}…` : value;
+}
+
+/** Values needed to inflate a placeholder sidebar row for a just-started thread. */
+export interface SessionSeed {
+  path: string;
+  cwd: string;
+  title: string;
+  provider?: string;
+  model?: string;
+}
+
+/**
+ * A brand-new thread's JSONL only lands on disk after the first assistant message
+ * is persisted, so a freshly refreshed thread list misses it during the first turn.
+ * Insert a placeholder row (matching the eventual index entry) until the next list
+ * refresh reconciles it.
+ */
+export function upsertSessionSummary(sessions: SessionSummary[], seed: SessionSeed, timestamp = Date.now()): SessionSummary[] {
+  const id = seed.path.split(/[\\/]/).pop()?.replace(/\.jsonl$/, "") || seed.path;
+  const row: SessionSummary = {
+    path: seed.path,
+    storagePath: seed.path,
+    id,
+    cwd: seed.cwd,
+    title: crop(seed.title, 96),
+    createdAt: new Date(timestamp).toISOString(),
+    updatedAt: new Date(timestamp).toISOString(),
+    ...(seed.provider ? { provider: seed.provider } : {}),
+    ...(seed.model ? { model: seed.model } : {}),
+    messageCount: 1,
+    preview: crop(seed.title, 240),
+    pinned: false,
+    archived: false,
+  };
+  const rest = sessions.filter(
+    (session) => session.id !== row.id && session.path !== row.path && session.storagePath !== row.storagePath,
+  );
+  return [row, ...rest];
 }
 
 function isRecord(value: unknown): value is JsonRecord {

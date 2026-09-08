@@ -46,6 +46,7 @@ import {
   sessionTerminals,
   turnAnchorId,
   turnAnchors,
+  upsertSessionSummary,
   type ChatMessage,
   type FileChange,
   type RestoreFile,
@@ -99,6 +100,11 @@ function sessionFileOf(snapshot: AgentSnapshot): string | undefined {
   return undefined;
 }
 
+function sessionIdOf(snapshot: AgentSnapshot): string | undefined {
+  if (typeof snapshot.state.sessionId === "string") return snapshot.state.sessionId;
+  return undefined;
+}
+
 function isSameSession(session: SessionSummary, active?: string) {
   return Boolean(active && (session.path === active || session.storagePath === active));
 }
@@ -121,6 +127,7 @@ function MoreIcon() {
 export function SessionRow({
   session,
   active,
+  running,
   onOpen,
   onPin,
   onRename,
@@ -128,6 +135,7 @@ export function SessionRow({
 }: {
   session: SessionSummary;
   active: boolean;
+  running: boolean;
   onOpen(): void;
   onPin(): void;
   onRename(title: string): void;
@@ -198,6 +206,9 @@ export function SessionRow({
           onClick={onOpen}
         >
           {session.pinned && <Icon path={PIN_ICON} size={12} />}
+          {running && (
+            <span className="session-running" title={t("nav.sessionRunning")} aria-label={t("nav.sessionRunning")}></span>
+          )}
           <span className="sidebar-full-label">{session.title || t("common.unnamed")}</span>
           <span className="sidebar-short-label" aria-hidden="true">{Array.from(session.title.trim() || t("common.unnamed")).slice(0, 2).join("")}</span>
         </button>
@@ -719,7 +730,23 @@ export function App() {
         sessionRef.current = file;
         setActiveSession(file);
       }
-      void window.harness.sessions.list().then(setSessions);
+      void window.harness.sessions.list().then((threads) => {
+        // A brand-new thread's JSONL is only written when the first assistant message
+        // is persisted; until then the disk-backed list misses it. Keep a placeholder
+        // row visible during the first turn so the sidebar updates immediately.
+        if (seedMessage && file) {
+          const cwdForSeed = snapshot.cwd ?? cwd ?? workspace;
+          setSessions(upsertSessionSummary(threads, {
+            path: file,
+            cwd: cwdForSeed ?? "",
+            title: seedMessage.text || t("common.unnamed"),
+            provider: chat.id,
+            model: modelId,
+          }));
+        } else {
+          setSessions(threads);
+        }
+      });
       void refreshAgentSkills();
       return true;
     } catch (error) {
@@ -1439,6 +1466,7 @@ export function App() {
                       key={session.id}
                       session={session}
                       active={isSameSession(session, activeSession)}
+                      running={running && isSameSession(session, activeSession)}
                       onOpen={() => openSession(session)}
                       onPin={() => void pinSession(session)}
                       onRename={(title) => void renameSession(session, title)}

@@ -5,7 +5,7 @@ description: Applies Tether’s paper + ink visual language (tokens, cards, chip
 
 # Tether UI
 
-浅色纸面 + 墨色字。桌面工作台和营销站共用这一套，不要做成 IDE、深色终端或 Discord。
+浅色纸面 + 墨色字。桌面工作台和营销站共用这一套，不要做成 IDE、深色终端或 Discord。唯一例外是代码屏（见下）。
 
 先读 [tokens.md](tokens.md) 里的色板和组件，再动最少 CSS。新界面必须看起来像同一张纸上多了一块。
 
@@ -28,6 +28,8 @@ description: Applies Tether’s paper + ink visual language (tokens, cards, chip
 桌面 CSS 变量：`--page` `--surface` `--ink` `--accent`（= ink）。站点现用 `--bg-page` `--bg-card` `--ink-primary`，语义对齐上表，新代码优先用桌面这套名字，或加一层 alias，不要第三套 hex。
 
 阴影只用发丝和一层轻抬：`--shadow-hairline` 卡片/输入，`--shadow-overlay` 弹层。不要大投影、彩条顶栏、霓虹边。
+
+**代码屏（唯一深色块）**：聊天里的块级代码 CodeBlock 用固定深色代码区 `--code-screen: #282c34` / `--code-screen-ink: #d7dae0`，高亮走 Shiki one-dark-pro，亮暗主题一致；头部栏仍是纸面凹槽（`--inset` + 语言名 + 复制按钮），无语言标注显示「代码」。这是用户拍板的审美：整页永远不做深色，深色只出现在代码屏这一块。
 
 ## 字
 
@@ -55,6 +57,7 @@ description: Applies Tether’s paper + ink visual language (tokens, cards, chip
 | 审批 | 人话标题；命令收到「查看命令」；不要 `window.confirm` |
 | 弹层 | 墨 40% 罩 + `.panel` 纸卡 |
 | 图标 | 24 视口描边 SVG，`strokeWidth 1.75`，`currentColor` |
+| 代码块 CodeBlock | 浅色头部栏（凹槽底、语言名/「代码」+ 复制）+ 固定深色代码屏 `--code-screen`，配 one-dark-pro |
 | Logo | 开口绳子 path；站点可用 `--brand`，桌面跟顶栏墨色 |
 
 工作台壳（侧栏 252、对话贴底、权限四档）只约束 **tether-ai**。营销站用 section / card / header，不要硬抄 Electron 壳。
