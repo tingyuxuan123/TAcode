@@ -1,15 +1,17 @@
-import { ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 
 /**
  * 内置浏览器 webview 的 guest preload。
  *
- * 移植自 Snow App（MIT）src/preload/webviewBrowserPreload.ts（Layer A 部分：
- * 链接拦截中继；密码助手在凭据层单独加入）。
+ * 移植自 Snow App（MIT）src/preload/webviewBrowserPreload.ts。
  *
  * 运行在 guest 页面上下文中（`<webview webpreferences="sandbox=no">`），
  * 用于绕过 Electron 长期未修复的 bug（electron#30886）：webview 内点击
  * target="_blank" 链接既不触发 setWindowOpenHandler 也不创建窗口（表现为
  * 点击无效），而 JS window.open() 调用可正常触发 handler。
+ *
+ * 同时提供密码助手（自动填充 + 自动保存，主进程侧带 senderFrame origin
+ * 校验，恶意站点无法借此跨源读写凭据）。
  *
  * 在 guest 侧以捕获阶段拦截链接激活（早于页面自身点击逻辑），改经主进程
  * 中继（browserPopupWindow 校验后转发宿主窗口），复用 browser:open-tab
@@ -79,6 +81,162 @@ const setup = (): void => {
   document.addEventListener("mouseup", handleLinkActivation, true);
   document.addEventListener("click", handleLinkActivation, true);
   document.addEventListener("auxclick", handleLinkActivation, true);
+
+  // ---- 密码助手：自动保存与自动填充 ----
+  // 表单 submit（捕获阶段，兼容 iframe 冒泡的过滤）。
+  document.addEventListener(
+    "submit",
+    (event) => {
+      const form = event.target as HTMLFormElement;
+      const passwordInput = form.querySelector<HTMLInputElement>("input[type=password]");
+      if (passwordInput) void trySave(passwordInput);
+    },
+    true,
+  );
+
+  // 无 <form> 的站点：点击提交按钮时兜底捕获。
+  document.addEventListener(
+    "click",
+    (event) => {
+      const target = event.target as HTMLElement;
+      const button = target.closest<HTMLButtonElement | HTMLInputElement>(
+        "button[type=submit], input[type=submit], button:not([type])",
+      );
+      if (!button) return;
+      const form = button.closest("form");
+      const passwordInput = form
+        ? form.querySelector<HTMLInputElement>("input[type=password]")
+        : document.querySelector<HTMLInputElement>("input[type=password]");
+      if (passwordInput) void trySave(passwordInput);
+    },
+    true,
+  );
+
+  // 自动填充：DOM 就绪后执行一次。
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => void tryAutofill(), { once: true });
+  } else {
+    void tryAutofill();
+  }
+
+  // 站点用 JS 延迟渲染登录表单时轮询补填（约 8 秒内）。
+  let attempts = 0;
+  const poll = window.setInterval(() => {
+    attempts += 1;
+    if (attempts > 10) {
+      window.clearInterval(poll);
+      return;
+    }
+    const passwordInput = findPasswordInput();
+    if (passwordInput && !passwordInput.value && passwordInput.dataset.tetherFilled !== "1") {
+      void tryAutofill();
+    }
+  }, 800);
 };
+
+// ---- 密码助手实现 ----
+
+const getOrigin = (): string => {
+  try {
+    return window.location.origin;
+  } catch {
+    return "";
+  }
+};
+
+const isHttpOrigin = (origin: string): boolean =>
+  origin.startsWith("http://") || origin.startsWith("https://");
+
+const isVisible = (input: HTMLInputElement): boolean => input.offsetParent !== null;
+
+const findPasswordInput = (): HTMLInputElement | null => {
+  const inputs = Array.from(
+    document.querySelectorAll<HTMLInputElement>("input[type=password]"),
+  ).filter((input) => input.ownerDocument === document);
+  return inputs.find(isVisible) ?? inputs[0] ?? null;
+};
+
+const findUsernameInput = (passwordInput: HTMLInputElement): HTMLInputElement | null => {
+  const form = passwordInput.form;
+  const candidates = form
+    ? Array.from(form.querySelectorAll<HTMLInputElement>("input"))
+    : Array.from(document.querySelectorAll<HTMLInputElement>("input"));
+  const textInputs = candidates.filter(
+    (input) =>
+      input.ownerDocument === document &&
+      input !== passwordInput &&
+      input.type !== "password" &&
+      input.type !== "hidden" &&
+      input.type !== "submit" &&
+      input.type !== "button" &&
+      input.type !== "checkbox" &&
+      input.type !== "radio" &&
+      !input.disabled &&
+      !input.readOnly &&
+      isVisible(input),
+  );
+  // 优先 name/id/autocomplete 含 user/email/login/account 语义的输入框。
+  const named = textInputs.find((input) =>
+    /(user|email|login|account)/i.test(`${input.name} ${input.id} ${input.autocomplete || ""}`),
+  );
+  return named ?? textInputs[0] ?? null;
+};
+
+const tryAutofill = async (): Promise<void> => {
+  const origin = getOrigin();
+  if (!isHttpOrigin(origin)) return;
+  const passwordInput = findPasswordInput();
+  if (!passwordInput || passwordInput.value || passwordInput.dataset.tetherFilled === "1") {
+    return;
+  }
+  let credentials: { username: string; password: string } | null = null;
+  try {
+    credentials = (await ipcRenderer.invoke("browser-passwords:find", { origin })) as {
+      username: string;
+      password: string;
+    } | null;
+  } catch {
+    return;
+  }
+  if (!credentials || !credentials.password) return;
+  const usernameInput = findUsernameInput(passwordInput);
+  if (usernameInput && !usernameInput.value) {
+    usernameInput.value = credentials.username;
+    usernameInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  passwordInput.value = credentials.password;
+  passwordInput.dataset.tetherFilled = "1";
+  passwordInput.dispatchEvent(new Event("input", { bubbles: true }));
+  passwordInput.dispatchEvent(new Event("change", { bubbles: true }));
+};
+
+/** 已提交过的凭据（origin + username + password），避免重复写入。 */
+let lastSubmitted = "";
+
+const trySave = async (passwordInput: HTMLInputElement): Promise<void> => {
+  const origin = getOrigin();
+  if (!isHttpOrigin(origin) || passwordInput.ownerDocument !== document) return;
+  const password = passwordInput.value;
+  if (!password) return;
+  const usernameInput = findUsernameInput(passwordInput);
+  const username = usernameInput?.value ?? "";
+  const fingerprint = `${origin}\u0000${username}\u0000${password}`;
+  if (fingerprint === lastSubmitted) return;
+  lastSubmitted = fingerprint;
+  try {
+    await ipcRenderer.invoke("browser-passwords:save", { origin, username, password });
+  } catch {
+    // 保存失败（origin 校验拒绝/保险库不可用）静默忽略，不影响浏览。
+  }
+};
+
+contextBridge.exposeInMainWorld("tetherPasswordBridge", {
+  /** 查询当前页面 origin 已保存的凭据（供页面脚本手动触发填充）。 */
+  find: (): Promise<{ username: string; password: string } | null> =>
+    ipcRenderer.invoke("browser-passwords:find", { origin: getOrigin() }),
+  /** 保存凭据（供页面脚本自定义逻辑调用）。 */
+  save: (payload: { origin: string; username: string; password: string }): Promise<{ id: string; updated: boolean }> =>
+    ipcRenderer.invoke("browser-passwords:save", payload),
+});
 
 setup();

@@ -16,6 +16,15 @@ import {
 } from "./downloads";
 import { initBrowserPopupHandler } from "./popups";
 import { createDetachedBrowserWindow } from "./windows";
+import {
+  deletePasswordRecord,
+  deletePasswordRecords,
+  findPasswordForOrigin,
+  getPasswordRecord,
+  isValidPasswordOrigin,
+  listPasswordRecords,
+  savePasswordRecord,
+} from "./passwords";
 
 /**
  * 内置浏览器 IPC 注册（移植自 Snow App（MIT）windowHandlers 的 browser 区段）。
@@ -54,6 +63,25 @@ const isRestorePayload = (value: unknown): value is RestorePayload => {
   if (typeof record.instanceId !== "string" || !record.instanceId.trim()) return false;
   if (!Array.isArray(record.tabs)) return false;
   return record.tabs.every(isTabSnapshot);
+};
+
+/**
+ * 密码助手的 origin 校验：仅接受 webview guest 的请求，且请求的 origin
+ * 必须与发起 frame 的真实 origin 一致，防止 guest 跨源读写凭据。
+ */
+const guestOriginFrom = (event: Electron.IpcMainInvokeEvent, origin: unknown): string => {
+  if (event.sender.getType() !== "webview") throw new Error("Password bridge is guest-only");
+  if (typeof origin !== "string" || !isValidPasswordOrigin(origin)) {
+    throw new Error("Invalid password origin");
+  }
+  try {
+    const frameOrigin = new URL(event.senderFrame?.url ?? "").origin;
+    if (frameOrigin !== origin) throw new Error("Origin mismatch");
+  } catch (error) {
+    if (error instanceof Error && error.message === "Origin mismatch") throw error;
+    throw new Error("Invalid sender frame");
+  }
+  return origin;
 };
 
 export const registerBrowserIpc = (
@@ -119,5 +147,46 @@ export const registerBrowserIpc = (
     if (senderWindow && !senderWindow.isDestroyed() && senderWindow !== mainWindow) {
       senderWindow.close();
     }
+  });
+
+  // ===== 密码保险库 =====
+  // 管理（list/get/delete）：仅限应用窗口渲染进程；
+  // find/save（自动填充/保存）：仅限 webview guest 且 origin 与 sender frame 一致。
+  ipcMain.handle("browser-passwords:list", (event) => {
+    if (event.sender.getType() !== "window") throw new Error("Host renderer only");
+    return listPasswordRecords();
+  });
+  ipcMain.handle("browser-passwords:get", (event, id: unknown) => {
+    if (event.sender.getType() !== "window") throw new Error("Host renderer only");
+    if (typeof id !== "string") throw new Error("id must be a string");
+    return getPasswordRecord(id);
+  });
+  ipcMain.handle("browser-passwords:save", (event, payload: unknown) => {
+    const record = (payload ?? {}) as Record<string, unknown>;
+    const origin = guestOriginFrom(event, record.origin);
+    if (typeof record.password !== "string" || !record.password) {
+      throw new Error("Password must not be empty");
+    }
+    return savePasswordRecord({
+      origin,
+      username: typeof record.username === "string" ? record.username : "",
+      password: record.password,
+    });
+  });
+  ipcMain.handle("browser-passwords:find", (event, payload: unknown) => {
+    const origin = ((payload ?? {}) as Record<string, unknown>).origin;
+    return findPasswordForOrigin(guestOriginFrom(event, origin));
+  });
+  ipcMain.handle("browser-passwords:delete", (event, id: unknown) => {
+    if (event.sender.getType() !== "window") throw new Error("Host renderer only");
+    if (typeof id !== "string") throw new Error("id must be a string");
+    return deletePasswordRecord(id);
+  });
+  ipcMain.handle("browser-passwords:delete-batch", (event, ids: unknown) => {
+    if (event.sender.getType() !== "window") throw new Error("Host renderer only");
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
+      throw new Error("ids must be string[]");
+    }
+    return deletePasswordRecords(ids as string[]);
   });
 };
