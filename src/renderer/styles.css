@@ -1660,9 +1660,9 @@ textarea::selection,
 .turn {
   margin-bottom: 22px;
   font-size: calc(14px * var(--chat-font-scale));
-  line-height: 1.5;
+  line-height: 1.65;
   overflow-wrap: anywhere;
-  letter-spacing: -0.011em;
+  letter-spacing: -0.005em;
   min-width: 0;
 }
 .inspect-shell {
@@ -2098,10 +2098,10 @@ textarea::selection,
 .markdown p,
 .markdown ul,
 .markdown ol {
-  margin: 0 0 0.55em;
+  margin: 0 0 0.7em;
 }
 .markdown li {
-  margin: 0.2em 0;
+  margin: 0.32em 0;
 }
 .markdown li > p {
   margin: 0;
