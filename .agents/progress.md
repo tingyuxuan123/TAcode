@@ -1,5 +1,14 @@
 # 模型供应商管理进度
 
+## 2026-09-08：复用 codeg-main 思路优化流式滚动（21:04，Asia/Shanghai）
+
+- `src/renderer/stream-scheduler.ts` 增加 256 条流式事件批次上限；达到上限立即 flush，仍保留完整 snapshot 顺序，避免 RAF/后台节流时 pending 无界增长。
+- `src/renderer/use-follow-scroll.ts` 提取 `nextScrollTop`，并让 `followLatest` 复用已有 RAF 循环；ResizeObserver 连续回调只更新动态目标，不再每次 cancel/restart 缓动，降低流式追加 Markdown 时的滚动抖动。保留用户主动上滑退出跟随、底部滞回、会话位置和历史锚点保持；新增 viewport resize shield，避免布局变化产生的程序滚动被误判为用户意图。
+- 新增 `src/renderer/use-follow-scroll.test.ts`，覆盖动态底部、平滑步进、reduced-motion 和临界距离；scheduler 增加批次边界测试。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 全量 357/357 通过；`pnpm build` 通过；`git diff --check` 通过。构建仍有既有 renderer 大 chunk 提示，不影响构建。
+- 未引入新依赖，未修改主进程、Agent 协议或 Markdown 渲染器；未提交、发布或重启用户当前 Tether 进程。
+
+
 ## 2026-09-07：实现与验证完成
 
 - 用户范围：参考 `/Users/yfdl/Downloads/PI-Desktop-main`，只实现添加/管理模型供应商，不扩展其它 AI 服务功能。

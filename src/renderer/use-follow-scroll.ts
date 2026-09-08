@@ -2,6 +2,18 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
+/** Calculate one frame of the bottom-follow easing without reading the DOM. */
+export function nextScrollTop(currentTop: number, target: number, dt: number, viewportHeight: number, reduced = false): number {
+  const distance = target - currentTop;
+  if (reduced || Math.abs(distance) < 1) return target;
+  // 指数趋近 + 限速：近距离平滑收尾，远距离有界匀速滑行；
+  // 步长按帧间隔换算，不同刷新率下速度一致。
+  let step = distance * (1 - Math.exp(-dt / 45));
+  const maxStep = Math.max(48, viewportHeight * 0.3) * (dt / 16.7);
+  if (Math.abs(step) > maxStep) step = maxStep * Math.sign(step);
+  return currentTop + step;
+}
+
 /** Each viewport owns its follow intent; resizing content must not turn it back on. */
 export function useFollowScroll(scope: string, enabled = true) {
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
@@ -13,6 +25,8 @@ export function useFollowScroll(scope: string, enabled = true) {
   const anchor = useRef<{ id: string; top: number } | undefined>(undefined);
   const positions = useRef(new Map<string, { top: number; follow: boolean }>());
   const currentTop = useRef(0);
+  const resizeShield = useRef(0);
+  const resizeEpoch = useRef(0);
 
   const cancel = useCallback(() => {
     if (frame.current !== undefined) cancelAnimationFrame(frame.current);
@@ -31,35 +45,33 @@ export function useFollowScroll(scope: string, enabled = true) {
     if (!viewport || !enabled) return;
     following.current = true;
     setAtBottom(true);
-    cancel();
+    // ResizeObserver can report several layout changes during one render. Keep
+    // the existing loop alive so its next frame picks up the latest target
+    // instead of restarting the easing from scratch on every report.
+    if (frame.current !== undefined) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let lastFrame: number | undefined;
     const advance = (now: number) => {
-      if (!following.current) return;
+      if (!following.current) {
+        frame.current = undefined;
+        return;
+      }
       if (lastFrame === undefined) lastFrame = now;
       const dt = Math.min(64, Math.max(1, now - lastFrame));
       lastFrame = now;
       const target = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-      const distance = target - viewport.scrollTop;
-      if (reduced || Math.abs(distance) < 1) {
-        viewport.scrollTop = target;
-        lastAssigned.current = viewport.scrollTop;
-        currentTop.current = viewport.scrollTop;
+      const next = nextScrollTop(viewport.scrollTop, target, dt, viewport.clientHeight, reduced);
+      viewport.scrollTop = next;
+      lastAssigned.current = viewport.scrollTop;
+      currentTop.current = viewport.scrollTop;
+      if (next === target) {
         frame.current = undefined;
         return;
       }
-      // 指数趋近 + 限速：近距离平滑收尾，远距离有界匀速滑行，任何距离都不瞬移；
-      // 步长按帧间隔换算，不同刷新率下速度一致。流式追加内容时 target 每帧重算，持续跟随。
-      let step = distance * (1 - Math.exp(-dt / 45));
-      const maxStep = Math.max(48, viewport.clientHeight * 0.3) * (dt / 16.7);
-      if (Math.abs(step) > maxStep) step = maxStep * Math.sign(step);
-      viewport.scrollTop += step;
-      lastAssigned.current = viewport.scrollTop;
-      currentTop.current = viewport.scrollTop;
       frame.current = requestAnimationFrame(advance);
     };
     frame.current = requestAnimationFrame(advance);
-  }, [viewport, enabled, cancel]);
+  }, [viewport, enabled]);
 
   useLayoutEffect(() => {
     if (!enabled || !viewport || !content) return;
@@ -85,6 +97,7 @@ export function useFollowScroll(scope: string, enabled = true) {
     const key = (event: KeyboardEvent) => { if (scrollKeys.has(event.key)) intent(); };
     const scroll = () => {
       currentTop.current = viewport.scrollTop;
+      if (resizeShield.current !== 0) return;
       if (lastAssigned.current !== undefined && Math.abs(lastAssigned.current - viewport.scrollTop) < 1) return;
       const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
       let bottom;
@@ -99,7 +112,19 @@ export function useFollowScroll(scope: string, enabled = true) {
       setAtBottom(bottom);
       capture();
     };
-    const resize = () => {
+    const resize = (entries: ResizeObserverEntry[] = []) => {
+      if (following.current && entries.some((entry) => entry.target === viewport)) {
+        // A viewport resize can clamp scrollTop before the observer callback.
+        // Shield that browser-generated scroll event from the user-intent
+        // handler, just like codeg-main's resizeDifference guard.
+        const epoch = ++resizeEpoch.current;
+        resizeShield.current = epoch;
+        requestAnimationFrame(() => {
+          window.setTimeout(() => {
+            if (resizeShield.current === epoch) resizeShield.current = 0;
+          }, 1);
+        });
+      }
       if (following.current) {
         followLatest();
       } else if (anchor.current) {

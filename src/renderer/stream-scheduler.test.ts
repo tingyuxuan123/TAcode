@@ -32,6 +32,19 @@ describe("stream scheduling", () => {
     expect(dispatch.mock.calls.map(([events]) => events)).toEqual([[update("a")], [{ type }]]);
   });
 
+  it("flushes a bounded batch before the next animation frame", () => {
+    const { scheduler, dispatch, frame } = setup();
+    for (let index = 0; index < 256; index += 1) scheduler.push(update(String(index)));
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+      Array.from({ length: 256 }, (_, index) => update(String(index))),
+    );
+    scheduler.push(update("next"));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    frame();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls[1]?.[0]).toEqual([update("next")]);
+  });
+
   it("uses the fallback in a background window and cancels the stale frame", () => {
     const { scheduler, dispatch, frames } = setup();
     scheduler.push(update("a"));

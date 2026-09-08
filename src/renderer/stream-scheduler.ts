@@ -1,5 +1,7 @@
 import type { AgentEvent } from "../shared/types";
 
+const MAX_PENDING_STREAM_EVENTS = 256;
+
 export function createStreamScheduler(dispatch: (events: AgentEvent[]) => void) {
   let pending: AgentEvent[] = [];
   let frame: number | undefined;
@@ -27,6 +29,10 @@ export function createStreamScheduler(dispatch: (events: AgentEvent[]) => void) 
         return;
       }
       pending.push(event);
+      if (pending.length >= MAX_PENDING_STREAM_EVENTS) {
+        flush();
+        return;
+      }
       if (frame === undefined) {
         frame = requestAnimationFrame(flush);
         fallback = setTimeout(flush, 100);
