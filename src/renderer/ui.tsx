@@ -1506,7 +1506,6 @@ export function InspectPanel({
   onStopAllTerminals?(): void;
 }) {
   const { t } = useI18n();
-  const [progress, setProgress] = useState(true);
   const [refineOpen, setRefineOpen] = useState(false);
   const [refineText, setRefineText] = useState("");
   const [changesOpen, setChangesOpen] = useState(true);
@@ -1580,22 +1579,6 @@ export function InspectPanel({
             </div>
           )}
         </div>
-      )}
-      {todos.length > 0 && (
-        <Fold
-          title={`${t("inspect.progress")} ${todos.filter((item) => item.done).length}/${todos.length}`}
-          open={progress}
-          onToggle={() => setProgress((current) => !current)}
-        >
-          <ol className="inspect-todos">
-            {todos.map((todo, index) => (
-              <li key={todo.id} className={todo.done ? "done" : todo.active ? "active" : ""}>
-                <i>{todo.done ? <Icon path="M5 12.5l4 4 10-10" size={11} /> : index + 1}</i>
-                <span>{todo.text}</span>
-              </li>
-            ))}
-          </ol>
-        </Fold>
       )}
       {edits.length > 0 && (
         <Fold title={t("inspect.changes")} open={changesOpen} onToggle={() => setChangesOpen((current) => !current)}>

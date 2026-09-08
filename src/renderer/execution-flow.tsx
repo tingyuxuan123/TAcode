@@ -1,12 +1,15 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, Brain, ChevronDown, ChevronRight, CircleAlert, CircleHelp, FilePenLine, FileText, Globe, LoaderCircle, Search, SquareTerminal, Workflow, Wrench } from "lucide-react";
-import { toolRow, type buildTurnPresentation, type ToolActivity } from "./conversation";
+import { Brain, ChevronDown, ChevronRight, CircleAlert, CircleHelp, FilePenLine, FileText, Globe, LoaderCircle, Search, SquareTerminal, Workflow, Wrench } from "lucide-react";
+import { toolRow, type buildTurnPresentation, type ToolActivity, type WorkItem } from "./conversation";
 import { useI18n } from "./i18n";
 import { useStreamText } from "./use-stream-text";
 import { useFollowScroll } from "./use-follow-scroll";
 
 type Presentation = ReturnType<typeof buildTurnPresentation>;
 type TextRenderer = (text: string, streaming?: boolean) => ReactNode;
+
+/** 流式中仅让最近这些项参与高频更新（对齐 Proma-main PROCESS_GROUP_LIVE_CHILD_WINDOW）。 */
+const LIVE_CHILD_WINDOW = 4;
 
 const FlowText = memo(function FlowText({ text, streaming, render }: { text: string; streaming?: boolean; render: TextRenderer }) {
   return <div className="markdown flow-text">{render(text, streaming)}</div>;
@@ -67,6 +70,28 @@ const ToolLine = memo(function ToolLine({ itemId, tool, expanded, onToggle, rend
   );
 });
 
+/** 计算过程项的内容签名：流式中旧项内容/状态不变时冻结，避免重复渲染（对齐 Proma-main StableProcessChild）。 */
+function processItemSignature(item: WorkItem, textOf: (item: { id: string; text: string }) => string, expanded: Record<string, boolean>): string {
+  if (item.type === "tool") return `tool:${item.toolId}`;
+  return `${item.type}:${textOf(item)}:${item.type === "thinking" ? (expanded[item.id] ?? false) : ""}`;
+}
+
+/** 惰性冻结器：冻结状态下若签名不变则复用上次渲染结果，避免长过程里旧项重复渲染高频内容。 */
+const FreezeCell = memo(function FreezeCell({ freeze, signature, build }: {
+  freeze: boolean; signature: string; build(): ReactNode;
+}) {
+  const cache = useRef<{ sig: string; node: ReactNode }>({ sig: signature, node: null });
+  if (!freeze) {
+    const node = build();
+    cache.current = { sig: signature, node };
+    return node;
+  }
+  if (cache.current.sig !== signature) {
+    cache.current = { sig: signature, node: build() };
+  }
+  return cache.current.node;
+});
+
 export function ExecutionFlow({ view, live, streaming, awaiting, stopping, interrupted, error, errorTone, clock, canAutoCollapse, onRetry, renderText, renderTool }: {
   view: Presentation;
   live: boolean;
@@ -89,6 +114,8 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
   const [mounted, setMounted] = useState(open);
   const [bounded, setBounded] = useState(live);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [collapseCountdown, setCollapseCountdown] = useState<number | null>(null);
+  const collapseTimers = useRef<number[]>([]);
   const interacted = useRef(false);
   const wasLive = useRef(live);
   const root = useRef<HTMLDivElement>(null);
@@ -107,6 +134,11 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
   }, [open]);
 
   useEffect(() => {
+    const clearCountdown = () => {
+      for (const timer of collapseTimers.current) window.clearTimeout(timer);
+      collapseTimers.current = [];
+      setCollapseCountdown(null);
+    };
     if (live) {
       if (!wasLive.current) {
         interacted.current = false;
@@ -114,20 +146,35 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
         setBounded(true);
       }
       wasLive.current = true;
-      return;
+      clearCountdown();
+      return clearCountdown;
     }
+    clearCountdown();
     if (failed || interrupted || awaiting || unknown || !view.reply.length) {
       if (!interacted.current) setOpen(true);
-      return;
+      return clearCountdown;
     }
-    if (!wasLive.current || interacted.current || pendingText || !scroll.atBottom) return;
-    const timer = window.setTimeout(() => {
-      if (interacted.current || !canAutoCollapse() || !scroll.following.current) return;
-      if (root.current?.contains(document.activeElement) || window.getSelection()?.toString()) return;
-      setOpen(false);
-      wasLive.current = false;
-    }, 1200);
-    return () => window.clearTimeout(timer);
+    if (!wasLive.current || interacted.current || pendingText || !scroll.atBottom) return clearCountdown;
+    // 完成后倒计时再折叠（对齐 Proma-main：3 秒后自动收起）
+    const startCountdown = () => {
+      const guard = () => {
+        if (interacted.current || !canAutoCollapse() || !scroll.following.current) return true;
+        if (root.current?.contains(document.activeElement) || window.getSelection()?.toString()) return true;
+        return false;
+      };
+      if (guard()) { setCollapseCountdown(null); return; }
+      setCollapseCountdown(3);
+      collapseTimers.current.push(window.setTimeout(() => setCollapseCountdown(2), 1000));
+      collapseTimers.current.push(window.setTimeout(() => setCollapseCountdown(1), 2000));
+      collapseTimers.current.push(window.setTimeout(() => {
+        if (guard()) { setCollapseCountdown(null); return; }
+        setCollapseCountdown(null);
+        setOpen(false);
+        wasLive.current = false;
+      }, 3000));
+    };
+    startCountdown();
+    return () => { clearCountdown(); };
   }, [live, failed, interrupted, awaiting, unknown, view.reply.length, pendingText, scroll.atBottom, canAutoCollapse]);
 
   const toggleItem = useCallback((key: string, defaultOpen = false) => {
@@ -138,6 +185,24 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
   const textOf = (item: { id: string; text: string }) => item.id === active?.id ? displayed : item.text;
   const status = stopping ? t("flow.stopping") : awaiting ? t("flow.awaiting") : interrupted ? t("flow.interrupted") : live ? t("flow.running") : failed ? t("flow.failed") : unknown ? t("flow.unrecorded") : !view.reply.length ? t("flow.ended") : "";
   const runningCount = view.tools.filter((tool) => tool.status === "running").length;
+  const summary = useMemo(() => {
+    const toolCount = view.tools.length;
+    const messageCount = view.process.filter((item) => item.type === "thinking" || item.type === "text").length;
+    return t("flow.summary", { tools: toolCount, messages: messageCount });
+  }, [view.tools.length, view.process, t]);
+  const processToolGlyphs = useMemo(() => {
+    const seen = new Set<string>();
+    const glyphs: Array<{ name: string; Glyph: (typeof Workflow | typeof Brain) }> = [];
+    for (const tool of view.tools) {
+      if (seen.has(tool.name)) continue;
+      seen.add(tool.name);
+      const row = toolRow(tool);
+      glyphs.push({ name: tool.name, Glyph: tool.name === "delegate" ? Workflow : toolIcons[row.kind] });
+    }
+    return glyphs;
+  }, [view.tools]);
+  const visibleToolGlyphs = processToolGlyphs.slice(0, 4);
+  const hiddenToolCount = Math.max(0, processToolGlyphs.length - visibleToolGlyphs.length);
 
   return (
     <div className="execution-flow" ref={root}>
@@ -148,28 +213,38 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
           setOpen((value) => !value);
         }}>
           <ChevronRight size={14} className={open ? "rotated" : ""} aria-hidden="true" />
-          <span className="flow-title">{t("flow.process")}</span>
-          {view.tools.length > 0 && <span className="flow-count">{t("flow.toolCount", { n: view.tools.length })}</span>}
+          <span className="flow-title">{summary}</span>
+          {visibleToolGlyphs.length > 0 && <span className="flow-tool-icons" aria-hidden="true">
+            {visibleToolGlyphs.map(({ name, Glyph }) => <Glyph key={name} size={14} />)}
+            {hiddenToolCount > 0 && <span className="flow-tool-icon-more">+{hiddenToolCount}</span>}
+          </span>}
+          {collapseCountdown !== null && <span className="flow-countdown">{t("flow.collapseIn", { n: collapseCountdown })}</span>}
           {status && <span className={`flow-status${failed ? " error" : ""}`}>{runningCount > 1 && live && !awaiting ? t("flow.parallel", { n: runningCount }) : status}</span>}
           {clock}
         </button>
         <div className={`flow-collapse${open ? " open" : ""}`} inert={!open} aria-hidden={!open}>
           <div className="flow-collapse-inner">
             {mounted && <div className="flow-viewport-wrap">
-              <div id={id} ref={scroll.viewportRef} className={`flow-viewport${bounded ? " bounded" : ""}`} tabIndex={bounded ? 0 : undefined} aria-label={t("flow.process")} onWheelCapture={(event) => { if (event.currentTarget.scrollHeight > event.currentTarget.clientHeight + 1) interacted.current = true; }} onPointerDownCapture={() => { interacted.current = true; }} onKeyDownCapture={() => { interacted.current = true; }}>
+              <div id={id} ref={scroll.viewportRef} className={`flow-viewport scrollbar-none${bounded ? " bounded" : ""}`} tabIndex={bounded ? 0 : undefined} aria-label={t("flow.process")} onWheelCapture={(event) => { if (event.currentTarget.scrollHeight > event.currentTarget.clientHeight + 1) interacted.current = true; }} onPointerDownCapture={() => { interacted.current = true; }} onKeyDownCapture={() => { interacted.current = true; }}>
                 <div className="flow-items" ref={scroll.contentRef}>
-                  {view.process.map((item) => <div key={item.id} data-scroll-anchor={item.id}>
-                    {item.type === "thinking" ? <Thought itemId={item.id} text={textOf(item)} active={item.id === active?.id && live && !awaiting} expanded={expanded[item.id] ?? false} onToggle={toggleItem} render={renderText} />
-                      : item.type === "text" ? <FlowText text={textOf(item)} streaming={item.id === active?.id && live} render={renderText} />
-                        : (() => {
-                          const tool = toolMap.get(item.toolId);
-                          return tool ? <ToolLine itemId={item.id} tool={tool} expanded={expanded[item.id] ?? tool.status === "error"} onToggle={toggleItem} render={renderTool} /> : null;
-                        })()}
-                  </div>)}
+                  {view.process.map((item, index) => {
+                    const liveStart = Math.max(0, view.process.length - LIVE_CHILD_WINDOW);
+                    const freeze = live && index < liveStart && item.type !== "tool";
+                    const build = () => (
+                      <div key={item.id} data-scroll-anchor={item.id}>
+                        {item.type === "thinking" ? <Thought itemId={item.id} text={textOf(item)} active={item.id === active?.id && live && !awaiting} expanded={expanded[item.id] ?? false} onToggle={toggleItem} render={renderText} />
+                          : item.type === "text" ? <FlowText text={textOf(item)} streaming={item.id === active?.id && live} render={renderText} />
+                            : (() => {
+                              const tool = toolMap.get(item.toolId);
+                              return tool ? <ToolLine itemId={item.id} tool={tool} expanded={expanded[item.id] ?? tool.status === "error"} onToggle={toggleItem} render={renderTool} /> : null;
+                            })()}
+                      </div>
+                    );
+                    return <FreezeCell key={item.id} freeze={freeze} signature={freeze ? processItemSignature(item, textOf, expanded) : `${item.id}:${liveStart}`} build={build} />;
+                  })}
                   {live && !view.items.length && <div className="flow-pending"><LoaderCircle size={14} className="flow-spinner" aria-hidden="true" />{t("think.waiting")}</div>}
                 </div>
               </div>
-              {bounded && !scroll.atBottom && <button type="button" className="flow-latest" title={t("flow.latest")} aria-label={t("flow.latest")} onClick={scroll.followLatest}><ArrowDown size={15} /></button>}
             </div>}
           </div>
         </div>

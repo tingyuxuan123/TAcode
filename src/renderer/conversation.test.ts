@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { visionAgentPrompt } from "../shared/vision-api";
-import { applyAgentEvent, approvalTitle, assistantErrorRecovered, assistantGroupSucceeded, assistantReplyText, baseName, cacheHitRate, collectFileChanges, collectTodos, collectWorkingFiles, delegateProgress, dropLastTurn, filterMentionPaths, formatCommand, formatThinking, friendlyAgentError, groupConversation, hasNewCheckpointUndo, isRecoverableRequestError, isTransientStreamError, lastTurnRestoreFiles, liveStatus, mentionedFiles, normalizeFilePath, normalizeMessages, omitFinalReply, optimisticUserMessage, parseFeaturesJson, planAwaitingApproval, recoverableFailStreaks, repairMarkdownTables, sessionTerminals, splitHttpUrls, splitPromptChips, splitPatch, stripEmptyMarkdown, terminalLabel, thoughtSteps, toolErrorText, toolSummary, toolWritePreview, takeTrailingUrl, isHttpUrl, urlChipLabel, spliceFileMention, traceRows, turnAnchorId, turnAnchors, turnWork, undoDialogTitle, upsertSessionSummary, workspaceRelative, type ChatMessage } from "./conversation";
+import { applyAgentEvent, approvalTitle, assistantErrorRecovered, assistantGroupSucceeded, assistantReplyText, baseName, cacheHitRate, collectFileChanges, collectProgressTasks, collectTodos, collectWorkingFiles, delegateProgress, dropLastTurn, filterMentionPaths, formatCommand, formatThinking, friendlyAgentError, groupConversation, hasNewCheckpointUndo, isRecoverableRequestError, isTransientStreamError, lastTurnRestoreFiles, liveStatus, mentionedFiles, normalizeFilePath, normalizeMessages, omitFinalReply, optimisticUserMessage, parseFeaturesJson, planAwaitingApproval, recoverableFailStreaks, repairMarkdownTables, sessionTerminals, splitHttpUrls, splitPromptChips, splitPatch, stripEmptyMarkdown, terminalLabel, thoughtSteps, toolErrorText, toolSummary, toolWritePreview, takeTrailingUrl, isHttpUrl, urlChipLabel, spliceFileMention, traceRows, turnAnchorId, turnAnchors, turnWork, undoDialogTitle, upsertSessionSummary, workspaceRelative, type ChatMessage } from "./conversation";
 
 describe("conversation events", () => {
   it("calculates prompt cache hit rate from reported token usage", () => {
@@ -305,7 +305,7 @@ describe("conversation events", () => {
         },
       },
     });
-    expect(messages[0]?.tools[0]?.title).toBe("GLM-4V 识图 · glm-4v-flash · MinerU OCR");
+    expect(messages[0]?.tools[0]?.title).toBe("识图 · glm-4v-flash · MinerU OCR");
   });
 
   it("tracks delegate progress from start through cumulative updates", () => {
@@ -1254,5 +1254,48 @@ describe("upsertSessionSummary", () => {
     const longTitle = "x".repeat(200);
     const [row] = upsertSessionSummary([], { path: "/repo/.tether/a.jsonl", cwd: "/repo", title: longTitle });
     expect(row?.title.length).toBeLessThanOrEqual(96);
+  });
+
+  it("collects delegate progress into the bottom overlay", () => {
+    let messages = applyAgentEvent([], {
+      type: "tool_execution_start",
+      toolCallId: "d1",
+      toolName: "delegate",
+      args: { tasks: [{ role: "explorer", task: "read main" }, { role: "reviewer", task: "check types" }] },
+    });
+    messages = applyAgentEvent(messages, {
+      type: "tool_execution_update",
+      toolCallId: "d1",
+      toolName: "delegate",
+      args: { tasks: [{ role: "explorer", task: "read main" }, { role: "reviewer", task: "check types" }] },
+      partialResult: { details: { total: 2, done: 1, tasks: [{ role: "explorer", task: "read main", status: "completed" }, { role: "reviewer", task: "check types", status: "running", live: "正在读取 ui.tsx" }] } },
+    });
+    const tasks = collectProgressTasks(messages);
+    expect(tasks.map((item) => [item.status, item.subject])).toEqual([
+      ["completed", "read main"],
+      ["running", "check types"],
+    ]);
+    expect(tasks[1]?.activeForm).toBe("正在读取 ui.tsx");
+  });
+
+  it("collects update_plan steps into the bottom overlay", () => {
+    const plan = (steps: Array<{ step: string; status: string }>): ChatMessage => ({
+      id: "p",
+      role: "assistant",
+      text: "",
+      images: [],
+      tools: [{ id: "tool-p", name: "update_plan", title: "Update plan", status: "complete", args: { plan: steps } }],
+      work: [],
+    });
+    const tasks = collectProgressTasks([plan([
+      { step: "读代码", status: "completed" },
+      { step: "改 UI", status: "in_progress" },
+      { step: "补测试", status: "pending" },
+    ])]);
+    expect(tasks.map((item) => [item.id, item.status, item.subject])).toEqual([
+      ["tool-p-plan-0", "completed", "读代码"],
+      ["tool-p-plan-1", "running", "改 UI"],
+      ["tool-p-plan-2", "pending", "补测试"],
+    ]);
   });
 });

@@ -194,3 +194,9 @@
 - PanelTabs通过上下文提供的稳定DOM容器，仅将现有标签栏Portal到标题栏；网页内容保留原组件树及guest，独立/无Chat容器场景仍在面板内渲染标签。标签、加号明确no-drag，空白区域可拖动窗口；macOS窄侧栏避让只作用于会话标题区域，右侧边界不受padding干扰。
 - 新增scripts/workbench-header-smoke.ts并接入真实Electron回归：测量标题与面板边界一致、地址栏紧接标题栏、内容增高37px；原生点击切换/关闭标签、新建页、加号菜单、关闭/打开面板，无窗口位移，guest及输入保留。验证长标题提示与溢出、窄窗口，随后完整跑动态宽度/自动收起/动画中松开/窄栏导航回归，均通过。
 - pnpm typecheck、完整构建与pnpm test:browser、git diff --check通过。全量342/343，唯一仍为既有conversation.test.ts:308识图标题断言。README双语更新。证据：会话工作台top-tabs-smoke.txt / top-tabs-tests.txt / top-tabs-electron.png。未操作用户Google页，未重启用户应用、未提交或发布、未改AGENTS.md。
+
+## 2026-09-08：移除待办浮层旁的回到底部箭头（18:46，Asia/Shanghai）
+
+- 用户附红框截图，要求去掉底部待办进度胶囊右侧的圆形 ↓ 按钮。progress-overlay.tsx 删除任务存在时并排渲染的 progress-overlay-jump 按钮，styles.css 移除对应两条规则并更正区块注释；无任务时的独立回到底部箭头（conversation-latest）保留，atBottom/onFollowLatest 仍为该分支服务。
+- 顺手修复全量测试唯一红项：conversation.test.ts:308 识图标题断言仍期望 ca17ab5（8-21）多供应商改造前的「GLM-4V 识图」前缀，与 vision-api.test.ts 及现实现（「识图 · 模型」）不一致，HEAD 上即失败；已对齐为「识图 · glm-4v-flash · MinerU OCR」。
+- pnpm typecheck 通过；pnpm test 全量 352/352 通过。含上一会话未提交的进度浮层聚合改动（collectProgressTasks + ProgressOverlay）。未提交/发布，未改AGENTS.md。

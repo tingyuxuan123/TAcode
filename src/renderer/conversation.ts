@@ -1650,6 +1650,57 @@ export function planAwaitingApproval(
   return todos.some((item) => !item.done);
 }
 
+export type ProgressTaskStatus = "pending" | "running" | "completed" | "failed";
+
+/** 底部进度浮层使用的最小任务项：仅聚合 delegate 与 plan 两类。 */
+export interface ProgressTask {
+  id: string;
+  subject: string;
+  status: ProgressTaskStatus;
+  activeForm?: string;
+}
+
+/**
+ * 聚合会话中 delegate（委派）与 plan（update_plan/规划）的进度，供底部复合浮层展示。
+ * 仅聚合这两类（不包含 TaskCreate/TaskUpdate 任务工具）。
+ */
+export function collectProgressTasks(messages: ChatMessage[]): ProgressTask[] {
+  const tasks = new Map<string, ProgressTask>();
+  for (const tool of sessionTools(messages)) {
+    if (tool.name === "delegate") {
+      const progress = delegateProgress(tool);
+      progress.tasks.forEach((item, index) => {
+        const id = `${tool.id}-${item.role}-${index}`;
+        const status: ProgressTaskStatus = item.status === "running"
+          ? "running"
+          : item.status === "failed" ? "failed" : item.status === "pending" ? "pending" : "completed";
+        tasks.set(id, {
+          id,
+          subject: item.task.replace(/\s+/g, " ").trim() || item.role,
+          status,
+          activeForm: item.live?.trim() ?? undefined,
+        });
+      });
+      continue;
+    }
+    if (/plan|todo/i.test(tool.name)) {
+      const planned = todosFromPlanTool(tool);
+      if (!planned) continue;
+      planned.forEach((todo, index) => {
+        const id = `${tool.id}-${todo.id ?? index}`;
+        if (tasks.has(id)) return;
+        tasks.set(id, {
+          id,
+          subject: todo.text.trim() || "任务",
+          status: todo.done ? "completed" : todo.active ? "running" : "pending",
+          activeForm: todo.active ? todo.text.trim() : undefined,
+        });
+      });
+    }
+  }
+  return [...tasks.values()];
+}
+
 function todosFromPlanTool(tool: ToolActivity): SessionTodo[] | undefined {
   if (!/plan/i.test(tool.name)) return undefined;
   const args = isRecord(tool.args) ? tool.args : {};

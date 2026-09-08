@@ -198,6 +198,16 @@
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
 }
+/* 隐藏滚动条但保留滚动功能（与 Proma-main scrollbar-none 对齐） */
+.scrollbar-none,
+.scrollbar-none > * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar,
+.scrollbar-none > *::-webkit-scrollbar {
+  display: none;
+}
 html,
 body,
 #root {
@@ -1369,7 +1379,7 @@ textarea::selection,
 }
 .messages {
   width: var(--col);
-  padding: 28px 28px var(--dock-clearance);
+  padding: 28px 28px 20px;
   margin: 0 auto;
 }
 .empty {
@@ -2359,10 +2369,13 @@ textarea::selection,
 .flow-header .flow-title { font-weight: 600; }
 .flow-header > svg, .flow-tool-line > svg { flex: none; }
 .flow-header time { margin-left: auto; white-space: nowrap; font-size: calc(11px * var(--ui-font-scale)); font-variant-numeric: tabular-nums; }
-.flow-title { flex: none; font-size: calc(13px * var(--ui-font-scale)); }
+.flow-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(13px * var(--ui-font-scale)); }
 .flow-count { white-space: nowrap; }
+.flow-tool-icons { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--ink-3); }
+.flow-tool-icon-more { font-size: calc(11px * var(--ui-font-scale)); font-variant-numeric: tabular-nums; }
 .flow-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-status.error { color: var(--red); }
+.flow-countdown { flex: none; white-space: nowrap; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); font-variant-numeric: tabular-nums; }
 .flow-header .rotated, .flow-tool-line .rotated { transform: rotate(90deg); }
 .flow-header svg, .flow-tool-line > svg:last-child { transition: transform 160ms ease; }
 .flow-collapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 240ms ease, opacity 180ms ease; }
@@ -2370,8 +2383,7 @@ textarea::selection,
 .flow-collapse-inner { min-height: 0; overflow: hidden; }
 .flow-viewport-wrap { position: relative; }
 .flow-viewport { min-width: 0; }
-.flow-viewport.bounded { max-height: min(320px, 45vh); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-.flow-viewport.bounded .flow-items { padding-right: 36px; }
+.flow-viewport.bounded { max-height: min(320px, 45vh); overflow-y: auto; overscroll-behavior: contain; }
 .flow-items { display: flex; flex-direction: column; gap: 12px; padding: 8px 2px 12px 0; }
 .flow-text { min-width: 0; overflow-wrap: anywhere; }
 .flow-items .flow-text { color: var(--ink-2); font-size: calc(14px * var(--chat-font-scale)); line-height: 1.65; }
@@ -2404,10 +2416,32 @@ textarea::selection,
 .flow-error > svg { flex: none; margin-top: 3px; }
 .flow-error.weak { color: var(--ink-3); }
 .flow-error .ghost { flex: none; margin-left: auto; }
-.flow-latest, .conversation-latest { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink-2); box-shadow: var(--shadow-hairline); }
-.flow-latest { position: absolute; right: 9px; bottom: 8px; }
+.conversation-latest { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink-2); box-shadow: var(--shadow-hairline); }
 .conversation-latest { position: absolute; right: 2px; width: 26px; height: 26px; bottom: calc(var(--dock-clearance, 160px) + 8px); z-index: 4; }
-.flow-latest:hover, .conversation-latest:hover { background: var(--hover); }
+.conversation-latest:hover { background: var(--hover); }
+/* 复合浮层：任务进度单条胶囊；无任务且不在底部时退化为独立回到底部箭头（对齐 Proma-main TaskProgressOverlay） */
+.progress-overlay { position: absolute; left: 50%; bottom: calc(var(--dock-clearance, 160px) + 8px); transform: translateX(-50%); display: flex; align-items: center; gap: 6px; z-index: 4; transition: opacity 200ms ease; }
+.progress-overlay.fading { opacity: 0; pointer-events: none; }
+.progress-overlay-trigger { display: flex; align-items: center; gap: 7px; max-width: min(460px, calc(100vw - 9rem)); min-height: 34px; padding: 4px 8px 4px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: color-mix(in srgb, var(--surface) 88%, transparent); box-shadow: var(--shadow-raised); color: var(--ink-2); font-size: calc(12.5px * var(--ui-font-scale)); cursor: pointer; backdrop-filter: blur(6px); }
+.progress-overlay-trigger:hover { background: var(--hover); }
+.progress-overlay-trigger > svg { flex: none; }
+.progress-overlay-count { flex: none; color: var(--ink-3); font-variant-numeric: tabular-nums; font-size: calc(11px * var(--ui-font-scale)); white-space: nowrap; }
+.progress-overlay-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress-overlay-status { flex: none; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); white-space: nowrap; }
+.progress-chevron, .progress-chevron-rotated { flex: none; color: var(--ink-3); transition: transform 160ms ease; }
+.progress-chevron-rotated { transform: rotate(90deg); }
+.progress-spinner { animation: flow-spin 1.1s linear infinite; color: var(--accent, var(--link)); }
+.progress-ok { color: var(--green, #2ec27e); }
+.progress-err { color: var(--red); }
+.progress-overlay-popover { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 2rem)); max-height: 300px; overflow-y: auto; padding: 8px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-overlay); }
+.progress-overlay-head { padding: 2px 6px 6px; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); font-weight: 600; }
+.progress-overlay-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.progress-task { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 6px; border-radius: 6px; color: var(--ink-2); }
+.progress-task:hover { background: var(--hover); }
+.progress-task.removed { opacity: 0.5; }
+.progress-task-glyph, .progress-task-glyph > svg { flex: none; }
+.progress-task-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12.5px * var(--ui-font-scale)); }
+.progress-task-status { margin-left: auto; flex: none; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); white-space: nowrap; }
 .flow-spinner { animation: flow-spin 1.1s linear infinite; }
 @keyframes flow-spin { to { transform: rotate(360deg); } }
 @media (max-width: 800px) {
@@ -3536,15 +3570,10 @@ textarea::selection,
 }
 
 .prompt-wrap {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 8;
-  padding: 0 24px 18px;
-  background: linear-gradient(to bottom, transparent 0%, var(--page) 55%);
-  pointer-events: none;
-  overflow: visible;
+  position: static;
+  width: 100%;
+  padding: 10px 24px 18px;
+  pointer-events: auto;
 }
 .prompt-wrap.hero {
   position: static;
@@ -3562,8 +3591,9 @@ textarea::selection,
   width: 100%;
 }
 .prompt-topbar {
-  background: var(--inset);
+  background: color-mix(in srgb, var(--inset) 82%, transparent);
   border-radius: 16px 16px 0 0;
+  backdrop-filter: blur(8px);
   padding: 6px 10px 14px 14px;
   margin-bottom: -10px;
   display: flex;
@@ -3644,9 +3674,11 @@ textarea::selection,
   width: 100%;
   margin: 0;
   padding: 12px 14px 8px;
-  background: var(--surface);
-  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 17px;
   box-shadow: var(--shadow-card);
+  backdrop-filter: blur(8px);
   pointer-events: auto;
   overflow: visible;
 }

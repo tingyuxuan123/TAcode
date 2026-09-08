@@ -68,7 +68,15 @@ export function useFollowScroll(scope: string, enabled = true) {
     const scroll = () => {
       currentTop.current = viewport.scrollTop;
       if (lastAssigned.current !== undefined && Math.abs(lastAssigned.current - viewport.scrollTop) < 1) return;
-      const bottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 32;
+      const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      let bottom;
+      if (following.current) {
+        // 正在跟随：仅在明显离开底部（超过较大阈值）时翻转，避免阈值边缘抖动。
+        bottom = distance <= 32;
+      } else {
+        // 已离开跟随：回到足够接近底部（较小阈值）才恢复跟随，形成滞回。
+        bottom = distance <= 16;
+      }
       following.current = bottom;
       setAtBottom(bottom);
       capture();

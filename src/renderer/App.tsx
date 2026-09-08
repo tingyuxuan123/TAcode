@@ -34,6 +34,7 @@ import {
   assistantGroupHasRecoverableError,
   assistantGroupSucceeded,
   assistantReplyText,
+  collectProgressTasks,
   groupConversation,
   recoverableFailStreaks,
   lastTurnRestoreFiles,
@@ -70,7 +71,7 @@ import {
 import { WorkbenchPanels } from "./browser/workbench-panels";
 import { useBrowserPanels } from "./browser/use-browser-panels";
 import { useSidebarLayout } from "./sidebar-layout";
-import { ArrowDown } from "lucide-react";
+import { ProgressOverlay } from "./progress-overlay";
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
 import logo from "./logo.svg";
@@ -531,6 +532,7 @@ export function App() {
   const workingFiles = useMemo(() => collectWorkingFiles(tools, mentionedFiles(messages)), [messages, tools]);
   const chatTodos = useMemo(() => collectTodos(messages), [messages]);
   const todos = chatTodos.length ? chatTodos : featureTodos;
+  const progressTasks = useMemo(() => collectProgressTasks(messages), [messages]);
   const planApproval = planAwaitingApproval(permission, running, todos);
   const darwin = window.harness.platform === "darwin";
   const connected = activeChatProvider(providers);
@@ -1656,7 +1658,7 @@ export function App() {
             </div>
           )}
         </div>
-        {!home && groups.length > 0 && !follow.atBottom && <button type="button" className="conversation-latest" title={t("flow.latest")} aria-label={t("flow.latest")} onClick={follow.followLatest}><ArrowDown size={17} /></button>}
+        {!home && groups.length > 0 && <ProgressOverlay tasks={progressTasks} streaming={running && !stopping} atBottom={follow.atBottom} onFollowLatest={follow.followLatest} />}
         {toast && (
           <button type="button" className="toast" onClick={() => setToast(undefined)}>
             <Icon path="M9 18h6M10 22h4M12 2a7 7 0 0 1 4 12c-.8.8-1 1.5-1 3H9c0-1.5-.2-2.2-1-3A7 7 0 0 1 12 2z" size={16} />

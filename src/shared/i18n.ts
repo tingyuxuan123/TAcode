@@ -230,6 +230,8 @@ const zh = {
   "context.jumpTurn": "跳转到某一轮对话",
 
   "flow.process": "执行过程",
+  "flow.summary": "执行过程：{tools} 次工具调用，{messages} 条消息",
+  "flow.collapseIn": "{n}s 后自动收起",
   "flow.toolCount": "{n} 次工具调用",
   "flow.running": "执行中",
   "flow.parallel": "{n} 项工具运行中",
@@ -244,6 +246,7 @@ const zh = {
   "flow.awaitingResult": "等待工具输出",
   "flow.noOutput": "无文本输出",
   "flow.stopping": "正在停止",
+  "task.doneLabel": "任务已完成",
   "think.live": "思考中…",
   "think.starting": "正在启动会话…",
   "think.waiting": "等待模型响应…",
@@ -855,6 +858,8 @@ const en: Record<MessageKey, string> = {
   "context.jumpTurn": "Jump to a turn",
 
   "flow.process": "Execution process",
+  "flow.summary": "Execution process: {tools} tool calls, {messages} messages",
+  "flow.collapseIn": "Collapse in {n}s",
   "flow.toolCount": "{n} tool calls",
   "flow.running": "Running",
   "flow.parallel": "{n} tools running",
@@ -869,6 +874,7 @@ const en: Record<MessageKey, string> = {
   "flow.awaitingResult": "Waiting for tool output",
   "flow.noOutput": "No text output",
   "flow.stopping": "Stopping",
+  "task.doneLabel": "Tasks complete",
   "think.live": "Thinking…",
   "think.starting": "Starting session…",
   "think.waiting": "Waiting for model…",
