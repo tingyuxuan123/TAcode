@@ -6101,3 +6101,594 @@ kbd {
     border-bottom: 1px solid var(--line);
   }
 }
+
+/* ===== Browser Panel (ported from Snow App, MIT) ===== */
+.inspect-body.flush {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.browser-detached-notice {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--ink-3);
+  font-size: calc(12.5px * var(--ui-font-scale));
+  text-align: center;
+}
+
+.browser-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--page);
+}
+
+.browser-toolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--page);
+}
+
+.browser-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+.browser-nav-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.browser-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.browser-address-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: var(--field);
+  border: 1px solid var(--line);
+}
+.browser-address-bar:focus-within {
+  border-color: var(--line-strong);
+  background: var(--surface);
+}
+.browser-address-icon {
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+.browser-address-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.browser-address-input::placeholder {
+  color: var(--ink-3);
+}
+
+.browser-screenshot-btn.is-success {
+  color: var(--green);
+}
+.browser-screenshot-btn.is-error {
+  color: var(--red);
+}
+.browser-downloads-btn.is-active {
+  background: var(--hover);
+  color: var(--ink);
+}
+.browser-downloads-badge {
+  position: absolute;
+  transform: translate(14px, -10px);
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.spin-icon {
+  animation: spin-icon-rotate 0.8s linear infinite;
+}
+@keyframes spin-icon-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ===== Browser Downloads Panel ===== */
+.browser-downloads-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 8px;
+  z-index: 40;
+  width: 300px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
+}
+.browser-downloads-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  font-size: calc(12px * var(--ui-font-scale));
+  font-weight: 600;
+}
+.browser-downloads-close {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.browser-downloads-close:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.browser-downloads-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 22px 10px;
+  color: var(--ink-3);
+  font-size: calc(12px * var(--ui-font-scale));
+}
+.browser-downloads-list {
+  overflow: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.browser-download-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+.browser-download-item:hover {
+  background: var(--hover);
+}
+.browser-download-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--field);
+  color: var(--ink-2);
+  flex-shrink: 0;
+}
+.browser-download-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.browser-download-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: calc(12px * var(--ui-font-scale));
+}
+.browser-download-progress {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--hover-2);
+  overflow: hidden;
+}
+.browser-download-progress-bar {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--brand);
+  transition: width 0.2s ease;
+}
+.browser-download-meta {
+  color: var(--ink-3);
+  font-size: calc(11px * var(--ui-font-scale));
+  font-variant-numeric: tabular-nums;
+}
+.browser-download-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.browser-download-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: calc(11px * var(--ui-font-scale));
+  cursor: pointer;
+}
+.browser-download-action:hover {
+  background: var(--hover-2);
+  color: var(--ink);
+}
+
+/* ===== Browser Tabs (inner webview tabs) ===== */
+.browser-tab-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 4px 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--page);
+}
+.browser-tab-bar::-webkit-scrollbar {
+  display: none;
+}
+.browser-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 180px;
+  min-width: 72px;
+  height: 24px;
+  padding: 0 6px 0 8px;
+  border-radius: 8px 8px 0 0;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: calc(11px * var(--ui-font-scale));
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.browser-tab:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.browser-tab.active {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.browser-tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.browser-tab-close:hover {
+  background: var(--hover-2);
+  color: var(--ink);
+}
+.browser-tab-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.browser-tab-new:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.browser-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background: var(--surface);
+}
+.browser-webview {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: flex;
+}
+.browser-webview.is-hidden {
+  display: none;
+}
+
+/* ===== Browser Menu ===== */
+.browser-menu-wrapper {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+.browser-menu-trigger.is-open {
+  background: var(--hover);
+  color: var(--ink);
+}
+.browser-menu-dropdown {
+  position: fixed;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
+  z-index: 9999;
+}
+.browser-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font-size: calc(12px * var(--ui-font-scale));
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s ease;
+}
+.browser-menu-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+.browser-menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.browser-menu-label {
+  flex: 1;
+}
+.browser-menu-zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  color: var(--ink-2);
+}
+.browser-menu-zoom-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.browser-menu-zoom-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.browser-menu-zoom-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.browser-menu-zoom-value {
+  min-width: 36px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: calc(11px * var(--ui-font-scale));
+  font-family: inherit;
+  text-align: center;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.browser-menu-zoom-value:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.browser-menu-zoom-value:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.browser-menu-chevron {
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+.browser-menu-submenu {
+  position: relative;
+}
+.browser-menu-submenu-trigger {
+  width: 100%;
+}
+.browser-menu-flyout {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  min-width: 128px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
+  z-index: 10000;
+}
+.browser-menu-homepage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  color: var(--ink-3);
+}
+.browser-menu-homepage-display {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: calc(11px * var(--ui-font-scale));
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.browser-menu-homepage-display:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.browser-menu-homepage-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--ink);
+  font-size: calc(11px * var(--ui-font-scale));
+  font-family: inherit;
+  outline: none;
+}
+.browser-menu-homepage-input:focus {
+  border-color: var(--line-strong);
+}
+
+/* ===== Browser Find Bar ===== */
+.browser-find-bar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+}
+.browser-find-input {
+  width: 160px;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: calc(12px * var(--ui-font-scale));
+  font-family: inherit;
+  padding: 2px 6px;
+}
+.browser-find-input::placeholder {
+  color: var(--ink-3);
+}
+.browser-find-count {
+  color: var(--ink-3);
+  font-size: calc(11px * var(--ui-font-scale));
+  padding: 0 4px;
+  min-width: 32px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.browser-find-count.is-empty {
+  color: var(--red);
+}
+.browser-find-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.browser-find-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.browser-find-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

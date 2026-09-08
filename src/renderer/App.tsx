@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type {
   AgentSessionStats,
   AgentSnapshot,
+  BrowserTabSnapshot,
   ExtensionUiRequest,
   PermissionMode,
   ProviderStatus,
@@ -67,6 +68,7 @@ import {
   TurnNav,
   UserTurn,
 } from "./ui";
+import { BrowserPanel } from "./browser/browser-panel";
 import { ArrowDown } from "lucide-react";
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
@@ -403,11 +405,29 @@ export function App() {
     const id = window.setTimeout(() => setToast(undefined), 5000);
     return () => window.clearTimeout(id);
   }, [toast]);
+  // 独立浏览器窗口迁移：还原广播重建面板（携带标签页快照），
+  // 独立窗口被直接关闭时回位到空白浏览器面板。
+  useEffect(() => {
+    const offRestore = window.harness.browser.onRestoreToMain((payload) => {
+      setBrowserDetached(false);
+      setBrowserRestore({ tabs: payload.tabs, key: Date.now() });
+      setPanelTab("browser");
+    });
+    const offClosed = window.harness.browser.onDetachedWindowClosed(() => {
+      setBrowserDetached(false);
+    });
+    return () => {
+      offRestore();
+      offClosed();
+    };
+  }, []);
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
   const [fullscreen, setFullscreen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FileChange>();
   const [panelTab, setPanelTab] = useState("inspect");
+  const [browserDetached, setBrowserDetached] = useState(false);
+  const [browserRestore, setBrowserRestore] = useState<{ tabs: BrowserTabSnapshot[]; key: number }>();
   const [featureTodos, setFeatureTodos] = useState<SessionTodo[]>([]);
   const [agentSkills, setAgentSkills] = useState<AgentSkillCommand[]>([]);
   const [stoppedJobs, setStoppedJobs] = useState<string[]>([]);
@@ -1440,12 +1460,32 @@ export function App() {
         nav={<TurnNav items={anchors} />}
         inspect={workspace ? (
           <PanelTabs
-            tabs={[{ id: "inspect", label: t("inspect.title") }]}
+            tabs={[
+              { id: "inspect", label: t("inspect.title") },
+              { id: "browser", label: t("browser.tab") },
+            ]}
             active={panelTab}
             onSelect={setPanelTab}
-            onAdd={() => setToast(t("inspect.addTabSoon"))}
+            flush={panelTab === "browser"}
           >
-            <InspectPanel
+            {panelTab === "browser" ? (
+              browserDetached ? (
+                <div className="browser-detached-notice">{t("browser.detachedNotice")}</div>
+              ) : (
+                <BrowserPanel
+                  key={browserRestore?.key ?? "main"}
+                  instanceId="main"
+                  initialUrl=""
+                  isActive
+                  initialTabs={browserRestore?.tabs}
+                  onOpenDetached={(url, tabs) => {
+                    void window.harness.browser.openDetachedWindow("main", url, tabs);
+                    setBrowserDetached(true);
+                  }}
+                />
+              )
+            ) : (
+              <InspectPanel
               files={workingFiles}
               todos={todos}
               terminals={terminals}
@@ -1474,6 +1514,7 @@ export function App() {
                 });
               }}
             />
+            )}
           </PanelTabs>
         ) : undefined}
       >

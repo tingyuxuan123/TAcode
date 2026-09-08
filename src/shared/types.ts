@@ -236,6 +236,60 @@ export interface DesktopApi {
     discover(input: ProviderConnection): Promise<string[]>;
     testConnection(input: ProviderConnection & { modelId: string }): Promise<{ ok: boolean; message: string }>;
   };
+  /** Built-in browser (webview) panel: navigation events, downloads, data and window management. */
+  browser: {
+    /** Absolute path of the guest preload used by <webview preload>. */
+    readonly webviewPreloadPath: string;
+    /** A link/open request from a guest page should become a new in-panel tab. */
+    onOpenTab(listener: (event: BrowserOpenTabEvent) => void): () => void;
+    listDownloads(): Promise<BrowserDownloadItem[]>;
+    onDownloadsUpdated(listener: (items: BrowserDownloadItem[]) => void): () => void;
+    openDownload(id: number): Promise<boolean>;
+    showDownloadInFolder(id: number): Promise<void>;
+    cancelDownload(id: number): Promise<boolean>;
+    clearCache(): Promise<void>;
+    clearCookies(): Promise<void>;
+    openDevTools(webContentsId: number): Promise<void>;
+    /** Write a data:image/* URL (page screenshot) to the system clipboard. */
+    writeImage(dataUrl: string): Promise<void>;
+    /** Pop the browser instance out into a standalone window (tabs: active first). */
+    openDetachedWindow(instanceId: string, url: string, tabs?: BrowserTabSnapshot[]): Promise<void>;
+    /** Detached-window mode: restore this instance back into the main window panel. */
+    restoreToMain(payload: BrowserRestorePayload): void;
+    /** Main window: a detached instance is being restored back into the panel. */
+    onRestoreToMain(listener: (payload: BrowserRestorePayload) => void): () => void;
+    /** Main window: a detached browser window was closed without restoring. */
+    onDetachedWindowClosed(listener: () => void): () => void;
+  };
+}
+
+export interface BrowserTabSnapshot {
+  url: string;
+  title: string;
+}
+
+export interface BrowserOpenTabEvent {
+  guestWebContentsId: number;
+  url: string;
+  /** Electron WindowOpenDisposition, e.g. foreground-tab / background-tab. */
+  disposition: string;
+}
+
+export interface BrowserDownloadItem {
+  id: number;
+  url: string;
+  filename: string;
+  path: string;
+  state: "progressing" | "completed" | "cancelled" | "interrupted";
+  receivedBytes: number;
+  totalBytes: number;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+export interface BrowserRestorePayload {
+  instanceId: string;
+  tabs: BrowserTabSnapshot[];
 }
 
 export interface ProviderConnection {

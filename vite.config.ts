@@ -13,6 +13,12 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        "browser-window": "browser-window.html",
+      },
+    },
   },
   test: {
     include: ["src/**/*.test.ts"],

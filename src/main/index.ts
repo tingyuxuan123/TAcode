@@ -33,6 +33,9 @@ import {
   type SupportedProviderId,
 } from "tether-agent-core";
 import { AgentHost } from "./agent-host";
+import { closeAllBrowserPopups } from "./browser/popups";
+import { closeAllDetachedBrowserWindows } from "./browser/windows";
+import { registerBrowserIpc } from "./browser/ipc";
 import { isPathInsideRoot } from "./workspace-path";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { apiBaseUrl, listModels } from "../shared/openai-models";
@@ -248,6 +251,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webviewTag: true,
     },
   });
 
@@ -270,6 +274,10 @@ function createWindow(): void {
   mainWindow.webContents.on("did-finish-load", reportFullscreen);
   mainWindow.on("closed", () => {
     mainWindow = undefined;
+    // Close browser popups and detached browser windows so they don't outlive the shell
+    // (macOS keeps the app alive after the window closes).
+    closeAllBrowserPopups();
+    closeAllDetachedBrowserWindows();
     // macOS keeps the app alive after the window closes; still reap the RPC tree
     // so sandbox shells don't keep burning RAM in the background.
     void agentHost?.stop();
@@ -1320,6 +1328,7 @@ app.whenReady().then(async () => {
   await loadLocale();
   protocol.handle(PREVIEW_SCHEME, servePreview);
   registerIpc();
+  registerBrowserIpc(() => mainWindow);
   installMenu();
   if (process.platform === "darwin") applyDockIcon();
   createWindow();
@@ -1340,6 +1349,8 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   quitting = true;
   workspaceWatcher?.close();
+  closeAllBrowserPopups();
+  closeAllDetachedBrowserWindows();
   void Promise.resolve(agentHost?.stop())
     .catch(() => undefined)
     .finally(() => app.exit(0));

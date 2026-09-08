@@ -12,7 +12,7 @@ export default defineConfig([
     outExtension: () => ({ js: ".mjs" }),
   },
   {
-    entry: { "preload/index": "src/preload/index.ts" },
+    entry: { "preload/index": "src/preload/index.ts", "preload/webview-browser": "src/preload/webview-browser.ts" },
     format: ["cjs"],
     platform: "node",
     outDir: "dist-electron",

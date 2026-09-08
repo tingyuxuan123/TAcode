@@ -83,6 +83,29 @@ const api: DesktopApi = {
     discover: (input) => ipcRenderer.invoke("providers:discover", input),
     testConnection: (input) => ipcRenderer.invoke("providers:test-connection", input),
   },
+  browser: {
+    // Bundled by tsup next to this file: dist-electron/preload/webview-browser.cjs.
+    webviewPreloadPath: `${__dirname}/webview-browser.cjs`,
+    onOpenTab: (listener) =>
+      subscribe("browser:open-tab", listener),
+    listDownloads: () => ipcRenderer.invoke("browser:downloads-list"),
+    onDownloadsUpdated: (listener) =>
+      subscribe("browser:downloads-updated", listener),
+    openDownload: (id) => ipcRenderer.invoke("browser:download-open", id),
+    showDownloadInFolder: (id) => ipcRenderer.invoke("browser:download-show-in-folder", id),
+    cancelDownload: (id) => ipcRenderer.invoke("browser:download-cancel", id),
+    clearCache: () => ipcRenderer.invoke("browser:clear-cache"),
+    clearCookies: () => ipcRenderer.invoke("browser:clear-cookies"),
+    openDevTools: (webContentsId) => ipcRenderer.invoke("browser:open-devtools", webContentsId),
+    writeImage: (dataUrl) => ipcRenderer.invoke("browser:write-image", dataUrl),
+    openDetachedWindow: (instanceId, url, tabs) =>
+      ipcRenderer.invoke("browser:open-detached-window", instanceId, url, tabs),
+    restoreToMain: (payload) => ipcRenderer.send("browser:restore-to-main", payload),
+    onRestoreToMain: (listener) =>
+      subscribe("browser:restore-to-main-broadcast", listener),
+    onDetachedWindowClosed: (listener) =>
+      subscribe("browser:detached-window-closed", listener),
+  },
 };
 
 contextBridge.exposeInMainWorld("harness", api);

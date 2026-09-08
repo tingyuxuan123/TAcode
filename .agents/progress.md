@@ -96,3 +96,12 @@
 - 16 项新增 typography 单测通过；类型检查、`pnpm build:renderer`、`git diff --check` 通过。全量 `pnpm test` 仍为 246/247，唯一失败为修改前已存在的 `conversation.test.ts:308` 识图标题断言，未改动该测试。
 - 隔离 IPC fixture 加载真实 App 完成浏览器验收：切换代码字体为 Menlo 后代码块计算字体跟随（`code` 由 monospace 变为 Menlo 栈）、代码字号步进即时生效、重载后从 localStorage 恢复（menlo / 13px）、无运行时错误；截图确认三区块布局与窄窗口。未读取真实凭据、未请求云端模型。
 - 预览工具对相同 URL 有资源缓存，旧 CSS 在旧标签残留属工具现象；源码与生产构建产物均已确认包含 `font-family: inherit` 修复。未提交、未发布、未改 AGENTS.md。
+
+## 内置浏览器移植（Snow App → Tether，2026-09-08）
+
+- 范围确认：Snow 全量浏览器功能；两仓库 MIT。分层：A 核心浏览器 / B 独立窗口 / C 凭据与登录态 / D 调试与代理 / E Agent 浏览器工具。
+- Layer A 完成：主窗口 `webviewTag`，`src/main/browser/{popups,downloads,ipc}.ts`（弹窗分流 + guest `_blank` 中继去重、will-download 保存对话框与下载面板、clear cache/cookies、DevTools、截图写剪贴板）；`src/preload/webview-browser.cjs` guest 入口（tsup 多入口）；`DesktopApi.browser` 契约；渲染端 `src/renderer/browser/*`（多标签 webview、地址/搜索、页内查找、缩放、下载、截图、菜单、首页 localStorage）；接入右侧面板 PanelTabs（浏览器标签，flush 布局）。
+- Layer B 完成：`browser-window.html` 独立入口（vite 多入口），`windows.ts` 独立窗口（query 携带 instanceId/URL/tabs 快照），「在新窗口中打开 / 还原为标签页 / 独立窗口关闭回位」全链路（restore-to-main、detached-window-closed 广播）。
+- i18n：`browser.*` 中英文案并入 `src/shared/i18n.ts`；PanelTabs 新增 flush 形态。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 254 例中 253 过（`conversation.test.ts:308` 识图标题为存量失败，干净树复现，与移植无关）；`pnpm build` 通过，产物含 webview-browser.cjs 与 browser-window.html。
+- Layer C/D/E 未开始：C 需用 safeStorage+node:crypto 重写密码保险库与登录态归档（导入功能 Rust-only，计划按平台降级）；D 含网络记录/路由 mock/CDP 白名单/右键菜单/代理；E 为 Pi extension + 本地桥 + 渲染端执行器（browserMcpOperations 移植）。计划文档在会话工作台 plan/snow-browser-port.md。

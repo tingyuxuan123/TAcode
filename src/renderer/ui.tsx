@@ -1166,12 +1166,15 @@ export function PanelTabs({
   active,
   onSelect,
   onAdd,
+  flush = false,
   children,
 }: {
   tabs: PanelTab[];
   active: string;
   onSelect(id: string): void;
   onAdd?(): void;
+  /** No padding/scroll body — for full-bleed panes like the browser. */
+  flush?: boolean;
   children: ReactNode;
 }) {
   const { t } = useI18n();
@@ -1202,7 +1205,7 @@ export function PanelTabs({
           </button>
         )}
       </div>
-      <div className="inspect-body">{children}</div>
+      <div className={flush ? "inspect-body flush" : "inspect-body"}>{children}</div>
     </div>
   );
 }
