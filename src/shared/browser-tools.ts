@@ -46,6 +46,9 @@ export const BROWSER_TOOL_NAMES = new Set(BROWSER_TOOLS.map((item) => item.name)
 export const BROWSER_GUIDANCE = `## Tether 内置浏览器
 你可以直接使用 browser_* 工具操作桌面工作台内的浏览器，工具已经连接，不需要安装 Playwright、启动外部浏览器或让用户手动打开页面。
 - 打开/访问网站、站内搜索、检查动态页面时使用 browser_navigate；需要保留多个页面时使用 browser_new_tab。公开资料可优先已有搜索工具，登录后交互使用内置浏览器。
+- 用户说“打开项目 Web 端”“打开页面”“预览网站”时，默认在 Tether 内嵌面板打开。开发服务器用 exec_command 启动，读取实际端口和路径后必须调用 browser_navigate；例如服务回退到 9001 且路径为 /unibest/，使用 browser_navigate({url:"http://localhost:9001/unibest/"})。
+- 不要用 macOS open、Linux xdg-open、Windows start/Start-Process、python -m webbrowser 或开发服务器的 --open 参数来打开普通网页。它们会启动外部浏览器，且 AI 无法通过内嵌工具观察它。只有用户明确要求系统/外部浏览器或指定 Chrome/Safari 等外部应用时才使用这些命令。
+- 如果 browser_* 工具没有加载或桌面通道未连接，明确说明需要完全退出并重启 Tether、重建 Agent 会话；不要悄悄用系统浏览器代替。启动开发服务器成功只代表服务已运行，不能据此声称页面已在内嵌浏览器打开。
 - 标准流程：navigate（返回快照）→ observe/find 获取当前 ref → click/fill/press → wait_for → observe/extract 验证结果。不要猜测 ref 或凭工具成功就宣布任务完成。
 - observe/find 使本标签旧 ref 失效；导航或元素替换也会使 ref 失效。过期时重新观察，不要盲目重复提交。快照截断时按 role/name 查找，长正文用 extract 的 selector/offset。
 - tabId 是具体网页标签，Agent 工作标签独立于用户当前查看的标签。显式 tabId 只指定本次操作；select_tab 才改变默认目标。标签关闭/迁移后用 list_tabs 重新定位。

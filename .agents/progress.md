@@ -123,3 +123,12 @@
 - 验证：`pnpm typecheck`、完整构建、真实 Electron BrowserPanel 本地页面 smoke、`git diff --check` 通过；真实 Agent RPC + 本地模型 fixture 验证工具可见性及 IPC 回环。新增 25 项浏览器相关单测全部通过；全量 278/279，唯一失败仍为 `conversation.test.ts:308` 既有识图标题断言。
 - 生效方式：重启 Tether 并重新启动 Agent 会话。未操作真实账号、未请求云端模型，未重启用户当前进程，未提交/发布。保留同期 UI 菜单/样式改动；AGENTS.md 未修改。详细证据在会话工作台 `3d29745f-5635-4f1b-96ca-3a1165dc7f29/verification.md`。
 - Layer D 网络/代理、Layer C 管理 UI/归档，以及文件上传/任意 JS 等未在本次实现；跨窗口迁移会重建 guest，需重新列出标签。
+
+
+## 2026-09-08：修正默认外部打开（11:03，Asia/Shanghai）
+
+- 用户截图显示“打开项目 web 端”后 Agent 执行 `open http://localhost:9001/unibest/`。只读核验当前 RPC worker 参数，仍仅加载 vision/provider，没有 browser.js；运行中的旧 Electron 主进程尚未更新，因此新建对话也无法获得上一轮浏览器工具。必须完全退出并重启 Tether，再启动 Agent 会话。
+- 新增 `src/extensions/browser-routing.ts` 与 tool_call guard：普通网页请求阻止常见系统 open/xdg-open/start/Start-Process/python webbrowser 及开发服务 --open，返回改用 browser_navigate 的具体提示；明确外部浏览器请求保留，文件打开/服务启动/文档字符串不误拦。该检测用于路由常见命令，不是完整 shell 安全解析器。
+- 浏览器提示词明确区分“启动开发服务器”与“在内嵌面板打开真实端口/路径”，并禁止缺失工具时悄悄回退外部浏览器。双语 README 强调完全重启与仅刷新/新建对话的区别。
+- 验证：33 项命令路由测试和 2 项真实 RPC 测试通过；后者用不会启动真实浏览器的临时 open fixture，确认外部命令被阻止并能改用 browser_navigate。类型检查、构建、diff 检查通过。全量 312/313，唯一失败仍是既有 conversation.test.ts:308 识图标题断言。
+- 未重启或终止用户正在运行的 Tether/Agent 进程；本次修复将在应用完全重启后加载。日志在本会话工作台 browser-routing-build.txt / browser-routing-tests.txt。

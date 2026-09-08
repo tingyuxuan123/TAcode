@@ -92,7 +92,9 @@ The tools provide accessibility snapshots with element references, semantic look
 
 Existing Runtime permissions still apply: Ask mode requests approval, and Plan mode currently blocks browser tools. Final actions such as sending, publishing, or purchasing require user authorization. Navigation accepts HTTP(S), local development servers, and `about:blank`; serve local files through a development server.
 
-After changing the desktop host or extension, restart Tether and start/restart the Agent session. Run `pnpm test:browser` for an isolated Electron smoke test against local fixture pages, without accessing real accounts or a cloud model.
+Opening a project web app defaults to the embedded browser. Start the development server without `--open`, then navigate to its actual URL with `browser_navigate`. Common system browser launchers are blocked unless the user explicitly requests an external browser.
+
+After changing the desktop host or extension, fully quit and relaunch Tether, then start/restart the Agent session. Refreshing the UI or creating a new conversation does not update an already running desktop host. Run `pnpm test:browser` for an isolated Electron smoke test against local fixture pages, without accessing real accounts or a cloud model.
 
 ## Permission modes
 

@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { visibleUserText } from "../shared/vision-api";
+import { browserRoutingBlock } from "./browser-routing";
 import { BROWSER_GUIDANCE, BROWSER_TOOLS, validateBrowserParams, type BrowserParams, type BrowserResponse, type BrowserToolResult } from "../shared/browser-tools";
 
 interface ExtensionAPI {
   registerTool(tool: Record<string, unknown>): void;
   getActiveTools(): string[];
   setActiveTools(names: string[]): void;
-  on(event: string, handler: (event: { systemPrompt?: string }) => unknown): void;
+  on(event: string, handler: (event: { systemPrompt?: string; prompt?: string; toolName?: string; input?: { cmd?: string; command?: string } }) => unknown): void;
 }
 
 /** Private Node IPC, inherited only by the desktop Agent worker; no HTTP port or credential file. */
@@ -46,6 +48,8 @@ export function requestBrowser(tool: string, params: BrowserParams, signal?: Abo
 export default function browserExtension(pi: ExtensionAPI) {
   // CLI/delegate workers without a desktop IPC channel must not advertise unusable tools.
   if (!process.send) return;
+  let currentPrompt = "";
+  pi.on("tool_call", (event) => browserRoutingBlock(event.toolName, event.input, currentPrompt));
   for (const definition of BROWSER_TOOLS) {
     pi.registerTool({
       ...definition,
@@ -61,6 +65,7 @@ export default function browserExtension(pi: ExtensionAPI) {
   const activate = () => pi.setActiveTools([...new Set([...pi.getActiveTools(), ...BROWSER_TOOLS.map((tool) => tool.name)])]);
   pi.on("session_start", activate);
   pi.on("before_agent_start", (event) => {
+    currentPrompt = visibleUserText(event.prompt ?? "");
     activate();
     return { systemPrompt: `${(event.systemPrompt ?? "").replace(BROWSER_GUIDANCE, "").trimEnd()}\n\n${BROWSER_GUIDANCE}` };
   });
