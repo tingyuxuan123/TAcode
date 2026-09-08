@@ -19,6 +19,9 @@
   --green-tint: #e7f3eb;
   --red: #c4473a;
   --red-tint: #f8ecea;
+  /* 代码屏（CodeBlock 代码区）：固定深色，亮暗界面一致，配 Shiki one-dark-pro。 */
+  --code-screen: #282c34;
+  --code-screen-ink: #d7dae0;
   /* Chat markdown palette — one set per theme, tuned for contrast on --page. */
   --md-link: #8f4f26;
   --md-table-line: #ddd5c5;
@@ -2187,6 +2190,42 @@ textarea::selection,
   margin: 0 0.1em;
   border-radius: 5px;
 }
+/* 文件路径 chip：文件图标 + 文件名，与普通强调 code 区分。 */
+.markdown .file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  vertical-align: baseline;
+  font-family: var(--mono);
+  font-size: 0.85em;
+  line-height: 1.3;
+  color: var(--md-code-ink);
+  background: var(--surface);
+  padding: 0.12em 0.5em 0.12em 0.32em;
+  margin: 0 0.1em;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 1px 2px #1c19170a;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.markdown .file-chip:hover {
+  border-color: var(--line-strong);
+  background: var(--inset);
+}
+.markdown .file-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.markdown .file-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .markdown pre code {
   padding: 0;
   margin: 0;
@@ -2217,7 +2256,7 @@ textarea::selection,
   overflow: hidden;
   border: 1px solid var(--line);
   box-shadow: var(--shadow-hairline);
-  background: var(--md-pre-bg);
+  background: var(--code-screen);
 }
 .code-block-bar {
   display: flex;
@@ -2232,10 +2271,9 @@ textarea::selection,
   font-size: calc(11.5px * var(--ui-font-scale));
 }
 .code-block-lang {
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: 0.01em;
   color: var(--ink-2);
-  text-transform: capitalize;
 }
 .code-block-copy {
   display: inline-flex;
@@ -2256,6 +2294,7 @@ textarea::selection,
   border: 0;
   box-shadow: none;
   background: transparent;
+  color: var(--code-screen-ink);
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

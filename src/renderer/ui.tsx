@@ -29,6 +29,8 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import { CodeBlock, HighlightedFileCode } from "./codeblock";
+import { FilePathChip } from "./file-path-chip";
+import { isFilePath } from "./file-path";
 import { highlightToTokens, isHighlighterReady, onHighlighterReady } from "./shiki";
 
 const MAX_UPLOAD_IMAGES = 4;
@@ -1104,17 +1106,7 @@ function copyMarkdownPlain(event: { preventDefault(): void; clipboardData: DataT
   event.clipboardData?.setData("text/plain", selected);
 }
 
-function useAppTheme(): string {
-  const subscribe = useCallback((notify: () => void) => {
-    const observer = new MutationObserver(notify);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    return () => observer.disconnect();
-  }, []);
-  return useSyncExternalStore(subscribe, () => document.documentElement.dataset.theme ?? "paper", () => "paper");
-}
-
 function Markdown({ children, streaming }: { children: string; streaming?: boolean }) {
-  const theme = useAppTheme();
   const source = compactFencedCode(
     stripEmptyMarkdown(repairMarkdownTables(streaming ? closeOpenFences(children) : children)),
   );
@@ -1127,12 +1119,16 @@ function Markdown({ children, streaming }: { children: string; streaming?: boole
         pre({ children }) {
           const plain = extractNodeText(children).trim();
           if (!plain) return null;
-          return <CodeBlock theme={theme}>{children}</CodeBlock>;
+          return <CodeBlock>{children}</CodeBlock>;
         },
         code({ children, className, ...props }) {
+          // 块级代码（带 language- 前缀）：交给 pre → CodeBlock 渲染，这里不再处理。
+          if (className) return <code className={className} {...props}>{children}</code>;
           const plain = extractNodeText(children).trim();
-          if (!plain && !className) return null;
-          return <code className={className} {...props}>{children}</code>;
+          if (!plain) return null;
+          // 行内 code 若是文件路径，渲染成可点击的文件 chip。
+          if (isFilePath(plain)) return <FilePathChip filePath={plain} />;
+          return <code {...props}>{children}</code>;
         },
       }}
     >

@@ -8,22 +8,23 @@ import { tokenizeCode, type CodeToken } from "./highlight";
  * CodeBlock — 块级代码组件。
  *
  * react-markdown 的 `pre` 自定义渲染入口。用 Shiki `highlightToTokens` 逐行渲染，
- * 未就绪时降级到同步的 `tokenizeCode`，流式输出不阻塞。
+ * 高亮器未就绪时按纯文本渲染（继承深底浅字），流式输出不阻塞。
  *
- * 结构：
+ * 结构（亮暗界面一致：浅色头部栏 + 深色代码屏）：
  * ┌────────────────────────────────────────────┐
- * │ [language]                        [📋 复制] │  ← 头部栏
+ * │ [语言名]                          [📋 复制] │  ← 头部栏（--inset）
  * ├────────────────────────────────────────────┤
- * │  Shiki token 逐行渲染                         │
+ * │  Shiki token 逐行渲染（one-dark-pro）        │  ← 代码区（--code-screen）
  * └────────────────────────────────────────────┘
  */
 
 const THROTTLE_MS = 80;
 
+/** 代码区固定深色高亮（one-dark-pro），不随界面主题切换，与 --code-screen 配套。 */
+const CODE_APP_THEME = "dark";
+
 interface CodeBlockProps {
   children: ReactNode;
-  /** 父容器带上当前主题值（'dark' | 其他 → light）。 */
-  theme?: string;
   /** 最大高度（px），超出滚动；默认 280。 */
   maxHeight?: number;
   className?: string;
@@ -84,41 +85,32 @@ const FallbackLines = memo(function FallbackLines({ tokens }: { tokens: CodeToke
   );
 });
 
-export function CodeBlock({ children, theme, maxHeight = 280, className }: CodeBlockProps) {
+export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockProps) {
   const { t } = useI18n();
   const { language, code } = useMemo(() => extractCodeInfo(children), [children]);
   const trimmed = code.replace(/\n$/, "");
   const langOrText = language || "text";
   const rawLines = useMemo(() => trimmed.split("\n"), [trimmed]);
-  // tokenizeCode 降级：一次扫描整段，得到按行 token（未就绪时用）。
-  const fallbackLines = useMemo(() => tokenizeCode(trimmed, ""), [trimmed]);
 
   const [tokenResult, setTokenResult] = useState<HighlightTokensResult | null>(() =>
-    isHighlighterReady() ? highlightToTokens(trimmed, langOrText, theme) : null);
-  const [ready, setReady] = useState(isHighlighterReady());
+    highlightToTokens(trimmed, langOrText, CODE_APP_THEME));
   const [copied, setCopied] = useState(false);
 
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastUpdateRef = useRef(Date.now());
 
-  // 高亮器就绪后：重跑一次 token（覆盖初始兜底），并置 ready 以切到 Shiki 渲染。
+  // 高亮器未就绪（tokenResult 为 null）：订阅就绪事件，首次出 token。
+  // 未就绪期间 ShikiLines 收到空 token，按纯文本渲染，颜色继承 --code-screen-ink。
   useEffect(() => {
-    if (ready) return;
-    setReady(isHighlighterReady());
-    if (!isHighlighterReady()) {
-      return onHighlighterReady(() => {
-        setReady(true);
-        setTokenResult(highlightToTokens(trimmed, langOrText, theme));
-      });
-    }
-    return undefined;
-  }, [ready, trimmed, langOrText, theme]);
+    if (tokenResult) return;
+    return onHighlighterReady(() =>
+      setTokenResult(highlightToTokens(trimmed, langOrText, CODE_APP_THEME)));
+  }, [tokenResult, trimmed, langOrText]);
 
   // 节流刷新：流式输出时重算 token。
   useEffect(() => {
-    if (!ready) return;
     const now = Date.now();
-    const sync = highlightToTokens(trimmed, langOrText, theme);
+    const sync = highlightToTokens(trimmed, langOrText, CODE_APP_THEME);
     if (!sync) return;
     const elapsed = now - lastUpdateRef.current;
     if (elapsed >= THROTTLE_MS) {
@@ -128,11 +120,11 @@ export function CodeBlock({ children, theme, maxHeight = 280, className }: CodeB
       timeoutRef.current = setTimeout(() => {
         timeoutRef.current = null;
         lastUpdateRef.current = Date.now();
-        const latest = highlightToTokens(trimmed, langOrText, theme);
+        const latest = highlightToTokens(trimmed, langOrText, CODE_APP_THEME);
         if (latest) setTokenResult(latest);
       }, THROTTLE_MS - elapsed);
     }
-  }, [trimmed, langOrText, theme, ready]);
+  }, [trimmed, langOrText]);
 
   useEffect(() => () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); }, []);
 
@@ -149,7 +141,7 @@ export function CodeBlock({ children, theme, maxHeight = 280, className }: CodeB
   return (
     <div className="code-block-wrapper">
       <div className="code-block-bar">
-        <span className="code-block-lang">{getDisplayName(language)}</span>
+        <span className="code-block-lang">{language ? getDisplayName(language) : t("codeblock.untitled")}</span>
         <button type="button" className="code-block-copy" onClick={handleCopy} aria-label={t("common.copy")}>
           {copied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
           <span>{copied ? t("common.copied") : t("common.copy")}</span>
@@ -162,9 +154,7 @@ export function CodeBlock({ children, theme, maxHeight = 280, className }: CodeB
         <code>
           {rawLines.map((rawLine, index) => (
             <span key={index} className="code-line-plain">
-              {ready && tokenResult
-                ? <ShikiLines tokens={tokenResult.lines[index] ?? []} rawLine={rawLine} />
-                : <FallbackLines tokens={fallbackLines[index] ?? []} />}
+              <ShikiLines tokens={tokenResult?.lines[index] ?? []} rawLine={rawLine} />
               {index < rawLines.length - 1 && "\n"}
             </span>
           ))}

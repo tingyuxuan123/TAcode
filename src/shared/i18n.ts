@@ -42,6 +42,7 @@ const zh = {
 
   "common.copy": "复制",
   "common.copied": "已复制",
+  "codeblock.untitled": "代码",
   "common.close": "关闭",
   "common.cancel": "取消",
   "common.continue": "继续",
@@ -651,6 +652,7 @@ const en: Record<MessageKey, string> = {
 
   "common.copy": "Copy",
   "common.copied": "Copied",
+  "codeblock.untitled": "Code",
   "common.close": "Close",
   "common.cancel": "Cancel",
   "common.continue": "Continue",

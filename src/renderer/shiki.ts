@@ -68,7 +68,7 @@ const DISPLAY_NAMES: Record<string, string> = {
 };
 
 export function getDisplayName(lang: string): string {
-  if (!lang) return "Code";
+  if (!lang) return "";
   const key = lang.toLowerCase();
   return DISPLAY_NAMES[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
 }
