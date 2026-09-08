@@ -17,13 +17,14 @@ export type BrowserPanelProps = {
    * 独立窗口模式经由主进程 query 携带快照迁移实例。
    */
   onTabsChange?: (tabs: BrowserTabSnapshot[]) => void;
-  /** 独立浏览器窗口模式：工具栏菜单显示「还原为标签页」。 */
-  detached?: boolean;
   /** 独立窗口「还原为标签页」时携带的快照（激活页置首），优先于 initialUrl。 */
   initialTabs?: BrowserTabSnapshot[];
   /** 主面板专属：把当前实例弹出为独立窗口（undefined 时菜单不显示该项）。 */
   onOpenDetached?: (url: string, tabs: BrowserTabSnapshot[]) => void;
-};
+} & (
+  | { detached: true; onOpenTab?: never; onClose?: never }
+  | { detached?: false; onOpenTab(url: string, activate: boolean): void; onClose(): void }
+);
 
 /**
  * Navigation error codes that are expected during normal browsing and should
@@ -37,6 +38,8 @@ type BrowserWebviewTab = {
   id: string;
   /** 当前加载的 URL，驱动 <webview src>（仅在显式导航时更新）。 */
   src: string;
+  /** 实际页面 URL，与地址栏编辑草稿、显式导航的 src 分开保存。 */
+  url: string;
   /** 地址栏显示值（跟随页面内导航实时更新）。 */
   addressInput: string;
   title: string;
@@ -48,6 +51,7 @@ type BrowserWebviewTab = {
 const createWebviewTab = (url: string): BrowserWebviewTab => ({
   id: `browser-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   src: url,
+  url,
   addressInput: url,
   title: "",
   canGoBack: false,
@@ -57,11 +61,10 @@ const createWebviewTab = (url: string): BrowserWebviewTab => ({
 
 /**
  * 浏览器面板（移植自 Snow App（MIT）BrowserPanelContent.tsx）：
- * 一个实例内部包含多个标签页，每个标签页对应一个独立 <webview>（独立的
- * 历史 / 前进后退 / 缩放，对齐 Chrome 行为）；切换标签页只切换显示与焦点，
- * 各 webview 保持挂载以保留页面状态。guest 内的标签页级打开请求经主进程
- * browser:open-tab 通知在此新建标签页；窗口级弹出（OAuth 等）由主进程
- * 创建真实窗口。
+ * 主面板中每个实例只承载一个网页，标签由顶部工作区统一管理；独立窗口
+ * 内部保留多个标签页。各 webview 保持挂载以保留历史、表单和滚动状态。
+ * guest 内的标签页级打开请求经 browser:open-tab 路由到对应标签栏；
+ * 窗口级弹出（OAuth 等）由主进程创建真实窗口。
  *
  * Agent 操作由主进程 CDP 控制器执行；本面板登记 guest 并处理标签展示。
  * homepage 存 localStorage 而非设置数据库。
@@ -74,8 +77,12 @@ export const BrowserPanel = ({
   detached = false,
   initialTabs,
   onOpenDetached,
+  onOpenTab,
+  onClose,
 }: BrowserPanelProps): React.JSX.Element => {
   const { t } = useI18n();
+  const panelCallbacks = useRef({ onOpenTab, onClose });
+  panelCallbacks.current = { onOpenTab, onClose };
   const onTabsChangeRef = useRef(onTabsChange);
   onTabsChangeRef.current = onTabsChange;
   const isActiveRef = useRef(isActive);
@@ -88,7 +95,7 @@ export const BrowserPanel = ({
     `browser-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   );
   const [webviewTabs, setWebviewTabs] = useState<BrowserWebviewTab[]>(() => {
-    const snapshotTabs = initialTabs?.filter((tab) => tab.url.trim());
+    const snapshotTabs = (detached ? initialTabs : initialTabs?.slice(0, 1))?.filter((tab) => tab.url.trim());
     if (snapshotTabs && snapshotTabs.length > 0) {
       return snapshotTabs.map((tab, index) => ({
         id:
@@ -96,6 +103,7 @@ export const BrowserPanel = ({
             ? initialTabIdRef.current
             : `browser-tab-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
         src: tab.url,
+        url: tab.url,
         addressInput: tab.url,
         title: tab.title ?? "",
         canGoBack: false,
@@ -112,6 +120,7 @@ export const BrowserPanel = ({
       {
         id: initialTabIdRef.current,
         src: startUrl,
+        url: startUrl,
         addressInput: startUrl,
         title: "",
         canGoBack: false,
@@ -191,10 +200,11 @@ export const BrowserPanel = ({
       };
 
       // did-navigate 覆盖所有导航（含服务端重定向与页内 pushState）。
-      // 只更新地址栏显示，刻意不更新 tab.src —— 改 src 会触发属性观察器
+      // 更新实际 URL 和地址栏，刻意不更新 tab.src —— 改 src 会触发属性观察器
       // 重新 loadURL，重定向场景会形成无限循环（如 Cloudflare 挑战页）。
       const handleDidNavigate = (e: Electron.DidNavigateEvent): void => {
-        updateWebviewTab(tabId, (tab) => ({ ...tab, addressInput: e.url }));
+        if ("isMainFrame" in e && e.isMainFrame === false) return;
+        updateWebviewTab(tabId, (tab) => ({ ...tab, url: e.url, addressInput: e.url }));
         handleNavigationStateUpdate();
         if (tabId === activeWebviewTabIdRef.current) {
           setZoomFactor(webview.getZoomFactor());
@@ -265,12 +275,16 @@ export const BrowserPanel = ({
     setWebviewTabs((prev) => {
       const first = prev[0];
       if (!first || first.src) return prev;
-      return [{ ...first, src: url, addressInput: url, isLoading: true }];
+      return [{ ...first, src: url, url, addressInput: url, isLoading: true }];
     });
   }, [loaded, initialUrl, homepage, initialTabs]);
 
-  const addWebviewTab = (url: string, activate: boolean): string => {
+  const addWebviewTab = (url: string, activate: boolean): void => {
     const normalized = normalizeUrl(url, homepageRef.current);
+    if (!detached) {
+      panelCallbacks.current.onOpenTab?.(normalized, activate);
+      return;
+    }
     const newTab = createWebviewTab(normalized);
     setWebviewTabs((prev) => [...prev, newTab]);
     if (activate) {
@@ -279,7 +293,6 @@ export const BrowserPanel = ({
       webviewRef.current = null;
       applyMutedState();
     }
-    return newTab.id;
   };
 
   const handleNewWebviewTab = (): void => {
@@ -333,6 +346,11 @@ export const BrowserPanel = ({
   };
 
   const handleCloseWebviewTab = (tabId: string): void => {
+    if (!webviewTabsRef.current.some((tab) => tab.id === tabId)) return;
+    if (!detached) {
+      panelCallbacks.current.onClose?.();
+      return;
+    }
     for (const [guestId, mappedTabId] of webviewGuestIdToTabIdRef.current) {
       if (mappedTabId === tabId) webviewGuestIdToTabIdRef.current.delete(guestId);
     }
@@ -471,7 +489,7 @@ export const BrowserPanel = ({
     const active = tabs.find((tab) => tab.id === activeId);
     const rest = tabs.filter((tab) => tab.id !== activeId);
     return [...(active ? [active] : []), ...rest].map((tab) => ({
-      url: tab.src || tab.addressInput,
+      url: tab.url || tab.src,
       title: tab.title,
     }));
   }, []);
@@ -578,40 +596,42 @@ export const BrowserPanel = ({
         onDownloadShowInFolder={handleDownloadShowInFolder}
         onDownloadCancel={handleDownloadCancel}
       />
-      <div className="browser-tab-bar" role="tablist">
-        {webviewTabs.map((tab) => (
-          <div
-            key={tab.id}
-            role="tab"
-            aria-selected={tab.id === activeWebviewTabId}
-            className={`browser-tab ${tab.id === activeWebviewTabId ? "active" : ""}`}
-            onClick={() => handleActivateWebviewTab(tab.id)}
-            title={tab.title || tab.addressInput || t("browser.newTab")}
-          >
-            <span className="browser-tab-title">{tab.title || tab.addressInput || t("browser.newTab")}</span>
-            <button
-              type="button"
-              className="browser-tab-close"
-              aria-label={t("browser.closeTab")}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleCloseWebviewTab(tab.id);
-              }}
+      {detached && (
+        <div className="browser-tab-bar" role="tablist">
+          {webviewTabs.map((tab) => (
+            <div
+              key={tab.id}
+              role="tab"
+              aria-selected={tab.id === activeWebviewTabId}
+              className={`browser-tab ${tab.id === activeWebviewTabId ? "active" : ""}`}
+              onClick={() => handleActivateWebviewTab(tab.id)}
+              title={tab.title || tab.addressInput || t("browser.newTab")}
             >
-              <X size={11} strokeWidth={2} />
-            </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          className="browser-tab-new"
-          title={t("browser.newTab")}
-          aria-label={t("browser.newTab")}
-          onClick={handleNewWebviewTab}
-        >
-          <Plus size={13} strokeWidth={2} />
-        </button>
-      </div>
+              <span className="browser-tab-title">{tab.title || tab.addressInput || t("browser.newTab")}</span>
+              <button
+                type="button"
+                className="browser-tab-close"
+                aria-label={t("browser.closeTab")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCloseWebviewTab(tab.id);
+                }}
+              >
+                <X size={11} strokeWidth={2} />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="browser-tab-new"
+            title={t("browser.newTab")}
+            aria-label={t("browser.newTab")}
+            onClick={handleNewWebviewTab}
+          >
+            <Plus size={13} strokeWidth={2} />
+          </button>
+        </div>
+      )}
       <div className="browser-content">
         {webviewPreload &&
           webviewTabs.map((tab) => (

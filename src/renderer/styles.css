@@ -1436,7 +1436,21 @@ textarea::selection,
   border-bottom: 1px solid var(--line);
   -webkit-app-region: no-drag;
 }
+.inspect-tab-list {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.inspect-tab-list::-webkit-scrollbar {
+  display: none;
+}
 .inspect-tab {
+  flex: none;
+  min-width: 0;
+  max-width: 180px;
   height: 28px;
   padding: 0 10px;
   display: inline-flex;
@@ -1446,6 +1460,11 @@ textarea::selection,
   font-size: calc(13px * var(--ui-font-scale));
   font-weight: 500;
   transition: color 120ms ease, background 120ms ease;
+}
+.inspect-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .inspect-tab:hover {
   color: var(--ink);
@@ -6835,6 +6854,7 @@ kbd {
 }
 /* Per-tab close control in the panel tab bar */
 .inspect-tab-close {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;

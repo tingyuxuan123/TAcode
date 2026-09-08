@@ -1155,7 +1155,7 @@ function treeChange(path: string, changes: SessionFile[]) {
   return changes.find((item) => item.path === path || item.path.endsWith(`/${path}`) || path.endsWith(`/${item.path}`));
 }
 
-export type PanelTab = { id: string; label: string };
+export type PanelTab = { id: string; label: string; title?: string };
 
 export type PanelAddItem = { type: string; label: string; icon: ReactNode };
 
@@ -1191,6 +1191,12 @@ export function PanelTabs({
   const [addMenuPos, setAddMenuPos] = useState<{ top: number; left: number } | null>(null);
   const addWrapRef = useRef<HTMLDivElement>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
+  const tabListRef = useRef<HTMLDivElement>(null);
+  const tabLayoutKey = tabs.map((tab) => `${tab.id}:${tab.label}`).join("\n");
+
+  useEffect(() => {
+    tabListRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active, tabLayoutKey]);
 
   useEffect(() => {
     if (!addMenuPos) return;
@@ -1234,42 +1240,49 @@ export function PanelTabs({
 
   return (
     <div className="inspect">
-      <div className="inspect-tabs" role="tablist">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={tab.id === active}
-            className={tab.id === active ? "inspect-tab active" : "inspect-tab"}
-            onClick={() => onSelect(tab.id)}
-          >
-            <span>{tab.label}</span>
-            {onCloseTab && (
-              <span
-                className="inspect-tab-close"
-                role="button"
-                aria-label={t("panel.closeTab")}
-                title={t("panel.closeTab")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onCloseTab(tab.id);
-                }}
-              >
-                <X size={11} strokeWidth={2.2} />
-              </span>
-            )}
-          </button>
-        ))}
+      <div className="inspect-tabs">
+        <div className="inspect-tab-list" role="tablist" ref={tabListRef}>
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={tab.id === active}
+              className={tab.id === active ? "inspect-tab active" : "inspect-tab"}
+              title={tab.title || tab.label}
+              onClick={() => onSelect(tab.id)}
+            >
+              <span className="inspect-tab-label">{tab.label}</span>
+              {onCloseTab && (
+                <span
+                  className="inspect-tab-close"
+                  role="button"
+                  aria-label={t("panel.closeTab")}
+                  title={t("panel.closeTab")}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCloseTab(tab.id);
+                  }}
+                >
+                  <X size={11} strokeWidth={2.2} />
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
         {addItems && addItems.length > 0 && onPickType && (
           <div className="inspect-add-wrap" ref={addWrapRef}>
             <button
               type="button"
               className="inspect-tab-add"
-              aria-label={t("panel.openTab")}
-              title={t("panel.openTab")}
-              aria-expanded={addMenuPos !== null}
-              onClick={() => (addMenuPos ? setAddMenuPos(null) : openAddMenu())}
+              aria-label={addItems.length === 1 ? addItems[0].label : t("panel.openTab")}
+              title={addItems.length === 1 ? addItems[0].label : t("panel.openTab")}
+              aria-expanded={addItems.length > 1 ? addMenuPos !== null : undefined}
+              onClick={() => {
+                if (addItems.length === 1) onPickType(addItems[0].type);
+                else if (addMenuPos) setAddMenuPos(null);
+                else openAddMenu();
+              }}
             >
               <Icon path="M12 5v14M5 12h14" size={14} />
             </button>

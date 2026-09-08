@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import type {
   AgentSessionStats,
   AgentSnapshot,
-  BrowserTabSnapshot,
   ExtensionUiRequest,
   PermissionMode,
   ProviderStatus,
@@ -61,16 +60,15 @@ import {
   Icon,
   InspectPanel,
   Login,
-  PanelTabs,
-  PanelPicker,
   PromptBar,
   SidebarNav,
   Thinking,
   TurnNav,
   UserTurn,
 } from "./ui";
-import { BrowserPanel } from "./browser/browser-panel";
-import { ArrowDown, FilePlus2, Globe } from "lucide-react";
+import { WorkbenchPanels } from "./browser/workbench-panels";
+import { useBrowserPanels } from "./browser/use-browser-panels";
+import { ArrowDown } from "lucide-react";
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
 import logo from "./logo.svg";
@@ -406,63 +404,11 @@ export function App() {
     const id = window.setTimeout(() => setToast(undefined), 5000);
     return () => window.clearTimeout(id);
   }, [toast]);
-  // 独立浏览器窗口迁移：还原广播重建面板（携带标签页快照），
-  // 独立窗口被直接关闭时回位到空白浏览器面板。
-  useEffect(() => {
-    const offRestore = window.harness.browser.onRestoreToMain((payload) => {
-      const id = payload.instanceId;
-      setPanelTabs((current) => (current.some((tab) => tab.id === id) ? current : [...current, { id, type: "browser" as const }]));
-      setBrowserDetached((current) => ({ ...current, [id]: false }));
-      setBrowserRestore((current) => ({ ...current, [id]: { tabs: payload.tabs, key: Date.now() } }));
-      setActivePanelTab(id);
-    });
-    const offClosed = window.harness.browser.onDetachedWindowClosed((payload) => {
-      setBrowserDetached((current) => ({ ...current, [payload.instanceId]: false }));
-    });
-    return () => {
-      offRestore();
-      offClosed();
-    };
-  }, []);
-
-  const openPanelTab = useCallback((type: "inspect" | "browser") => {
-    if (type === "inspect") {
-      // 审查是单实例：已打开则只激活。
-      setPanelTabs((current) => (current.some((tab) => tab.type === "inspect") ? current : [...current, { id: "inspect", type: "inspect" as const }]));
-      setActivePanelTab("inspect");
-      return;
-    }
-    // 浏览器可多开：每个标签是独立实例（独立 webview/首页/独立窗口）。
-    const id = `browser-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    setPanelTabs((current) => [...current, { id, type: "browser" as const }]);
-    setActivePanelTab(id);
-  }, []);
-  const closePanelTab = useCallback((id: string) => {
-    const next = panelTabsRef.current.filter((tab) => tab.id !== id);
-    setPanelTabs(next);
-    setActivePanelTab((active) => (active === id ? next[next.length - 1]?.id ?? "" : active));
-  }, []);
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
   const [fullscreen, setFullscreen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FileChange>();
-  const [panelTabs, setPanelTabs] = useState<Array<{ id: string; type: "inspect" | "browser" }>>([
-    { id: "inspect", type: "inspect" },
-  ]);
-  const panelTabsRef = useRef(panelTabs);
-  panelTabsRef.current = panelTabs;
-  const [activePanelTab, setActivePanelTab] = useState("inspect");
-  const [browserDetached, setBrowserDetached] = useState<Record<string, boolean>>({});
-  const [browserRestore, setBrowserRestore] = useState<Record<string, { tabs: BrowserTabSnapshot[]; key: number }>>({});
-  useEffect(() => window.harness.browser.onAgentPresentation((event) => {
-    if (event.action === "open") {
-      setBrowserRestore((current) => ({ ...current, [event.instanceId]: { tabs: [{ url: event.url, title: "" }], key: Date.now() } }));
-      setPanelTabs((current) => [...current, { id: event.instanceId, type: "browser" }]);
-      setActivePanelTab(event.instanceId);
-    } else if (event.action === "select") {
-      setActivePanelTab(event.instanceId);
-    }
-  }), []);
+  const browserPanels = useBrowserPanels();
   const [featureTodos, setFeatureTodos] = useState<SessionTodo[]>([]);
   const [agentSkills, setAgentSkills] = useState<AgentSkillCommand[]>([]);
   const [stoppedJobs, setStoppedJobs] = useState<string[]>([]);
@@ -1494,99 +1440,37 @@ export function App() {
         composer={home ? undefined : composer}
         nav={<TurnNav items={anchors} />}
         inspect={workspace ? (
-          panelTabs.length === 0 ? (
-            <PanelPicker
-              title={t("picker.title")}
-              subtitle={t("picker.subtitle")}
-              items={[
-                { id: "inspect", label: t("inspect.title"), icon: <FilePlus2 size={18} strokeWidth={1.8} /> },
-                { id: "browser", label: t("browser.tab"), icon: <Globe size={18} strokeWidth={1.8} /> },
-              ]}
-              onPick={(type) => openPanelTab(type as "inspect" | "browser")}
-            />
-          ) : (
-            <PanelTabs
-              tabs={(() => {
-                const browserTotal = panelTabs.filter((tab) => tab.type === "browser").length;
-                let browserSeen = 0;
-                return panelTabs.map((tab) => {
-                  if (tab.type === "inspect") return { id: tab.id, label: t("inspect.title") };
-                  browserSeen += 1;
-                  return { id: tab.id, label: browserTotal > 1 ? `${t("browser.tab")} ${browserSeen}` : t("browser.tab") };
+          <WorkbenchPanels panels={browserPanels} onError={setToast} inspect={
+            <InspectPanel
+              files={workingFiles}
+              todos={todos}
+              terminals={terminals}
+              folder={baseName(workspace)}
+              workspace={workspace}
+              refresh={running}
+              running={running}
+              planApproval={planApproval}
+              onApprovePlan={() => void approvePlan()}
+              onRefinePlan={(text) => void refinePlan(text)}
+              onOpen={setPreview}
+              onUndo={() => void undoLastTurn()}
+              onStopTerminal={(id) => {
+                setStoppedJobs((current) => current.includes(id) ? current : [...current, id]);
+                void stopJobs(`/stop-job ${id}`).catch((error) => {
+                  setStoppedJobs((current) => current.filter((item) => item !== id));
+                  setToast(error instanceof Error ? error.message : String(error));
                 });
-              })()}
-              active={activePanelTab}
-              onSelect={setActivePanelTab}
-              addItems={[
-                ...(!panelTabs.some((tab) => tab.type === "inspect")
-                  ? [{ type: "inspect", label: t("inspect.title"), icon: <FilePlus2 size={15} strokeWidth={1.8} /> }]
-                  : []),
-                { type: "browser", label: t("browser.tab"), icon: <Globe size={15} strokeWidth={1.8} /> },
-              ]}
-              onPickType={(type) => openPanelTab(type as "inspect" | "browser")}
-              onCloseTab={closePanelTab}
-              flush={panelTabs.find((tab) => tab.id === activePanelTab)?.type === "browser"}
-            >
-              {(() => {
-                const active = panelTabs.find((tab) => tab.id === activePanelTab);
-                if (!active) return null;
-                if (active.type === "inspect") {
-                  return (
-                    <InspectPanel
-                  files={workingFiles}
-                  todos={todos}
-                  terminals={terminals}
-                  folder={baseName(workspace)}
-                  workspace={workspace}
-                  refresh={running}
-                  running={running}
-                  planApproval={planApproval}
-                  onApprovePlan={() => void approvePlan()}
-                  onRefinePlan={(text) => void refinePlan(text)}
-                  onOpen={setPreview}
-                  onUndo={() => void undoLastTurn()}
-                  onStopTerminal={(id) => {
-                    setStoppedJobs((current) => current.includes(id) ? current : [...current, id]);
-                    void stopJobs(`/stop-job ${id}`).catch((error) => {
-                      setStoppedJobs((current) => current.filter((item) => item !== id));
-                      setToast(error instanceof Error ? error.message : String(error));
-                    });
-                  }}
-                  onStopAllTerminals={() => {
-                    const ids = terminals.map((job) => job.id);
-                    setStoppedJobs((current) => [...new Set([...current, ...ids])]);
-                    void stopJobs("/stop-jobs").catch((error) => {
-                      setStoppedJobs((current) => current.filter((item) => !ids.includes(item)));
-                      setToast(error instanceof Error ? error.message : String(error));
-                    });
-                  }}
-                />
-                );
-              }
-              return null;
-            })()}
-              {panelTabs.filter((tab) => tab.type === "browser").map((tab) => (
-                <div key={tab.id} style={{ display: tab.id === activePanelTab ? "flex" : "none", flex: 1, minHeight: 0 }}>
-                  {browserDetached[tab.id] ? (
-                    <div className="browser-detached-notice">{t("browser.detachedNotice")}</div>
-                  ) : (
-                    <BrowserPanel
-                      key={browserRestore[tab.id]?.key ?? tab.id}
-                      instanceId={tab.id}
-                      initialUrl=""
-                      isActive={tab.id === activePanelTab}
-                      initialTabs={browserRestore[tab.id]?.tabs}
-                      onOpenDetached={(url, tabs) => {
-                        void window.harness.browser.openDetachedWindow(tab.id, url, tabs).then(() => {
-                          setBrowserDetached((current) => ({ ...current, [tab.id]: true }));
-                        }).catch((error) => setToast(String(error)));
-                      }}
-                    />
-                  )}
-                </div>
-              ))}
-            </PanelTabs>
-          )
+              }}
+              onStopAllTerminals={() => {
+                const ids = terminals.map((job) => job.id);
+                setStoppedJobs((current) => [...new Set([...current, ...ids])]);
+                void stopJobs("/stop-jobs").catch((error) => {
+                  setStoppedJobs((current) => current.filter((item) => !ids.includes(item)));
+                  setToast(error instanceof Error ? error.message : String(error));
+                });
+              }}
+            />
+          } />
         ) : undefined}
       >
         <div

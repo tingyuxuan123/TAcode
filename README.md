@@ -88,6 +88,8 @@ For pasted images:
 
 Desktop sessions automatically load `browser_*` tools for the visible embedded browser. Ask the agent to open `localhost:5177`, fill a search field, submit it, and verify the results. No additional browser MCP or Playwright installation is required.
 
+The right panel uses one tab bar for review and web pages, with each page labeled by its title. The plus button, page links, and agent-created pages all open tabs there; middle-click opens in the background without changing the current selection. Detached browser windows keep their own tab bar, and restoring a window returns each page as a separate top-level tab.
+
 The tools provide accessibility snapshots with element references, semantic lookup, native clicks, full-text field filling, keyboard input, condition waits, paginated text extraction, scrolling, native selects, hover, fixed CSS operations, screenshots, and tab management. Screenshots require an image-capable model. The agent's working tab is independent of the tab the user is viewing; switching or collapsing the side panel preserves browser state. Detached browser windows are also addressable; moving a browser between windows recreates its guests, so the agent must list tabs again.
 
 Existing Runtime permissions still apply: Ask mode requests approval, and Plan mode currently blocks browser tools. Final actions such as sending, publishing, or purchasing require user authorization. Navigation accepts HTTP(S), local development servers, and `about:blank`; serve local files through a development server.

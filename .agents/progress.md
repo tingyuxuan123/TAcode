@@ -132,3 +132,22 @@
 - 浏览器提示词明确区分“启动开发服务器”与“在内嵌面板打开真实端口/路径”，并禁止缺失工具时悄悄回退外部浏览器。双语 README 强调完全重启与仅刷新/新建对话的区别。
 - 验证：33 项命令路由测试和 2 项真实 RPC 测试通过；后者用不会启动真实浏览器的临时 open fixture，确认外部命令被阻止并能改用 browser_navigate。类型检查、构建、diff 检查通过。全量 312/313，唯一失败仍是既有 conversation.test.ts:308 识图标题断言。
 - 未重启或终止用户正在运行的 Tether/Agent 进程；本次修复将在应用完全重启后加载。日志在本会话工作台 browser-routing-build.txt / browser-routing-tests.txt。
+
+
+## 2026-09-08：右侧面板松开后仍跟随鼠标的修复（11:16，Asia/Shanghai）
+
+- 用户截图及反馈：拖动浏览器右侧区域宽度后，松开鼠标仍左右改变宽度。核验 Chat 原实现仅监听 window pointerup/pointercancel，无指针捕获、buttons 检查、失焦或卸载清理；webview 获取释放事件时，旧 pointermove 监听会持续工作。
+- 新增 `src/renderer/panel-resize.ts` 并接入 Chat。主指针捕获；每次 move 在改宽度前检查左键仍按下；pointerup/pointercancel/lostpointercapture、blur、页面隐藏、面板收起/移除及组件卸载统一结束；恢复原 cursor/userSelect，保存宽度，移除监听。忽略右键与其他指针。
+- `.is-resizing-panel` 仅在拖动时暂时禁用 webview/iframe 的鼠标命中，防止 guest 抢走释放事件；结束后恢复。原宽度计算与边界保持。
+- 验证：9 项状态回归通过，覆盖释放事件丢失、失焦、捕获丢失和卸载。新增真实 Electron 原生鼠标测试：跨入实际 BrowserPanel webview 拖动、松开、随后左右移动，宽度固定且网页交互恢复。`pnpm test:browser`（含完整构建）、`pnpm typecheck`、diff 检查通过；全量 321/322，唯一仍为既有 conversation.test.ts:308 识图标题断言。
+- 本轮是 renderer 修复。建议刷新一次 Tether 主窗口，清除旧代码可能残留的拖拽监听。未重启/中断用户会话。本会话未执行 Git 提交；收尾检查发现相关代码已由工作区其他操作纳入 `bf57c87`。日志：本会话工作台 panel-resize-smoke-results.txt / panel-resize-tests.txt。
+
+
+## 2026-09-08：浏览器统一顶部单层标签（11:43，Asia/Shanghai）
+
+- 用户批准合并顶部面板标签与浏览器内部标签。主面板现在每个网页对应一个顶部标签，按网页标题显示（未取得标题时显示域名或新标签文案）；地址栏下方直接显示网页。长标题省略并保留完整提示，标签过多时横向滚动，选中项自动进入可见区域，+ 始终可用；只剩浏览器可添加时直接新建。
+- 新增 browser/panel-state.ts、use-browser-panels.ts、workbench-panels.tsx，集中管理顶部页面/选择/迁移。状态 hook 仍放在 App 生命周期，保留切换/移除项目期间接收独立窗口还原事件的能力。各网页保持挂载，标题或导航更新不会修改初始化参数并重载 guest。
+- 网页前台链接、中键后台打开、手动 + 和 Agent 新建统一进入顶部；后台打开保持当前选择。Agent 关闭主模式页面会关闭对应顶部标签，不再隐式创建首页。独立窗口保留内部多标签，还原时每页独立回到顶部，并处理随后窗口关闭广播，避免覆盖已还原页面。
+- BrowserPanel 单独保存实际页面 URL，窗口迁移快照使用已导航地址，不使用最初 src 或地址栏编辑草稿；页内 iframe 导航不改写顶层地址。跨窗口仍按原机制重建 guest，不承诺保留跨窗口表单/滚动状态。
+- 验证：新增8项状态测试通过；pnpm typecheck、pnpm test:browser（完整构建 + 两组真实 Electron 回归）、git diff --check通过。新增隔离 fixture 直接复用生产 WorkbenchPanels/BrowserPanel，覆盖唯一标签栏、标题、前台与原生中键后台链接、手动与AI新建/关闭、输入与guest保留、实际URL及多页还原、320px窄窗口长标题和滚动。旧浏览器操作与原生拖拽测试继续通过。
+- 全量测试329/330，唯一失败仍为既有 conversation.test.ts:308 识图标题断言。双语README已更新。未重启用户进程、未发布或提交、未修改AGENTS.md。验证日志与截图在会话工作台 single-tabs-tests.txt / single-tabs-smoke.txt / single-tabs-electron.png。
