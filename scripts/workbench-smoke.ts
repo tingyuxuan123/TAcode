@@ -7,6 +7,8 @@ import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { BrowserAutomation } from "../src/main/browser/automation";
 import { initBrowserPopupHandler } from "../src/main/browser/popups";
+import { verifyAdaptivePanelWidth } from "./panel-resize-smoke";
+import { verifySidebar } from "./sidebar-smoke";
 import type { BrowserParams, BrowserRegistration, BrowserToolResult } from "../src/shared/browser-tools";
 import type { BrowserRestorePayload, BrowserTabSnapshot } from "../src/shared/types";
 
@@ -59,8 +61,12 @@ async function smoke() {
     await wait(async () => host(`Array.from(document.querySelectorAll('[role="menuitem"]')).some(el => el.textContent.includes(${JSON.stringify(text)}))`, win));
     await host(`Array.from(document.querySelectorAll('[role="menuitem"]')).find(el => el.textContent.includes(${JSON.stringify(text)})).click()`, win);
   };
-  const createWindow = () => {
-    const win = new BrowserWindow({ width: 760, height: 620, show: true, webPreferences: { preload, sandbox: false, contextIsolation: true, nodeIntegration: false, webviewTag: true } });
+  const createWindow = (workbench = false) => {
+    const win = new BrowserWindow({
+      width: 760, height: 620, show: true,
+      ...(workbench && process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 16, y: 14 } } : {}),
+      webPreferences: { preload, sandbox: false, contextIsolation: true, nodeIntegration: false, webviewTag: true },
+    });
     windows.push(win);
     return win;
   };
@@ -100,7 +106,7 @@ async function smoke() {
     const originalGuest = await guest(first);
     const foreground = (await run("browser_find", { role: "link", name: "前台链接", exact: true })).elements[0].ref;
     await run("browser_click", { ref: foreground });
-    await wait(async () => (await labels()).includes("页面乙"));
+    await wait(async () => (await labels()).includes("页面乙") && (await tabs()).length === 2);
     assert.equal((await tabs()).length, 2);
     assert.equal(await host("document.querySelector('.inspect-tab.active .inspect-tab-label').textContent"), "页面乙");
 
@@ -112,7 +118,7 @@ async function smoke() {
     const point = await originalGuest.executeJavaScript("(() => {const r=document.querySelector('a[href=\"/third\"]').getBoundingClientRect();return {x:Math.round(r.x+20),y:Math.round(r.y+10)}})()");
     originalGuest.sendInputEvent({ type: "mouseDown", button: "middle", clickCount: 1, ...point });
     originalGuest.sendInputEvent({ type: "mouseUp", button: "middle", clickCount: 1, ...point });
-    await wait(async () => (await labels()).includes("页面丙"));
+    await wait(async () => (await labels()).includes("页面丙") && (await tabs()).length === 3);
     assert.equal(await host("document.querySelector('.inspect-tab.active .inspect-tab-label').textContent"), "页面甲");
     assert.equal((await tabs()).length, 3);
 
@@ -159,6 +165,20 @@ async function smoke() {
     await host("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     if (process.env.TETHER_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "single-tabs-electron.png"), (await main.webContents.capturePage()).toPNG());
     console.log("Workbench smoke passed: one tab bar, titles, Agent/manual/link creation, native background click, preserved input/guest, close, committed URLs, detached multi-page restore and narrow tab overflow.");
+
+    stage = "actual Chat panel expands beyond 480px and adapts to its container";
+    main = createWindow(true);
+    main.setSize(1440, 620);
+    await main.loadFile(process.env.TETHER_WORKBENCH_FIXTURE!, { query: { chat: "true" } });
+    await wait(async () => (await labels()).includes("审查"));
+    await run("browser_new_tab", { url });
+    const expandedScreenshot = await verifyAdaptivePanelWidth(main);
+    if (process.env.TETHER_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "expanded-panel-electron.png"), expandedScreenshot);
+
+    stage = "collapsible sidebar, native icon actions and wider browser";
+    await run("browser_new_tab", { url });
+    const sidebarScreenshot = await verifySidebar(main);
+    if (process.env.TETHER_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "collapsed-sidebar-electron.png"), sidebarScreenshot);
   } catch (error) {
     console.error(`Workbench smoke failed after ${stage}`, error);
     failed = true;

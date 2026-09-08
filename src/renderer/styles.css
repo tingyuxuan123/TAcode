@@ -174,8 +174,135 @@ textarea::selection,
   min-height: 38px;
   display: flex;
   align-items: center;
-  padding: 0 20px;
+  padding: 0 12px 0 20px;
+  gap: 8px;
   -webkit-app-region: drag;
+}
+.sidebar-toggle {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--ink-3);
+  -webkit-app-region: no-drag;
+}
+.sidebar-toggle:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+.sidebar.is-collapsed {
+  width: 56px;
+  min-width: 56px;
+}
+.sidebar.is-collapsed .sidebar-titlebar {
+  padding-left: 0;
+  padding-right: 0;
+  justify-content: center;
+}
+.sidebar.is-collapsed .sidebar-toggle {
+  margin-left: 0;
+}
+.sidebar.is-collapsed .sidebar-brand,
+.sidebar.is-collapsed .nav-label,
+.sidebar.is-collapsed .section-label,
+.sidebar.is-collapsed .sidebar-full-label,
+.sidebar.is-collapsed .project-row > svg,
+.sidebar.is-collapsed .chevron-hit,
+.sidebar.is-collapsed .session-del,
+.sidebar.is-collapsed .account-meta {
+  display: none;
+}
+.sidebar.is-collapsed .nav-btn {
+  justify-content: center;
+  padding: 0;
+}
+.sidebar-short-label {
+  display: none;
+}
+.sidebar.is-collapsed .sidebar-short-label {
+  display: block;
+  font-size: calc(11px * var(--ui-font-scale));
+  line-height: 1;
+}
+.sidebar.is-collapsed .thread-list {
+  padding: 8px 10px 10px;
+  gap: 8px;
+  overflow-x: hidden;
+  border-top: 1px solid var(--line);
+  scrollbar-width: none;
+}
+.sidebar.is-collapsed .thread-list::-webkit-scrollbar {
+  display: none;
+}
+.sidebar.is-collapsed .project {
+  flex: none;
+}
+.sidebar.is-collapsed .project-head {
+  background: var(--inset);
+}
+.sidebar.is-collapsed .project-head.active {
+  background: var(--accent-tint);
+}
+.sidebar.is-collapsed .project-head .sidebar-short-label {
+  font-weight: 600;
+}
+.sidebar.is-collapsed .project-row,
+.sidebar.is-collapsed .session-item .session-row {
+  height: 34px;
+  padding: 0;
+  justify-content: center;
+}
+.sidebar.is-collapsed .session-list {
+  margin: 4px 0 8px;
+  gap: 2px;
+}
+.sidebar.is-collapsed .session-item {
+  position: relative;
+  flex: none;
+  min-height: 34px;
+}
+.sidebar.is-collapsed .session-list.nested .session-item {
+  margin-left: 0;
+}
+.sidebar.is-collapsed .session-item.active {
+  box-shadow: inset 2px 0 var(--ink);
+}
+.sidebar.is-collapsed .session-row > svg {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 8px;
+  height: 8px;
+}
+.sidebar.is-collapsed .session-rename {
+  position: fixed;
+  left: 60px;
+  width: 210px;
+  z-index: 1001;
+  box-shadow: var(--shadow-overlay);
+}
+.sidebar.is-collapsed .sidebar-empty,
+.sidebar.is-collapsed .task-empty {
+  margin: 0;
+  padding: 4px 0;
+  text-align: center;
+  font-size: calc(10px * var(--ui-font-scale));
+  overflow-wrap: anywhere;
+}
+.sidebar.is-collapsed .sidebar-footer {
+  margin-top: auto;
+}
+.sidebar.is-collapsed .account {
+  justify-content: center;
+  padding: 0;
+  min-height: 36px;
+}
+/* Traffic lights extend beyond the narrow rail; keep the chat title clear of them. */
+.app.darwin:not(.fullscreen):has(.sidebar.is-collapsed) .chat-bar {
+  padding-left: 40px;
 }
 /* macOS traffic lights own the top-left, so the brand drops below them and keeps the nav's left edge. */
 .darwin .sidebar-titlebar {

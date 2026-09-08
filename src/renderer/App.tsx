@@ -116,7 +116,7 @@ function MoreIcon() {
   );
 }
 
-function SessionRow({
+export function SessionRow({
   session,
   active,
   onOpen,
@@ -187,9 +187,17 @@ function SessionRow({
           }}
         />
       ) : (
-        <button type="button" className="session-row" onClick={onOpen}>
+        <button
+          type="button"
+          className="session-row"
+          title={session.title || t("common.unnamed")}
+          aria-label={session.title || t("common.unnamed")}
+          aria-current={active ? "page" : undefined}
+          onClick={onOpen}
+        >
           {session.pinned && <Icon path={PIN_ICON} size={12} />}
-          <span>{session.title || t("common.unnamed")}</span>
+          <span className="sidebar-full-label">{session.title || t("common.unnamed")}</span>
+          <span className="sidebar-short-label" aria-hidden="true">{Array.from(session.title.trim() || t("common.unnamed")).slice(0, 2).join("")}</span>
         </button>
       )}
       <button
@@ -249,7 +257,7 @@ function rememberUnsandboxed(cwd: string): void {
   localStorage.setItem(SANDBOX_OK_KEY, JSON.stringify([...remembered, cwd]));
 }
 
-function AccountMenu({
+export function AccountMenu({
   model,
   configured,
   onOpenSettings,
@@ -292,7 +300,7 @@ function AccountMenu({
 
   return (
     <div ref={root} className={menu ? "account-wrap open" : "account-wrap"}>
-      <button type="button" className="account" title={t("nav.settingsTitle")} onClick={open}>
+      <button type="button" className="account" title={t("nav.settingsTitle")} aria-label={t("nav.settingsTitle")} onClick={open}>
         <div className="account-icon">
           <Icon path="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15H2.8a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.2 8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 4V3.8a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9h.2a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1z" size={15} />
         </div>
@@ -1384,6 +1392,9 @@ export function App() {
               <button
                 type="button"
                 className="project-row"
+                title={`${item.name}\n${item.path}`}
+                aria-label={item.name}
+                aria-current={item.path === workspace ? "true" : undefined}
                 onClick={() => {
                   setOpenProjects((current) => ({ ...current, [item.path]: true }));
                   void bindProject(item.path);
@@ -1399,7 +1410,8 @@ export function App() {
                   <Icon className="chevron" path="M9 6l6 6-6 6" size={14} />
                 </span>
                 <Icon path="M3 7h6l2 2h10v10H3z" size={15} />
-                <strong>{item.name}</strong>
+                <strong className="sidebar-full-label">{item.name}</strong>
+                <span className="sidebar-short-label" aria-hidden="true">{Array.from(item.name.trim()).slice(0, 2).join("")}</span>
               </button>
               <button
                 type="button"

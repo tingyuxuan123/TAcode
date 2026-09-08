@@ -151,3 +151,29 @@
 - BrowserPanel 单独保存实际页面 URL，窗口迁移快照使用已导航地址，不使用最初 src 或地址栏编辑草稿；页内 iframe 导航不改写顶层地址。跨窗口仍按原机制重建 guest，不承诺保留跨窗口表单/滚动状态。
 - 验证：新增8项状态测试通过；pnpm typecheck、pnpm test:browser（完整构建 + 两组真实 Electron 回归）、git diff --check通过。新增隔离 fixture 直接复用生产 WorkbenchPanels/BrowserPanel，覆盖唯一标签栏、标题、前台与原生中键后台链接、手动与AI新建/关闭、输入与guest保留、实际URL及多页还原、320px窄窗口长标题和滚动。旧浏览器操作与原生拖拽测试继续通过。
 - 全量测试329/330，唯一失败仍为既有 conversation.test.ts:308 识图标题断言。双语README已更新。未重启用户进程、未发布或提交、未修改AGENTS.md。验证日志与截图在会话工作台 single-tabs-tests.txt / single-tabs-smoke.txt / single-tabs-electron.png。
+
+
+## 2026-09-08：放宽右侧网页面板上限（12:04，Asia/Shanghai）
+
+- 用户反馈 Web 端在右侧过于拥挤。定位 Chat 在拖动、读取和保存三处共用固定480px上限；取消该上限，新增 panel-width.ts，按实际 chat-body 宽度动态计算，正常窗口保留320px对话区域，极窄窗口仍让两侧可见。
+- 通过 ResizeObserver 适配实际容器尺寸；区分用户偏好与当前显示宽度，窗口变窄时临时收缩，重新放大恢复原偏好，不覆盖已保存的大宽度。修正缺失/异常本地配置的默认值，读取和保存不再截断至480px。
+- 8项新增宽度测试、类型检查、完整构建通过；全量337/338，唯一失败仍为既有 conversation.test.ts:308 识图标题。真实Electron新增实际Chat验收：1440px窗口/240px项目栏下网页可拖到880px，对话320px；缩小后自动收窄、放大后恢复880px，同一guest保留，刷新仍恢复880px。旧单层标签、原生中键后台打开、跨webview拖拽释放等回归通过。
+- 回归中发现网页title事件可早于guest登记；将原有测试等待改为同时确认标题和登记数量，保留断言。首轮整组测试在该时序上失败，修正后node scripts/test-browser.mjs全组通过。
+- 证据：本会话工作台 panel-width-tests.txt / panel-width-smoke.txt / expanded-panel-electron.png。未重启用户进程、未提交/发布、未改AGENTS.md。
+
+
+## 2026-09-08：左侧菜单可收为图标窄栏（12:18，Asia/Shanghai）
+
+- 用户希望右侧网页拉大时，左侧项目菜单可以像参考图那样最小化。SidebarNav 新增手动收起/展开按钮，252px完整菜单收为56px图标栏，释放196px空间；收起后保留新对话、项目、设置入口和中文/英文可访问名称。
+- localStorage 记住折叠状态；项目与会话节点仅隐藏，不卸载。设置菜单沿用原AccountMenu及其portal，通过真实入口验证仍可打开。macOS下折叠按钮位于红黄绿控制下方，聊天标题左侧为跨出窄栏的窗口按钮留位。
+- 与上一轮动态宽度联动：侧栏变窄后，chat-body ResizeObserver获得额外空间，可继续拖宽网页；展开左栏时临时限制右侧宽度，再收起时恢复偏好。不会重建guest或触发网页刷新。
+- 扩展真实Electron fixture，直接复用生产SidebarNav、AccountMenu、Chat、WorkbenchPanels；原生输入验证折叠、展开、三个图标入口、设置菜单、节点/guest保持、macOS位置及重载持久化。1440px窗口中实际侧栏252px时网页最大868px，收为56px后可达1064px，均保留320px对话区域。
+- pnpm typecheck、pnpm test:browser（完整构建+全部真实浏览器/拖拽/侧栏回归）、git diff --check通过。全量337/338，唯一失败仍为既有conversation.test.ts:308识图标题断言。双语README更新；截图与日志位于本会话工作台 collapsed-sidebar-electron.png / sidebar-smoke.txt / sidebar-tests.txt。未重启用户进程、未提交或发布，未修改AGENTS.md。
+
+
+## 2026-09-08：修正窄栏遗漏项目与会话（12:38，Asia/Shanghai）
+
+- 用户指出收起后看不到项目和会话。上一版将thread-list整体隐藏，只保留通用操作入口，未满足窄栏仍能切换项目/会话的需求。本轮移除隐藏，沿用现有项目列表与SessionRow，折叠状态显示名称前两个字符，完整title及aria-label保留，当前项目和会话高亮。
+- 窄栏列表可滚动、各项目分组和会话条目可直接点击，展开态继续显示完整名称；会话置顶标记、右键菜单保留，重命名输入框显示在窄栏右侧，避免在56px内输入。未改原项目/会话切换回调或展开状态。
+- 扩展真实Electron回归：两个项目、四个真实SessionRow；原生点击切换项目/会话且保持56px，缩短窗口验证列表滚动，原生右键重命名并检查活动状态，展开/收起保持节点及guest。旧标签/动态宽度/拖拽释放回归继续通过。
+- pnpm typecheck、完整构建与pnpm test:browser、git diff --check通过。全量337/338，唯一仍为既有conversation.test.ts:308识图标题断言。README双语更新。证据：sidebar-navigation-smoke.txt / sidebar-navigation-tests.txt / collapsed-sidebar-electron.png（本会话工作台）。未重启用户应用、未提交或发布、未改AGENTS.md。

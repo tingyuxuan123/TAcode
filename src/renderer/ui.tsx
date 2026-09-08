@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PREVIEW_HOST, PREVIEW_SCHEME, type AgentSessionStats, type ExtensionUiRequest, type PermissionMode } from "../shared/types";
@@ -21,6 +21,7 @@ import { useI18n } from "./i18n";
 import type { MessageKey } from "../shared/i18n";
 import { ExecutionFlow } from "./execution-flow";
 import { startPanelResize } from "./panel-resize";
+import { clampInspectWidth, readInspectWidth, writeInspectWidth } from "./panel-width";
 import { buildTurnPresentation, toolRow } from "./conversation";
 import logo from "./logo.svg";
 
@@ -195,22 +196,40 @@ export function SidebarNav({
   children: ReactNode;
 }) {
   const { t } = useI18n();
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem("tether.sidebarCollapsed") === "true"; } catch { return false; }
+  });
+  const toggleSidebar = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    try { localStorage.setItem("tether.sidebarCollapsed", String(next)); } catch { /* Storage may be unavailable. */ }
+  };
   return (
-    <aside className="sidebar">
+    <aside className={collapsed ? "sidebar is-collapsed" : "sidebar"}>
       <header className="sidebar-titlebar">
         <div className="sidebar-brand">
           <img className="brand-mark" src={logo} alt="" width={24} height={14} />
           <strong>Tether</strong>
         </div>
+        <button
+          type="button"
+          className="sidebar-toggle"
+          onClick={toggleSidebar}
+          title={t(collapsed ? "nav.expandSidebar" : "nav.collapseSidebar")}
+          aria-label={t(collapsed ? "nav.expandSidebar" : "nav.collapseSidebar")}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <PanelLeftOpen size={17} strokeWidth={1.8} /> : <PanelLeftClose size={17} strokeWidth={1.8} />}
+        </button>
       </header>
       <div className="sidebar-primary">
-        <button type="button" className="nav-btn new" onClick={onNew}>
+        <button type="button" className="nav-btn new" onClick={onNew} title={t("nav.newThread")} aria-label={t("nav.newThread")}>
           <Icon path="M12 5v14M5 12h14" />
-          {t("nav.newThread")}
+          <span className="nav-label">{t("nav.newThread")}</span>
         </button>
-        <button type="button" className="nav-btn" onClick={onOpen}>
+        <button type="button" className="nav-btn" onClick={onOpen} title={t("nav.projects")} aria-label={t("nav.projects")}>
           <Icon path="M3 7h6l2 2h10v10H3z" />
-          {t("nav.projects")}
+          <span className="nav-label">{t("nav.projects")}</span>
         </button>
       </div>
       <div className="thread-list">{children}</div>
@@ -239,9 +258,22 @@ export function Chat({
   useEffect(() => window.harness.browser.onAgentPresentation((event) => {
     if (event.action !== "close") setDrawer(true);
   }), []);
-  const [inspectWidth, setInspectWidth] = useState(readInspectWidth);
+  const [preferredInspectWidth, setPreferredInspectWidth] = useState(readInspectWidth);
+  const [chatBodyWidth, setChatBodyWidth] = useState<number>();
+  const chatBodyRef = useRef<HTMLDivElement>(null);
+  const inspectWidth = clampInspectWidth(preferredInspectWidth, chatBodyWidth);
   const widthRef = useRef(inspectWidth);
   widthRef.current = inspectWidth;
+
+  useLayoutEffect(() => {
+    const body = chatBodyRef.current;
+    if (!body) return;
+    const measure = () => setChatBodyWidth(body.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, []);
 
   const finishResizeRef = useRef<(() => void) | null>(null);
   const hasInspect = Boolean(inspect);
@@ -256,9 +288,9 @@ export function Chat({
     const startX = event.clientX;
     const startWidth = widthRef.current;
     finishResizeRef.current = startPanelResize(event.currentTarget, event, (clientX) => {
-      const next = clampInspectWidth(startWidth + startX - clientX);
+      const next = clampInspectWidth(startWidth + startX - clientX, chatBodyRef.current?.clientWidth);
       widthRef.current = next;
-      setInspectWidth(next);
+      setPreferredInspectWidth(next);
     }, () => {
       finishResizeRef.current = null;
       writeInspectWidth(widthRef.current);
@@ -282,7 +314,7 @@ export function Chat({
         )}
         <WindowControls />
       </header>
-      <div className="chat-body">
+      <div className="chat-body" ref={chatBodyRef}>
         <div className="chat-main">
           {children}
           {composer}
@@ -302,33 +334,6 @@ export function Chat({
       </div>
     </section>
   );
-}
-
-const INSPECT_WIDTH_KEY = "tether.inspectWidth";
-const INSPECT_MIN = 220;
-const INSPECT_MAX = 480;
-const INSPECT_DEFAULT = 268;
-
-function clampInspectWidth(width: number): number {
-  return Math.min(INSPECT_MAX, Math.max(INSPECT_MIN, Math.round(width)));
-}
-
-function readInspectWidth(): number {
-  try {
-    const raw = Number(localStorage.getItem(INSPECT_WIDTH_KEY));
-    if (!Number.isFinite(raw)) return INSPECT_DEFAULT;
-    return clampInspectWidth(raw);
-  } catch {
-    return INSPECT_DEFAULT;
-  }
-}
-
-function writeInspectWidth(width: number): void {
-  try {
-    localStorage.setItem(INSPECT_WIDTH_KEY, String(clampInspectWidth(width)));
-  } catch {
-    // Ignore private mode / quota failures.
-  }
 }
 
 /** Caption buttons for the frameless window on Windows/Linux; macOS keeps its traffic lights. */

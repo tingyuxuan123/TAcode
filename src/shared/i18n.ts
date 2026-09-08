@@ -63,6 +63,8 @@ const zh = {
 
   "nav.newThread": "新对话",
   "nav.projects": "项目",
+  "nav.collapseSidebar": "收起左侧菜单",
+  "nav.expandSidebar": "展开左侧菜单",
   "nav.openDrawer": "打开右侧抽屉",
   "nav.closeDrawer": "收起右侧抽屉",
   "nav.minimize": "最小化",
@@ -663,6 +665,8 @@ const en: Record<MessageKey, string> = {
 
   "nav.newThread": "New chat",
   "nav.projects": "Projects",
+  "nav.collapseSidebar": "Collapse sidebar",
+  "nav.expandSidebar": "Expand sidebar",
   "nav.openDrawer": "Open side panel",
   "nav.closeDrawer": "Collapse side panel",
   "nav.minimize": "Minimize",
