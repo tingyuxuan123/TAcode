@@ -575,10 +575,8 @@ const zh = {
   "undo.confirmNamed": "撤回「{label}」？",
 
   "browser.tab": "浏览器",
-  "tabs.terminal": "终端",
   "picker.title": "打开标签页",
   "picker.subtitle": "选择要在侧边面板中打开的标签。",
-  "picker.terminalSoon": "即将支持",
   "panel.empty": "没有打开的面板",
   "panel.openTab": "打开标签页",
   "panel.closeTab": "关闭标签页",
@@ -1192,10 +1190,8 @@ const en: Record<MessageKey, string> = {
   "undo.confirmNamed": 'Undo "{label}"?',
 
   "browser.tab": "Browser",
-  "tabs.terminal": "Terminal",
   "picker.title": "Open Tabs",
   "picker.subtitle": "Choose a tab to open in the side panel.",
-  "picker.terminalSoon": "Coming soon",
   "panel.empty": "No panels open",
   "panel.openTab": "Open tabs",
   "panel.closeTab": "Close tab",

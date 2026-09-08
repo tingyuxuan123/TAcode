@@ -70,7 +70,7 @@ import {
   UserTurn,
 } from "./ui";
 import { BrowserPanel } from "./browser/browser-panel";
-import { ArrowDown, FilePlus2, Globe, SquareTerminal } from "lucide-react";
+import { ArrowDown, FilePlus2, Globe } from "lucide-react";
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
 import logo from "./logo.svg";
@@ -1476,63 +1476,72 @@ export function App() {
         composer={home ? undefined : composer}
         nav={<TurnNav items={anchors} />}
         inspect={workspace ? (
-          <PanelTabs
-            tabs={[
-              { id: "inspect", label: t("inspect.title") },
-              { id: "browser", label: t("browser.tab") },
-            ]}
-            active={panelTab}
-            onSelect={setPanelTab}
-            flush={panelTab === "browser"}
-          >
-            {panelTab === "browser" ? (
-              browserDetached ? (
-                <div className="browser-detached-notice">{t("browser.detachedNotice")}</div>
-              ) : (
-                <BrowserPanel
-                  key={browserRestore?.key ?? "main"}
-                  instanceId="main"
-                  initialUrl=""
-                  isActive
-                  initialTabs={browserRestore?.tabs}
-                  onOpenDetached={(url, tabs) => {
-                    void window.harness.browser.openDetachedWindow("main", url, tabs);
-                    setBrowserDetached(true);
+          openPanelTabs.length === 0 ? (
+            <div className="panel-empty">
+              <span>{t("panel.empty")}</span>
+              <button type="button" onClick={() => setTabPickerOpen(true)}>{t("panel.openTab")}</button>
+            </div>
+          ) : (
+            <PanelTabs
+              tabs={openPanelTabs.map((id) => ({
+                id,
+                label: id === "inspect" ? t("inspect.title") : t("browser.tab"),
+              }))}
+              active={panelTab}
+              onSelect={setPanelTab}
+              onAdd={() => setTabPickerOpen(true)}
+              onCloseTab={closePanelTab}
+              flush={panelTab === "browser"}
+            >
+              {panelTab === "browser" ? (
+                browserDetached ? (
+                  <div className="browser-detached-notice">{t("browser.detachedNotice")}</div>
+                ) : (
+                  <BrowserPanel
+                    key={browserRestore?.key ?? "main"}
+                    instanceId="main"
+                    initialUrl=""
+                    isActive
+                    initialTabs={browserRestore?.tabs}
+                    onOpenDetached={(url, tabs) => {
+                      void window.harness.browser.openDetachedWindow("main", url, tabs);
+                      setBrowserDetached(true);
+                    }}
+                  />
+                )
+              ) : panelTab === "inspect" ? (
+                <InspectPanel
+                  files={workingFiles}
+                  todos={todos}
+                  terminals={terminals}
+                  folder={baseName(workspace)}
+                  workspace={workspace}
+                  refresh={running}
+                  running={running}
+                  planApproval={planApproval}
+                  onApprovePlan={() => void approvePlan()}
+                  onRefinePlan={(text) => void refinePlan(text)}
+                  onOpen={setPreview}
+                  onUndo={() => void undoLastTurn()}
+                  onStopTerminal={(id) => {
+                    setStoppedJobs((current) => current.includes(id) ? current : [...current, id]);
+                    void stopJobs(`/stop-job ${id}`).catch((error) => {
+                      setStoppedJobs((current) => current.filter((item) => item !== id));
+                      setToast(error instanceof Error ? error.message : String(error));
+                    });
+                  }}
+                  onStopAllTerminals={() => {
+                    const ids = terminals.map((job) => job.id);
+                    setStoppedJobs((current) => [...new Set([...current, ...ids])]);
+                    void stopJobs("/stop-jobs").catch((error) => {
+                      setStoppedJobs((current) => current.filter((item) => !ids.includes(item)));
+                      setToast(error instanceof Error ? error.message : String(error));
+                    });
                   }}
                 />
-              )
-            ) : (
-              <InspectPanel
-              files={workingFiles}
-              todos={todos}
-              terminals={terminals}
-              folder={baseName(workspace)}
-              workspace={workspace}
-              refresh={running}
-              running={running}
-              planApproval={planApproval}
-              onApprovePlan={() => void approvePlan()}
-              onRefinePlan={(text) => void refinePlan(text)}
-              onOpen={setPreview}
-              onUndo={() => void undoLastTurn()}
-              onStopTerminal={(id) => {
-                setStoppedJobs((current) => current.includes(id) ? current : [...current, id]);
-                void stopJobs(`/stop-job ${id}`).catch((error) => {
-                  setStoppedJobs((current) => current.filter((item) => item !== id));
-                  setToast(error instanceof Error ? error.message : String(error));
-                });
-              }}
-              onStopAllTerminals={() => {
-                const ids = terminals.map((job) => job.id);
-                setStoppedJobs((current) => [...new Set([...current, ...ids])]);
-                void stopJobs("/stop-jobs").catch((error) => {
-                  setStoppedJobs((current) => current.filter((item) => !ids.includes(item)));
-                  setToast(error instanceof Error ? error.message : String(error));
-                });
-              }}
-            />
-            )}
-          </PanelTabs>
+              ) : null}
+            </PanelTabs>
+          )
         ) : undefined}
       >
         <div
@@ -1738,7 +1747,6 @@ export function App() {
           subtitle={t("picker.subtitle")}
           items={[
             { id: "inspect", label: t("inspect.title"), icon: <FilePlus2 size={18} strokeWidth={1.8} /> },
-            { id: "terminal", label: t("tabs.terminal"), icon: <SquareTerminal size={18} strokeWidth={1.8} />, disabled: true, hint: t("picker.terminalSoon") },
             { id: "browser", label: t("browser.tab"), icon: <Globe size={18} strokeWidth={1.8} /> },
           ]}
           onPick={openPanelTab}
