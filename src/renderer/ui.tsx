@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -27,6 +27,8 @@ import logo from "./logo.svg";
 
 const MAX_UPLOAD_IMAGES = 4;
 const PATH_MIME = "text/tether-path";
+// 只移动面板标签栏；网页内容仍留在原组件树中，保留 guest 与页面状态。
+const PanelTabHeaderContext = createContext<HTMLElement | null>(null);
 let treeDragPath = "";
 
 function isPromptFileDrag(transfer: DataTransfer): boolean {
@@ -253,6 +255,7 @@ export function Chat({
 }) {
   const { t } = useI18n();
   const [drawer, setDrawer] = useState(true);
+  const [panelHeaderHost, setPanelHeaderHost] = useState<HTMLDivElement | null>(null);
   useEffect(() => window.harness.browser.onAgentPresentation((event) => {
     if (event.action !== "close") setDrawer(true);
   }), []);
@@ -308,19 +311,24 @@ export function Chat({
   return (
     <section className={home ? "chat home" : "chat"}>
       <header className="chat-bar">
-        {!home && title && <h1 className="chat-title">{title}</h1>}
-        {!home && nav}
-        {inspect && (
-          <button
-            type="button"
-            className={drawer ? "inspect-toggle on" : "inspect-toggle"}
-            aria-label={drawer ? t("nav.closeDrawer") : t("nav.openDrawer")}
-            onClick={() => setDrawer((current) => !current)}
-          >
-            <Icon path="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M15.5 4v16" />
-          </button>
-        )}
-        <WindowControls />
+        <div className="chat-heading">
+          {!home && title && <h1 className="chat-title">{title}</h1>}
+          {!home && nav}
+        </div>
+        <div className={inspect && drawer ? "inspect-heading is-open" : "inspect-heading"} style={{ width: inspect && drawer ? inspectWidth : undefined }}>
+          <div className="inspect-header-tabs" ref={setPanelHeaderHost} style={{ display: inspect && drawer ? undefined : "none" }} />
+          {inspect && (
+            <button
+              type="button"
+              className={drawer ? "inspect-toggle on" : "inspect-toggle"}
+              aria-label={drawer ? t("nav.closeDrawer") : t("nav.openDrawer")}
+              onClick={() => setDrawer((current) => !current)}
+            >
+              <Icon path="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M15.5 4v16" />
+            </button>
+          )}
+          <WindowControls />
+        </div>
       </header>
       <div className="chat-body" ref={chatBodyRef}>
         <div className="chat-main">
@@ -336,7 +344,7 @@ export function Chat({
               aria-label={t("inspect.resize")}
               onPointerDown={startInspectResize}
             />
-            {inspect}
+            <PanelTabHeaderContext.Provider value={panelHeaderHost}>{inspect}</PanelTabHeaderContext.Provider>
           </div>
         )}
       </div>
@@ -1201,6 +1209,7 @@ export function PanelTabs({
   children: ReactNode;
 }) {
   const { t } = useI18n();
+  const headerHost = useContext(PanelTabHeaderContext);
   const [addMenuPos, setAddMenuPos] = useState<{ top: number; left: number } | null>(null);
   const addWrapRef = useRef<HTMLDivElement>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
@@ -1209,7 +1218,7 @@ export function PanelTabs({
 
   useEffect(() => {
     tabListRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [active, tabLayoutKey]);
+  }, [active, tabLayoutKey, headerHost]);
 
   useEffect(() => {
     if (!addMenuPos) return;
@@ -1251,57 +1260,61 @@ export function PanelTabs({
     setAddMenuPos({ top, left: Math.max(8, rect.right - width) });
   };
 
+  const tabHeader = (
+    <div className="inspect-tabs">
+      <div className="inspect-tab-list" role="tablist" ref={tabListRef}>
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={tab.id === active}
+            className={tab.id === active ? "inspect-tab active" : "inspect-tab"}
+            title={tab.title || tab.label}
+            onClick={() => onSelect(tab.id)}
+          >
+            <span className="inspect-tab-label">{tab.label}</span>
+            {onCloseTab && (
+              <span
+                className="inspect-tab-close"
+                role="button"
+                aria-label={t("panel.closeTab")}
+                title={t("panel.closeTab")}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCloseTab(tab.id);
+                }}
+              >
+                <X size={11} strokeWidth={2.2} />
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+      {addItems && addItems.length > 0 && onPickType && (
+        <div className="inspect-add-wrap" ref={addWrapRef}>
+          <button
+            type="button"
+            className="inspect-tab-add"
+            aria-label={addItems.length === 1 ? addItems[0].label : t("panel.openTab")}
+            title={addItems.length === 1 ? addItems[0].label : t("panel.openTab")}
+            aria-expanded={addItems.length > 1 ? addMenuPos !== null : undefined}
+            onClick={() => {
+              if (addItems.length === 1) onPickType(addItems[0].type);
+              else if (addMenuPos) setAddMenuPos(null);
+              else openAddMenu();
+            }}
+          >
+            <Icon path="M12 5v14M5 12h14" size={14} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="inspect">
-      <div className="inspect-tabs">
-        <div className="inspect-tab-list" role="tablist" ref={tabListRef}>
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={tab.id === active}
-              className={tab.id === active ? "inspect-tab active" : "inspect-tab"}
-              title={tab.title || tab.label}
-              onClick={() => onSelect(tab.id)}
-            >
-              <span className="inspect-tab-label">{tab.label}</span>
-              {onCloseTab && (
-                <span
-                  className="inspect-tab-close"
-                  role="button"
-                  aria-label={t("panel.closeTab")}
-                  title={t("panel.closeTab")}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onCloseTab(tab.id);
-                  }}
-                >
-                  <X size={11} strokeWidth={2.2} />
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-        {addItems && addItems.length > 0 && onPickType && (
-          <div className="inspect-add-wrap" ref={addWrapRef}>
-            <button
-              type="button"
-              className="inspect-tab-add"
-              aria-label={addItems.length === 1 ? addItems[0].label : t("panel.openTab")}
-              title={addItems.length === 1 ? addItems[0].label : t("panel.openTab")}
-              aria-expanded={addItems.length > 1 ? addMenuPos !== null : undefined}
-              onClick={() => {
-                if (addItems.length === 1) onPickType(addItems[0].type);
-                else if (addMenuPos) setAddMenuPos(null);
-                else openAddMenu();
-              }}
-            >
-              <Icon path="M12 5v14M5 12h14" size={14} />
-            </button>
-          </div>
-        )}
-      </div>
+      {headerHost ? createPortal(tabHeader, headerHost) : tabHeader}
       <div className={flush ? "inspect-body flush" : "inspect-body"}>{children}</div>
       {addMenuPos &&
         createPortal(

@@ -9,6 +9,7 @@ import { BrowserAutomation } from "../src/main/browser/automation";
 import { initBrowserPopupHandler } from "../src/main/browser/popups";
 import { verifyAdaptivePanelWidth } from "./panel-resize-smoke";
 import { verifySidebar } from "./sidebar-smoke";
+import { verifyWorkbenchHeader } from "./workbench-header-smoke";
 import type { BrowserParams, BrowserRegistration, BrowserToolResult } from "../src/shared/browser-tools";
 import type { BrowserRestorePayload, BrowserTabSnapshot } from "../src/shared/types";
 
@@ -95,6 +96,7 @@ async function smoke() {
     main = createWindow();
     await main.loadFile(process.env.TETHER_WORKBENCH_FIXTURE!);
     await wait(async () => (await labels()).includes("审查"));
+    const inlineTabHeight = await host("document.querySelector('.inspect-tabs').getBoundingClientRect().height");
 
     stage = "Agent creates a single top-level page";
     const first = (await run("browser_new_tab", { url })).tabId;
@@ -172,6 +174,9 @@ async function smoke() {
     await main.loadFile(process.env.TETHER_WORKBENCH_FIXTURE!, { query: { chat: "true" } });
     await wait(async () => (await labels()).includes("审查"));
     await run("browser_new_tab", { url });
+    stage = "tabs occupy the window header and release vertical content space";
+    await verifyWorkbenchHeader(main, inlineTabHeight);
+    stage = "adaptive widths and automatic sidebar collapse with top header";
     const expandedScreenshot = await verifyAdaptivePanelWidth(main);
     if (process.env.TETHER_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "expanded-panel-electron.png"), expandedScreenshot);
 

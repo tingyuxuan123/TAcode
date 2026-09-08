@@ -309,7 +309,7 @@ textarea::selection,
   min-height: 36px;
 }
 /* Traffic lights extend beyond the narrow rail; keep the chat title clear of them. */
-.app.darwin:not(.fullscreen):has(.sidebar.is-collapsed) .chat-bar {
+.app.darwin:not(.fullscreen):has(.sidebar.is-collapsed) .chat-heading {
   padding-left: 40px;
 }
 /* macOS traffic lights own the top-left, so the brand drops below them and keeps the nav's left edge. */
@@ -787,11 +787,48 @@ textarea::selection,
   flex: none;
   display: flex;
   align-items: center;
-  /* Pack right so the caption buttons stay in the corner even with an empty bar. */
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 0 0 0 16px;
+  padding: 0;
   -webkit-app-region: drag;
+}
+.chat-heading {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 16px;
+}
+.inspect-heading {
+  flex: none;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.inspect-heading.is-open {
+  border-left: 1px solid var(--line);
+}
+.inspect-header-tabs {
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+}
+.inspect-header-tabs .inspect-tabs {
+  width: 100%;
+  min-width: 0;
+  padding: 0 6px;
+  border-bottom: 0;
+  -webkit-app-region: drag;
+}
+.inspect-header-tabs .inspect-tab-list,
+.inspect-header-tabs .inspect-tab-add {
+  -webkit-app-region: no-drag;
+}
+.inspect-heading .inspect-toggle {
+  flex: none;
+  margin-left: 0;
 }
 .win-controls {
   flex: none;
@@ -819,6 +856,8 @@ textarea::selection,
 }
 .darwin .chat-bar {
   height: 42px;
+}
+.darwin .inspect-heading {
   padding-right: 12px;
 }
 .chat-title {

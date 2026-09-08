@@ -186,3 +186,11 @@
 - 拖动中保留目标宽度，侧栏释放空间时仍能向指针对应宽度变化；松开时将当下实际宽度固定并保存，剩余动画仅扩大会话区。修正越过面板最小宽度时从220反跳到默认268的问题。
 - 真实Electron验证：剩余440px不触发、400px触发并增加196px到596px；线性0.18s样式与单调中间帧；同一拖动中反向移动不展开，继续拉大可到1064px且保留320px会话；手动展开、动画中快速松开后宽度稳定、窗口缩放/刷新、guest和手动偏好保持。旧浏览器工具/单层标签/拖拽释放/窄栏导航及重命名回归通过。
 - pnpm typecheck、pnpm test:browser（含完整构建）、git diff --check通过；全量342/343，仅既有conversation.test.ts:308识图标题断言失败，新增5项单测通过。README双语更新。证据：会话工作台auto-sidebar-smoke.txt / auto-sidebar-tests.txt / expanded-panel-electron.png（本轮自动收起后的截图）。未重启用户应用，未提交/发布，未改AGENTS.md。
+
+
+## 2026-09-08：右侧标签上移至窗口标题栏（13:22，Asia/Shanghai）
+
+- 用户附红框与Proma参考图，希望「审查 / 网页 / ＋」占据窗口最顶部原空白区域，与左侧会话标题同高，从而增加网页内容高度。Chat标题栏拆分为会话标题区和与右侧面板同宽的标签区，面板开关与窗口控件继续在右端。
+- PanelTabs通过上下文提供的稳定DOM容器，仅将现有标签栏Portal到标题栏；网页内容保留原组件树及guest，独立/无Chat容器场景仍在面板内渲染标签。标签、加号明确no-drag，空白区域可拖动窗口；macOS窄侧栏避让只作用于会话标题区域，右侧边界不受padding干扰。
+- 新增scripts/workbench-header-smoke.ts并接入真实Electron回归：测量标题与面板边界一致、地址栏紧接标题栏、内容增高37px；原生点击切换/关闭标签、新建页、加号菜单、关闭/打开面板，无窗口位移，guest及输入保留。验证长标题提示与溢出、窄窗口，随后完整跑动态宽度/自动收起/动画中松开/窄栏导航回归，均通过。
+- pnpm typecheck、完整构建与pnpm test:browser、git diff --check通过。全量342/343，唯一仍为既有conversation.test.ts:308识图标题断言。README双语更新。证据：会话工作台top-tabs-smoke.txt / top-tabs-tests.txt / top-tabs-electron.png。未操作用户Google页，未重启用户应用、未提交或发布、未改AGENTS.md。
