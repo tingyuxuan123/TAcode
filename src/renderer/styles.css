@@ -763,8 +763,8 @@ textarea::selection,
 }
 
 .chat {
-  /* Cap reading width at 80% on wide layouts; narrow windows still use the full column. */
-  --col: min(90%, 1320px, max(720px, 68vw));
+  /* Narrow side gutters on wide layouts; narrow windows still use the full column. */
+  --col: min(97%, 1320px, max(720px, 78vw));
   /* Fallback until the dock height is measured; pin() overwrites this. */
   --dock-clearance: 280px;
   min-width: 0;
