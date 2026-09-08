@@ -102,30 +102,30 @@ export function UserTurn({ text, images = [], anchor }: { text: string; images?:
   const single = images.length === 1;
   return (
     <div className="user-turn" id={anchor}>
+      {images.length > 0 && (
+        <div className={single ? "user-images single" : "user-images"}>
+          {images.map((image, index) => {
+            const src = image.src ?? `data:${image.mimeType};base64,${image.data}`;
+            return (
+              <div key={`${image.mimeType}-${index}`} className="user-image-wrap">
+                <button type="button" className={single ? "user-image single" : "user-image"} onClick={() => setView(src)}>
+                  <img src={src} alt="" />
+                </button>
+                <a
+                  className="user-image-save"
+                  href={src}
+                  download={`image-${index + 1}`}
+                  aria-label="保存图片"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <Download size={14} />
+                </a>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <article className="user">
-        {images.length > 0 && (
-          <div className={single ? "user-images single" : "user-images"}>
-            {images.map((image, index) => {
-              const src = image.src ?? `data:${image.mimeType};base64,${image.data}`;
-              return (
-                <div key={`${image.mimeType}-${index}`} className="user-image-wrap">
-                  <button type="button" className={single ? "user-image single" : "user-image"} onClick={() => setView(src)}>
-                    <img src={src} alt="" />
-                  </button>
-                  <a
-                    className="user-image-save"
-                    href={src}
-                    download={`image-${index + 1}`}
-                    aria-label="保存图片"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <Download size={14} />
-                  </a>
-                </div>
-              );
-            })}
-          </div>
-        )}
         {skill ? <code className="user-skill-tag">{shown}</code> : <UserText text={shown} />}
       </article>
       <div className="bubble-actions">

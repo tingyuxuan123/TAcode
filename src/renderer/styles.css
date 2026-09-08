@@ -1639,8 +1639,9 @@ textarea::selection,
 .user-images {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
-  margin: 0 0 8px;
+  margin: 0 0 2px;
 }
 .user-image-wrap {
   position: relative;

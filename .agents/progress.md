@@ -245,3 +245,10 @@
 - styles.css：.user-images 改为 flex-wrap gap 8px；新增 .user-image-wrap/{single}/.user-image-save；单图 object-contain、多图 object-cover 规则替换原统一 140px。
 - 注：Proma 的保存走 electronAPI.saveImageAs(localPath)，Tether 无此桥接，改用锚点下载 data-URI；无左右翻页（图片数据即 data-URI，可后续按需加）。
 - pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
+
+## 2026-09-08：发送后消息图片从文字气泡独立成块（对齐 Proma）（20:19，Asia/Shanghai）
+
+- 用户确认「图片不包进文字气泡」。UserTurn 重构：.user-images（图片块）移出 <article.user>，成为其前置独立兄弟节点——图片块在上、文字气泡在下、操作区更下，互不共用背景。
+- styles.css：.user-images 改为 justify-content flex-end + margin 2px，配合 .user-turn 的 column/flex-end/gap 4px 右对齐。
+- 图块无背景、文字保留气泡背景，分离感由「独立块 + 气泡」自然呈现；交互不变（单图大图/多图 280px、hover 保存、点击大图）。
+- pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
