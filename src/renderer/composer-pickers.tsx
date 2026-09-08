@@ -1,16 +1,20 @@
-import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import { useContext, useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { Box, Brain, Check, ChevronDown, Search, Server } from "lucide-react";
 import { filterModelOptions, type ModelOption } from "../shared/model-selection";
 import { effortLabelKey, pickThinkingOptions, reasoningLevelsAvailable } from "../shared/thinking";
 import { useI18n } from "./i18n";
+import { PromptToolbarContext } from "./prompt-toolbar";
 
-function usePickerPopover(down: boolean | undefined, width: number, height: number) {
+export function usePickerPopover(down: boolean | undefined, width: number, height: number) {
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<CSSProperties>();
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const id = useId();
+  const toolbar = useContext(PromptToolbarContext);
+  useEffect(() => { if (!open) setPlacement(undefined); }, [open]);
+  useEffect(() => { if (toolbar.hidden) setOpen(false); }, [toolbar.hidden]);
   const close = () => {
     setOpen(false);
     trigger.current?.focus();
@@ -29,11 +33,13 @@ function usePickerPopover(down: boolean | undefined, width: number, height: numb
         width: actualWidth,
         left: Math.max(8, Math.min(rect.left, window.innerWidth - actualWidth - 8)),
         maxHeight: Math.max(0, dropDown ? below : above),
-        ...(dropDown ? { top: rect.bottom + 6 } : { bottom: window.innerHeight - rect.top + 6 }),
+        ...(dropDown ? { top: rect.bottom + 6, bottom: "auto" } : { bottom: window.innerHeight - rect.top + 6, top: "auto" }),
       });
     };
     const outside = (event: Event) => {
-      const target = event.target as Node;
+      const target = event.target as Element;
+      // autoFocus 可能早于外层 ref 赋值；以已挂载的 DOM 标记识别自身弹层。
+      if (target.closest?.("[data-picker-popover]")?.getAttribute("data-picker-popover") === id) return;
       if (!trigger.current?.contains(target) && !panel.current?.contains(target)) setOpen(false);
     };
     const escape = (event: globalThis.KeyboardEvent) => {
@@ -47,8 +53,11 @@ function usePickerPopover(down: boolean | undefined, width: number, height: numb
     document.addEventListener("focusin", outside);
     document.addEventListener("keydown", escape);
     window.addEventListener("resize", place);
+    const observer = new ResizeObserver(place);
+    if (trigger.current) observer.observe(trigger.current);
     window.addEventListener("scroll", place, true);
     return () => {
+      observer.disconnect();
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("focusin", outside);
       document.removeEventListener("keydown", escape);
@@ -57,7 +66,7 @@ function usePickerPopover(down: boolean | undefined, width: number, height: numb
     };
   }, [open, down, width, height]);
 
-  return { open, setOpen, placement, trigger, panel, id, close };
+  return { open, setOpen, placement, trigger, panel, id, close, toolbarOwner: toolbar.id };
 }
 
 export function ModelPicker({ value, fallback, options, onChange, down, disabled }: {
@@ -97,10 +106,10 @@ export function ModelPicker({ value, fallback, options, onChange, down, disabled
         aria-controls={popover.open ? popover.id : undefined}
         title={selected ? `${selected.providerName} · ${selected.label}` : fallback}
         onClick={() => { setQuery(""); setActive(value); popover.setOpen(!popover.open); }}>
-        <span>{selected?.label || fallback || t("composer.model")}</span><ChevronDown size={12} />
+        <Box size={16} className="model-trigger-icon" /><span className="toolbar-label">{selected?.label || fallback || t("composer.model")}</span><ChevronDown size={12} className="toolbar-chevron" />
       </button>
       {popover.open && popover.placement && createPortal(
-        <div ref={popover.panel} className="model-picker-panel picker-panel" style={popover.placement}>
+        <div ref={popover.panel} data-picker-popover={popover.id} data-toolbar-owner={popover.toolbarOwner} className="model-picker-panel picker-panel" style={popover.placement}>
           <div className="model-picker-search">
             <Search size={16} aria-hidden="true" />
             <input autoFocus value={query} placeholder={t("composer.filterModels")} aria-label={t("composer.filterModels")}
@@ -163,9 +172,9 @@ export function EffortPicker({ value, levels, onChange, down }: {
       <button ref={popover.trigger} type="button" lang={locale} className={`effort-trigger${value === "off" ? " off" : ""}`}
         aria-label={`${t("composer.effort")}：${label}`} title={`${t("composer.effort")}：${label}`}
         aria-haspopup="dialog" aria-expanded={popover.open} aria-controls={popover.open ? popover.id : undefined}
-        onClick={() => popover.setOpen(!popover.open)}><Brain size={18} /><span>{label}</span></button>
+        onClick={() => popover.setOpen(!popover.open)}><Brain size={18} /><span className="toolbar-label">{label}</span></button>
       {popover.open && popover.placement && createPortal(
-        <div ref={popover.panel} id={popover.id} className="effort-picker-panel picker-panel" role="dialog"
+        <div ref={popover.panel} data-picker-popover={popover.id} data-toolbar-owner={popover.toolbarOwner} id={popover.id} className="effort-picker-panel picker-panel" role="dialog"
           aria-label={t("composer.effort")} style={popover.placement}>
           <div className="effort-picker-heading"><strong>{t("composer.effort")}</strong><span>{label}</span></div>
           <input autoFocus className="effort-slider" type="range" min={0} max={Math.max(0, options.length - 1)} step={1}

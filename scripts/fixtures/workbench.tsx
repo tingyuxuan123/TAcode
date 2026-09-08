@@ -6,6 +6,7 @@ import { useSidebarLayout } from "../../src/renderer/sidebar-layout";
 import { LocaleProvider } from "../../src/renderer/i18n";
 import { Chat, SidebarNav } from "../../src/renderer/ui";
 import { AccountMenu, SessionRow } from "../../src/renderer/App";
+import { ComposerFixture } from "./composer";
 import "../../src/renderer/styles.css";
 
 function Fixture() {
@@ -20,6 +21,9 @@ function Fixture() {
     { name: "TAcode", sessions: [{ id: "tether-1", title: "修复浏览器" }, { id: "tether-2", title: "文档整理" }] },
   ];
   const withChat = new URLSearchParams(location.search).has("chat");
+  if (new URLSearchParams(location.search).has("composer")) {
+    return <div className="app"><section className="chat"><div className="chat-main"><ComposerFixture /></div></section></div>;
+  }
   const content = <WorkbenchPanels panels={panels} inspect={<div>审查测试内容</div>} onError={(message) => { throw new Error(message); }} />;
   return <div className={withChat ? `app ${window.harness.platform === "darwin" ? "darwin" : ""}` : undefined} style={{ display: "flex", width: "100%", height: "100vh" }}>
     {withChat ? <>

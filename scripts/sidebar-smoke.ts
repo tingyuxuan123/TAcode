@@ -14,7 +14,10 @@ export async function verifySidebar(win: BrowserWindow): Promise<Buffer> {
       stored: localStorage.getItem('tether.sidebarCollapsed'),
       projectsVisible: getComputedStyle(document.querySelector('.thread-list')).display !== 'none',
       guest: document.querySelector('webview')?.getWebContentsId(),
-      resizing: document.documentElement.classList.contains('is-resizing-panel')
+      resizing: document.documentElement.classList.contains('is-resizing-panel'),
+      action: document.querySelector('[role=status]')?.textContent,
+      rename: document.querySelector('.session-rename')?.value,
+      focus: document.activeElement?.className
     };
   })()`);
   const wait = async (predicate: (state: any) => boolean | Promise<boolean>) => {
@@ -27,7 +30,7 @@ export async function verifySidebar(win: BrowserWindow): Promise<Buffer> {
     throw new Error(`Sidebar did not settle: ${JSON.stringify(await read())}`);
   };
   const click = async (selector: string, button: "left" | "right" = "left") => {
-    const point = await evaluate(`(() => {const el=document.querySelector(${JSON.stringify(selector)});el.scrollIntoView({block:'nearest'});const r=el.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`);
+    const point = await evaluate(`(async () => {const el=document.querySelector(${JSON.stringify(selector)});el.scrollIntoView({block:'nearest',behavior:'instant'});await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const r=el.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`);
     win.webContents.sendInputEvent({ type: "mouseMove", ...point });
     win.webContents.sendInputEvent({ type: "mouseDown", button, clickCount: 1, ...point });
     win.webContents.sendInputEvent({ type: "mouseUp", button, clickCount: 1, ...point });
@@ -63,8 +66,11 @@ export async function verifySidebar(win: BrowserWindow): Promise<Buffer> {
   await click('.session-row[aria-label="文档整理"]', "right");
   await wait(async () => await evaluate("!!document.querySelector('.session-menu')"));
   await click(".session-menu > button:nth-of-type(2)");
-  await wait(async () => await evaluate("document.querySelector('.session-rename')?.getBoundingClientRect().width>=200"));
+  await wait(async () => await evaluate("document.activeElement===document.querySelector('.session-rename') && document.querySelector('.session-rename')?.getBoundingClientRect().width>=200"));
+  win.webContents.selectAll();
+  await wait(async () => await evaluate("(() => {const input=document.querySelector('.session-rename');return input.selectionStart===0 && input.selectionEnd===input.value.length})()"));
   await win.webContents.insertText("文档更新");
+  await wait(async () => await evaluate("document.querySelector('.session-rename')?.value==='文档更新'"));
   win.webContents.sendInputEvent({ type: "keyDown", keyCode: "Return" });
   win.webContents.sendInputEvent({ type: "keyUp", keyCode: "Return" });
   await wait(async () => (await evaluate("document.querySelector('[role=status]').textContent")) === "已重命名：文档更新");

@@ -13,7 +13,7 @@ try {
   await buildRenderer({ configFile: false, plugins: [react()], base: "./", logLevel: "warn", build: { outDir: path.join(output, "renderer"), emptyOutDir: true, rollupOptions: { input: "scripts/fixtures/workbench.html" } } });
   const env = { ...process.env, TETHER_WORKBENCH_FIXTURE: path.join(output, "renderer/scripts/fixtures/workbench.html") };
   delete env.ELECTRON_RUN_AS_NODE;
-  for (const entry of ["smoke", "workbench"]) {
+  for (const entry of process.env.TETHER_COMPOSER_ONLY ? ["workbench"] : ["smoke", "workbench"]) {
     const code = await new Promise((resolve, reject) => {
       const child = spawn(electron, [path.join(output, `${entry}.mjs`)], { env, stdio: "inherit" });
       child.once("error", reject);

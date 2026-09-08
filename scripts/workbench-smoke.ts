@@ -10,6 +10,7 @@ import { initBrowserPopupHandler } from "../src/main/browser/popups";
 import { verifyAdaptivePanelWidth } from "./panel-resize-smoke";
 import { verifySidebar } from "./sidebar-smoke";
 import { verifyWorkbenchHeader } from "./workbench-header-smoke";
+import { verifyComposerToolbar } from "./composer-toolbar-smoke";
 import type { BrowserParams, BrowserRegistration, BrowserToolResult } from "../src/shared/browser-tools";
 import type { BrowserRestorePayload, BrowserTabSnapshot } from "../src/shared/types";
 
@@ -78,6 +79,7 @@ async function smoke() {
     ipcMain.handle("browser:webview-preload-path", () => pathToFileURL(path.join(root, "dist-electron/preload/webview-browser.cjs")).href);
     ipcMain.handle("browser:downloads-list", () => []);
     ipcMain.handle("app:get-locale", () => "zh-CN");
+    ipcMain.handle("workspace:list", () => []);
     ipcMain.handle("browser-passwords:find", () => null);
     ipcMain.handle("browser-passwords:save", () => null);
     ipcMain.on("browser:presentation-ready", (event, id: string) => automation.presentationReady(event.sender, id));
@@ -93,6 +95,7 @@ async function smoke() {
       main.webContents.send("browser:restore-to-main-broadcast", payload);
       BrowserWindow.fromWebContents(event.sender)?.close();
     });
+    if (!process.env.TETHER_COMPOSER_ONLY) {
     main = createWindow();
     await main.loadFile(process.env.TETHER_WORKBENCH_FIXTURE!);
     await wait(async () => (await labels()).includes("审查"));
@@ -184,6 +187,17 @@ async function smoke() {
     await run("browser_new_tab", { url });
     const sidebarScreenshot = await verifySidebar(main);
     if (process.env.TETHER_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "collapsed-sidebar-electron.png"), sidebarScreenshot);
+    }
+
+    stage = "responsive composer controls and all options in the overflow menu";
+    main = createWindow(true);
+    main.setSize(900, 620);
+    await main.loadFile(process.env.TETHER_WORKBENCH_FIXTURE!, { query: { composer: "true" } });
+    const composerScreenshots = await verifyComposerToolbar(main);
+    if (process.env.TETHER_BROWSER_ARTIFACTS) {
+      await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "composer-icons-electron.png"), composerScreenshots.icons);
+      await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "composer-menu-electron.png"), composerScreenshots.menu);
+    }
   } catch (error) {
     console.error(`Workbench smoke failed after ${stage}`, error);
     failed = true;

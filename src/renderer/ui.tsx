@@ -12,7 +12,8 @@ import type { ProviderRecord } from "../shared/types";
 import { AppearanceSettings } from "./appearance-settings";
 import { effortLabelKey, reasoningLevelsAvailable } from "../shared/thinking";
 import type { ModelOption } from "../shared/model-selection";
-import { EffortPicker, ModelPicker } from "./composer-pickers";
+import { EffortPicker, ModelPicker, usePickerPopover } from "./composer-pickers";
+import { PromptToolbar } from "./prompt-toolbar";
 import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolSummary, toolWritePreview, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
 import { tokenizeCode } from "./highlight";
 import type { AgentSkillCommand } from "../shared/skills";
@@ -397,17 +398,8 @@ export function ContextStats({
   onCompact?(): void;
 }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      if (!box.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
+  const popover = usePickerPopover(!up, 286, 430);
+  const { open, setOpen } = popover;
 
   const percent = stats?.contextUsage?.percent !== null && stats?.contextUsage?.percent !== undefined
     ? Math.round(stats.contextUsage.percent * 10) / 10
@@ -419,9 +411,13 @@ export function ContextStats({
   const showCompact = Boolean(onCompact) && percent !== undefined;
 
   return (
-    <div ref={box} className={`context-stats-wrap${open ? " open" : ""}${up ? " up" : ""}`}>
+    <div className={`context-stats-wrap${open ? " open" : ""}${up ? " up" : ""}`}>
       <button
         type="button"
+        ref={popover.trigger}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-controls={open ? popover.id : undefined}
         className={`stats-toggle${open ? " on" : ""}${
           percent !== undefined && percent >= 90 ? " hot" : percent !== undefined && percent >= 80 ? " warm" : ""
         }`}
@@ -446,11 +442,11 @@ export function ContextStats({
             />
           )}
         </svg>
-        <span>{percent !== undefined ? `${percent}%` : t("context.label")}</span>
+        <span className="toolbar-label">{percent !== undefined ? `${percent}%` : t("context.label")}</span>
       </button>
 
-      {open && (
-        <div className="context-popover" role="dialog">
+      {open && popover.placement && createPortal(
+        <div ref={popover.panel} id={popover.id} data-picker-popover={popover.id} data-toolbar-owner={popover.toolbarOwner} className="context-popover picker-panel" role="dialog" aria-label={t("context.title")} style={popover.placement}>
           <div className="context-popover-head">
             <span className="context-popover-title">{t("context.title")}</span>
             {rate !== undefined && (
@@ -563,7 +559,7 @@ export function ContextStats({
               </div>
             )}
           </div>
-        </div>
+        </div>, document.body,
       )}
     </div>
   );
@@ -2479,7 +2475,15 @@ export function PromptBar({
             ))}
           </div>
         )}
-        <div className="prompt-bar">
+        <PromptToolbar down={hero} action={running ? (
+            <button type="button" className="send stop" onClick={onStop} aria-label={t("composer.abort")}>
+              <i />
+            </button>
+          ) : (
+            <button type="submit" className="send" disabled={disabled || blank} aria-label={t("composer.send")}>
+              <Icon path="M12 19V5M5 12l7-7 7 7" size={15} />
+            </button>
+          )}>
           <input
             ref={picker}
             type="file"
@@ -2495,10 +2499,12 @@ export function PromptBar({
             type="button"
             className="prompt-attach"
             aria-label={t("composer.uploadImage")}
+            title={t("composer.uploadImage")}
             disabled={(area.current ? collectPromptImages(area.current).length : 0) >= MAX_UPLOAD_IMAGES}
             onClick={() => picker.current?.click()}
           >
             <Icon path="M12 5v14M5 12h14" size={15} />
+            <span className="toolbar-menu-label">{t("composer.uploadImage")}</span>
           </button>
           <ModelPicker value={modelKey} fallback={model} options={models} down={hero} disabled={disabled} onChange={onModel} />
           {reasoningLevelsAvailable(effortLevels) && (
@@ -2517,16 +2523,7 @@ export function PromptBar({
               onCompact={onCompact}
             />
           )}
-          {running ? (
-            <button type="button" className="send stop" onClick={onStop} aria-label={t("composer.abort")}>
-              <i />
-            </button>
-          ) : (
-            <button type="submit" className="send" disabled={disabled || blank} aria-label={t("composer.send")}>
-              <Icon path="M12 19V5M5 12l7-7 7 7" size={15} />
-            </button>
-          )}
-        </div>
+        </PromptToolbar>
       </form>
       </div>
     </div>
@@ -2590,43 +2587,39 @@ export function PermissionPicker({
   down?: boolean;
 }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
+  const popover = usePickerPopover(down, 300, 316);
+  const { open, setOpen } = popover;
   const options = permissionOptions(t);
   const selected = options.find((item) => item.value === value) ?? options[2]!;
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      if (!box.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-
   return (
-    <div ref={box} className={`combo permission-combo${open ? " open" : ""}${down ? " down" : ""}`}>
+    <div className={`combo permission-combo${open ? " open" : ""}${down ? " down" : ""}`}>
       <button
         type="button"
+        ref={popover.trigger}
+        aria-controls={open ? popover.id : undefined}
         className={`combo-trigger permission-trigger${selected.danger ? " danger" : ""}`}
         onClick={() => setOpen((was) => !was)}
-        title={selected.desc}
+        title={`${selected.label}：${selected.desc}`}
+        aria-label={`${t("composer.permission")}：${selected.label}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
       >
         <Icon path={selected.icon} size={14} className="permission-trigger-icon" />
-        <span>{selected.label}</span>
-        <Icon path="M6 9l6 6 6-6" size={12} />
+        <span className="toolbar-label">{selected.label}</span>
+        <Icon path="M6 9l6 6 6-6" size={12} className="toolbar-chevron" />
       </button>
 
-      {open && (
-        <div className="permission-menu" role="listbox">
+      {open && popover.placement && createPortal(
+        <div ref={popover.panel} id={popover.id} data-picker-popover={popover.id} data-toolbar-owner={popover.toolbarOwner} className="permission-menu picker-panel" role="listbox" aria-label={t("composer.permission")} style={popover.placement}>
           {options.map((item) => {
             const isSelected = item.value === value;
             return (
               <button
                 key={item.value}
                 type="button"
+                role="option"
+                aria-selected={isSelected}
                 className={`permission-item${isSelected ? " selected" : ""}${item.danger ? " danger" : ""}`}
                 onClick={() => {
                   onChange(item.value);
@@ -2648,7 +2641,7 @@ export function PermissionPicker({
               </button>
             );
           })}
-        </div>
+        </div>, document.body,
       )}
     </div>
   );

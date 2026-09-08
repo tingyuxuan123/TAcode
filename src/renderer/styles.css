@@ -3376,8 +3376,109 @@ textarea::selection,
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
   min-height: 32px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+.prompt-bar > .send,
+.prompt-more {
+  flex: none;
+}
+.prompt-toolbar-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.prompt-toolbar-controls[hidden] {
+  display: none;
+}
+.model-trigger-icon,
+.toolbar-menu-label {
+  display: none;
+}
+.prompt-toolbar-controls[data-mode="icons"] .toolbar-label,
+.prompt-toolbar-controls[data-mode="icons"] .toolbar-chevron {
+  display: none;
+}
+.prompt-toolbar-controls[data-mode="icons"] > .combo {
+  min-width: 0;
+}
+.prompt-toolbar-controls[data-mode="icons"] .combo-trigger,
+.prompt-toolbar-controls[data-mode="icons"] .effort-trigger,
+.prompt-toolbar-controls[data-mode="icons"] .stats-toggle {
+  width: 28px;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+}
+.prompt-toolbar-controls[data-mode="icons"] .combo-trigger svg {
+  margin: 0;
+}
+.prompt-toolbar-controls[data-mode="icons"] .model-trigger-icon,
+.prompt-toolbar-controls[data-mode="menu"] .model-trigger-icon {
+  display: block;
+}
+.prompt-more {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--ink-2);
+}
+.prompt-more:hover,
+.prompt-more[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+.prompt-toolbar-controls[data-mode="menu"] {
+  position: fixed;
+  z-index: 95;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
+}
+.prompt-toolbar-controls[data-mode="menu"] > div,
+.prompt-toolbar-controls[data-mode="menu"] > button,
+.prompt-toolbar-controls[data-mode="menu"] > div > button {
+  width: 100%;
+}
+.prompt-toolbar-controls[data-mode="menu"] > button,
+.prompt-toolbar-controls[data-mode="menu"] > div > button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  height: 32px;
+  padding: 0 8px;
+  gap: 8px;
+}
+.prompt-toolbar-controls[data-mode="menu"] .toolbar-menu-label {
+  display: inline;
+  font-size: calc(12.5px * var(--ui-font-scale));
+}
+.prompt-toolbar-controls[data-mode="menu"] .toolbar-chevron {
+  margin-left: auto;
+}
+.prompt-toolbar-controls[data-mode="menu"] .combo-trigger svg:not(.toolbar-chevron) {
+  margin-left: 0;
+}
+.prompt-toolbar-measure {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: max-content;
+  padding: 0;
+  visibility: hidden;
+  pointer-events: none;
+  box-shadow: none;
 }
 .prompt-queue {
   display: flex;
