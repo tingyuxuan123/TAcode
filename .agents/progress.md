@@ -110,3 +110,4 @@
 - Layer C 余项：密码管理设置 UI、登录态归档（依赖 CDP，随 D 层）、浏览器数据导入（Snow 为 Rust/DPAPI/Keychain，TS 仅 macOS Chromium 现实可行，需产品决策降级边界）。
 - Layer D/E 未开始（计划与会话工作台 plan/snow-browser-port.md 同步）。
 - 白屏修复（commit daf3009）：沙箱 preload 无 __dirname，guest preload 路径改由主进程 `browser:webview-preload-path` 提供（file: URL），BrowserPanel 拿到路径后再挂 webview；同时修正独立窗口 preload/icon/page 的 bundle 相对路径（tsup 单入口把 browser/* 并入 dist-electron/main，基准是该目录而非 browser/ 子目录）。ELECTRON_ENABLE_LOGGING 复现验证：preload 正常、React 正常挂载。
+- 面板标签交互重构（对齐参考设计）：空态为面板内嵌「打开标签页」选择器（PanelPicker）；已有标签时「+」弹出锚定下拉菜单（panel-add-menu），单实例类型（审查）已打开即从菜单隐藏；审查单实例、浏览器可多开（每标签独立 instanceId/webview/独立窗口迁移）；独立窗口关闭广播携带 instanceId。全屏遮罩式 TabPicker 与 panel-empty 空态移除。

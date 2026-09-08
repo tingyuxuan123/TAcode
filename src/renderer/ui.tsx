@@ -1157,16 +1157,20 @@ function treeChange(path: string, changes: SessionFile[]) {
 
 export type PanelTab = { id: string; label: string };
 
+export type PanelAddItem = { type: string; label: string; icon: ReactNode };
+
 /**
  * Feature tab container for the right-hand panel. Renders a tab bar across the
  * top of the panel (tabs left, "+" right) with the active tab panel below.
- * New features (Browser, etc.) become new tabs.
+ * "+" opens a small anchored menu of addable panel types (single-instance
+ * types already open can be omitted by the caller).
  */
 export function PanelTabs({
   tabs,
   active,
   onSelect,
-  onAdd,
+  addItems,
+  onPickType,
   onCloseTab,
   flush = false,
   children,
@@ -1174,7 +1178,9 @@ export function PanelTabs({
   tabs: PanelTab[];
   active: string;
   onSelect(id: string): void;
-  onAdd?(): void;
+  /** Addable panel types shown in the "+" dropdown (already-open single-instance types should be filtered out). */
+  addItems?: PanelAddItem[];
+  onPickType?(type: string): void;
   /** Show a close control per tab (open panels can be dismissed). */
   onCloseTab?(id: string): void;
   /** No padding/scroll body — for full-bleed panes like the browser. */
@@ -1182,6 +1188,25 @@ export function PanelTabs({
   children: ReactNode;
 }) {
   const { t } = useI18n();
+  const [addOpen, setAddOpen] = useState(false);
+  const addWrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!addOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (addWrapRef.current && !addWrapRef.current.contains(event.target as Node)) setAddOpen(false);
+    };
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setAddOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [addOpen]);
+
   return (
     <div className="inspect">
       <div className="inspect-tabs" role="tablist">
@@ -1211,16 +1236,38 @@ export function PanelTabs({
             )}
           </button>
         ))}
-        {onAdd && (
-          <button
-            type="button"
-            className="inspect-tab-add"
-            aria-label={t("panel.openTab")}
-            title={t("panel.openTab")}
-            onClick={onAdd}
-          >
-            <Icon path="M12 5v14M5 12h14" size={14} />
-          </button>
+        {addItems && addItems.length > 0 && onPickType && (
+          <div className="inspect-add-wrap" ref={addWrapRef}>
+            <button
+              type="button"
+              className={`inspect-tab-add${addOpen ? " on" : ""}`}
+              aria-label={t("panel.openTab")}
+              title={t("panel.openTab")}
+              aria-expanded={addOpen}
+              onClick={() => setAddOpen((open) => !open)}
+            >
+              <Icon path="M12 5v14M5 12h14" size={14} />
+            </button>
+            {addOpen && (
+              <div className="panel-add-menu" role="menu">
+                {addItems.map((item) => (
+                  <button
+                    key={item.type}
+                    type="button"
+                    className="panel-add-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setAddOpen(false);
+                      onPickType(item.type);
+                    }}
+                  >
+                    <span className="panel-add-item-icon">{item.icon}</span>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
       <div className={flush ? "inspect-body flush" : "inspect-body"}>{children}</div>
@@ -1228,7 +1275,7 @@ export function PanelTabs({
   );
 }
 
-export type TabPickerItem = {
+export type PanelPickerItem = {
   id: string;
   label: string;
   icon: ReactNode;
@@ -1237,52 +1284,37 @@ export type TabPickerItem = {
 };
 
 /**
- * 「打开标签页」选择器：点侧边面板的 + 后弹出，以卡片形式列出可打开的面板。
- * 覆盖全窗口的暗色遮罩 + 居中内容（对齐设计稿），Esc 或点击遮罩关闭。
+ * 「打开标签页」选择器：面板内没有任何标签时，直接占满面板居中展示，
+ * 以卡片列出可打开的面板类型（对齐设计稿的空态）。
  */
-export function TabPicker({
+export function PanelPicker({
   title,
   subtitle,
   items,
   onPick,
-  onClose,
 }: {
   title: string;
   subtitle: string;
-  items: TabPickerItem[];
+  items: PanelPickerItem[];
   onPick(id: string): void;
-  onClose(): void;
 }) {
-  useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
   return (
-    <div className="tab-picker-overlay" onClick={onClose}>
-      <div
-        className="tab-picker"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <h2 className="tab-picker-title">{title}</h2>
-        <p className="tab-picker-subtitle">{subtitle}</p>
-        <div className="tab-picker-list">
+    <div className="panel-picker">
+      <div className="panel-picker-body">
+        <h2 className="panel-picker-title">{title}</h2>
+        <p className="panel-picker-subtitle">{subtitle}</p>
+        <div className="panel-picker-list">
           {items.map((item) => (
             <button
               key={item.id}
               type="button"
-              className="tab-picker-item"
+              className="panel-picker-item"
               disabled={item.disabled}
               onClick={() => onPick(item.id)}
             >
-              <span className="tab-picker-icon">{item.icon}</span>
-              <span className="tab-picker-label">{item.label}</span>
-              {item.hint && <span className="tab-picker-hint">{item.hint}</span>}
+              <span className="panel-picker-icon">{item.icon}</span>
+              <span className="panel-picker-label">{item.label}</span>
+              {item.hint && <span className="panel-picker-hint">{item.hint}</span>}
             </button>
           ))}
         </div>

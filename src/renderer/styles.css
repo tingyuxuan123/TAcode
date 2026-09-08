@@ -6693,97 +6693,132 @@ kbd {
   cursor: default;
 }
 
-/* ===== Tab picker (打开标签页) ===== */
-.tab-picker-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
+/* ===== Panel picker (打开标签页，空态内嵌) ===== */
+.panel-picker {
+  width: 100%;
+  align-self: stretch;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(10, 9, 8, 0.78);
-  animation: tab-picker-fade 0.14s ease;
+  overflow: auto;
+  padding: 24px;
+  background: var(--page);
 }
-@keyframes tab-picker-fade {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-.tab-picker {
-  width: min(620px, calc(100vw - 120px));
+.panel-picker-body {
+  width: 100%;
+  max-width: 420px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 24px;
-  animation: tab-picker-rise 0.16s ease;
 }
-@keyframes tab-picker-rise {
-  from { transform: translateY(8px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-.tab-picker-title {
+.panel-picker-title {
   margin: 0 0 6px;
-  color: #fff;
-  font-size: calc(26px * var(--ui-font-scale));
+  color: var(--ink);
+  font-size: calc(20px * var(--ui-font-scale));
   font-weight: 700;
   letter-spacing: -0.01em;
   text-align: center;
 }
-.tab-picker-subtitle {
-  margin: 0 0 26px;
-  color: rgba(255, 255, 255, 0.66);
-  font-size: calc(15px * var(--ui-font-scale));
+.panel-picker-subtitle {
+  margin: 0 0 24px;
+  color: var(--ink-3);
+  font-size: calc(13px * var(--ui-font-scale));
   text-align: center;
 }
-.tab-picker-list {
+.panel-picker-list {
   width: 100%;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
-.tab-picker-item {
-  width: 100%;
-  height: 58px;
+.panel-picker-item {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 0 22px;
-  border: none;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.07);
-  color: #fff;
-  font-size: calc(15px * var(--ui-font-scale));
+  gap: 12px;
+  width: 100%;
+  height: 52px;
+  padding: 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: calc(13.5px * var(--ui-font-scale));
   font-weight: 600;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.14s ease, transform 0.14s ease;
+  transition: background 0.14s ease, border-color 0.14s ease;
 }
-.tab-picker-item:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.13);
-  transform: translateY(-1px);
+.panel-picker-item:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--line-strong);
 }
-.tab-picker-item:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.tab-picker-icon {
+.panel-picker-icon {
   display: grid;
   place-items: center;
-  width: 28px;
+  width: 24px;
   flex: none;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--ink-2);
 }
-.tab-picker-label {
+.panel-picker-label {
   flex: 1;
   min-width: 0;
 }
-.tab-picker-hint {
+.panel-picker-hint {
   flex: none;
-  color: rgba(255, 255, 255, 0.55);
-  font-size: calc(12px * var(--ui-font-scale));
+  color: var(--ink-3);
+  font-size: calc(11.5px * var(--ui-font-scale));
   font-weight: 400;
 }
 
+/* "+" anchored add menu (panel tab bar) */
+.inspect-add-wrap {
+  position: relative;
+  flex: none;
+  margin-left: 2px;
+}
+.inspect-add-wrap .inspect-tab-add.on {
+  background: var(--hover);
+  color: var(--ink);
+}
+.panel-add-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
+}
+.panel-add-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: calc(13px * var(--ui-font-scale));
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.panel-add-item:hover {
+  background: var(--hover);
+}
+.panel-add-item-icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  flex: none;
+  color: var(--ink-2);
+}
 /* Per-tab close control in the panel tab bar */
 .inspect-tab-close {
   display: inline-flex;
@@ -6800,27 +6835,4 @@ kbd {
   color: var(--ink);
 }
 
-/* Empty panel state (all tabs closed) */
-.panel-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: var(--ink-3);
-  font-size: calc(12.5px * var(--ui-font-scale));
-}
-.panel-empty button {
-  height: 30px;
-  padding: 0 14px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--ink);
-  font-size: calc(12.5px * var(--ui-font-scale));
-  cursor: pointer;
-}
-.panel-empty button:hover {
-  background: var(--hover);
-}
+

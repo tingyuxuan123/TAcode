@@ -259,7 +259,7 @@ export interface DesktopApi {
     /** Main window: a detached instance is being restored back into the panel. */
     onRestoreToMain(listener: (payload: BrowserRestorePayload) => void): () => void;
     /** Main window: a detached browser window was closed without restoring. */
-    onDetachedWindowClosed(listener: () => void): () => void;
+    onDetachedWindowClosed(listener: (payload: { instanceId: string }) => void): () => void;
   };
 }
 

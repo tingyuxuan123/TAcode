@@ -62,9 +62,9 @@ import {
   InspectPanel,
   Login,
   PanelTabs,
+  PanelPicker,
   PromptBar,
   SidebarNav,
-  TabPicker,
   Thinking,
   TurnNav,
   UserTurn,
@@ -410,41 +410,50 @@ export function App() {
   // 独立窗口被直接关闭时回位到空白浏览器面板。
   useEffect(() => {
     const offRestore = window.harness.browser.onRestoreToMain((payload) => {
-      setBrowserDetached(false);
-      setBrowserRestore({ tabs: payload.tabs, key: Date.now() });
-      openPanelTab("browser");
+      const id = payload.instanceId;
+      setPanelTabs((current) => (current.some((tab) => tab.id === id) ? current : [...current, { id, type: "browser" as const }]));
+      setBrowserDetached((current) => ({ ...current, [id]: false }));
+      setBrowserRestore((current) => ({ ...current, [id]: { tabs: payload.tabs, key: Date.now() } }));
+      setActivePanelTab(id);
     });
-    const offClosed = window.harness.browser.onDetachedWindowClosed(() => {
-      setBrowserDetached(false);
+    const offClosed = window.harness.browser.onDetachedWindowClosed((payload) => {
+      setBrowserDetached((current) => ({ ...current, [payload.instanceId]: false }));
     });
     return () => {
       offRestore();
       offClosed();
     };
-    // openPanelTab 由 useCallback 稳定引用
   }, []);
 
-  const openPanelTab = useCallback((id: string) => {
-    setOpenPanelTabs((current) => (current.includes(id) ? current : [...current, id]));
-    setPanelTab(id);
-    setTabPickerOpen(false);
+  const openPanelTab = useCallback((type: "inspect" | "browser") => {
+    if (type === "inspect") {
+      // 审查是单实例：已打开则只激活。
+      setPanelTabs((current) => (current.some((tab) => tab.type === "inspect") ? current : [...current, { id: "inspect", type: "inspect" as const }]));
+      setActivePanelTab("inspect");
+      return;
+    }
+    // 浏览器可多开：每个标签是独立实例（独立 webview/首页/独立窗口）。
+    const id = `browser-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    setPanelTabs((current) => [...current, { id, type: "browser" as const }]);
+    setActivePanelTab(id);
   }, []);
   const closePanelTab = useCallback((id: string) => {
-    setOpenPanelTabs((current) => {
-      const next = current.filter((item) => item !== id);
-      setPanelTab((active) => (active === id ? next[next.length - 1] ?? "" : active));
-      return next;
-    });
+    const next = panelTabsRef.current.filter((tab) => tab.id !== id);
+    setPanelTabs(next);
+    setActivePanelTab((active) => (active === id ? next[next.length - 1]?.id ?? "" : active));
   }, []);
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
   const [fullscreen, setFullscreen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FileChange>();
-  const [openPanelTabs, setOpenPanelTabs] = useState<string[]>(["inspect"]);
-  const [panelTab, setPanelTab] = useState("inspect");
-  const [tabPickerOpen, setTabPickerOpen] = useState(false);
-  const [browserDetached, setBrowserDetached] = useState(false);
-  const [browserRestore, setBrowserRestore] = useState<{ tabs: BrowserTabSnapshot[]; key: number }>();
+  const [panelTabs, setPanelTabs] = useState<Array<{ id: string; type: "inspect" | "browser" }>>([
+    { id: "inspect", type: "inspect" },
+  ]);
+  const panelTabsRef = useRef(panelTabs);
+  panelTabsRef.current = panelTabs;
+  const [activePanelTab, setActivePanelTab] = useState("inspect");
+  const [browserDetached, setBrowserDetached] = useState<Record<string, boolean>>({});
+  const [browserRestore, setBrowserRestore] = useState<Record<string, { tabs: BrowserTabSnapshot[]; key: number }>>({});
   const [featureTodos, setFeatureTodos] = useState<SessionTodo[]>([]);
   const [agentSkills, setAgentSkills] = useState<AgentSkillCommand[]>([]);
   const [stoppedJobs, setStoppedJobs] = useState<string[]>([]);
@@ -1476,41 +1485,45 @@ export function App() {
         composer={home ? undefined : composer}
         nav={<TurnNav items={anchors} />}
         inspect={workspace ? (
-          openPanelTabs.length === 0 ? (
-            <div className="panel-empty">
-              <span>{t("panel.empty")}</span>
-              <button type="button" onClick={() => setTabPickerOpen(true)}>{t("panel.openTab")}</button>
-            </div>
+          panelTabs.length === 0 ? (
+            <PanelPicker
+              title={t("picker.title")}
+              subtitle={t("picker.subtitle")}
+              items={[
+                { id: "inspect", label: t("inspect.title"), icon: <FilePlus2 size={18} strokeWidth={1.8} /> },
+                { id: "browser", label: t("browser.tab"), icon: <Globe size={18} strokeWidth={1.8} /> },
+              ]}
+              onPick={(type) => openPanelTab(type as "inspect" | "browser")}
+            />
           ) : (
             <PanelTabs
-              tabs={openPanelTabs.map((id) => ({
-                id,
-                label: id === "inspect" ? t("inspect.title") : t("browser.tab"),
-              }))}
-              active={panelTab}
-              onSelect={setPanelTab}
-              onAdd={() => setTabPickerOpen(true)}
+              tabs={(() => {
+                const browserTotal = panelTabs.filter((tab) => tab.type === "browser").length;
+                let browserSeen = 0;
+                return panelTabs.map((tab) => {
+                  if (tab.type === "inspect") return { id: tab.id, label: t("inspect.title") };
+                  browserSeen += 1;
+                  return { id: tab.id, label: browserTotal > 1 ? `${t("browser.tab")} ${browserSeen}` : t("browser.tab") };
+                });
+              })()}
+              active={activePanelTab}
+              onSelect={setActivePanelTab}
+              addItems={[
+                ...(!panelTabs.some((tab) => tab.type === "inspect")
+                  ? [{ type: "inspect", label: t("inspect.title"), icon: <FilePlus2 size={15} strokeWidth={1.8} /> }]
+                  : []),
+                { type: "browser", label: t("browser.tab"), icon: <Globe size={15} strokeWidth={1.8} /> },
+              ]}
+              onPickType={(type) => openPanelTab(type as "inspect" | "browser")}
               onCloseTab={closePanelTab}
-              flush={panelTab === "browser"}
+              flush={panelTabs.find((tab) => tab.id === activePanelTab)?.type === "browser"}
             >
-              {panelTab === "browser" ? (
-                browserDetached ? (
-                  <div className="browser-detached-notice">{t("browser.detachedNotice")}</div>
-                ) : (
-                  <BrowserPanel
-                    key={browserRestore?.key ?? "main"}
-                    instanceId="main"
-                    initialUrl=""
-                    isActive
-                    initialTabs={browserRestore?.tabs}
-                    onOpenDetached={(url, tabs) => {
-                      void window.harness.browser.openDetachedWindow("main", url, tabs);
-                      setBrowserDetached(true);
-                    }}
-                  />
-                )
-              ) : panelTab === "inspect" ? (
-                <InspectPanel
+              {(() => {
+                const active = panelTabs.find((tab) => tab.id === activePanelTab);
+                if (!active) return null;
+                if (active.type === "inspect") {
+                  return (
+                    <InspectPanel
                   files={workingFiles}
                   todos={todos}
                   terminals={terminals}
@@ -1539,7 +1552,27 @@ export function App() {
                     });
                   }}
                 />
-              ) : null}
+                );
+              }
+              if (active.type === "browser") {
+                return browserDetached[active.id] ? (
+                  <div className="browser-detached-notice">{t("browser.detachedNotice")}</div>
+                ) : (
+                  <BrowserPanel
+                    key={browserRestore[active.id]?.key ?? active.id}
+                    instanceId={active.id}
+                    initialUrl=""
+                    isActive
+                    initialTabs={browserRestore[active.id]?.tabs}
+                    onOpenDetached={(url, tabs) => {
+                      void window.harness.browser.openDetachedWindow(active.id, url, tabs);
+                      setBrowserDetached((current) => ({ ...current, [active.id]: true }));
+                    }}
+                  />
+                );
+              }
+              return null;
+            })()}
             </PanelTabs>
           )
         ) : undefined}
@@ -1739,18 +1772,6 @@ export function App() {
               }
             }
           }}
-        />
-      )}
-      {tabPickerOpen && (
-        <TabPicker
-          title={t("picker.title")}
-          subtitle={t("picker.subtitle")}
-          items={[
-            { id: "inspect", label: t("inspect.title"), icon: <FilePlus2 size={18} strokeWidth={1.8} /> },
-            { id: "browser", label: t("browser.tab"), icon: <Globe size={18} strokeWidth={1.8} /> },
-          ]}
-          onPick={openPanelTab}
-          onClose={() => setTabPickerOpen(false)}
         />
       )}
     </div>

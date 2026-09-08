@@ -89,10 +89,10 @@ export const createDetachedBrowserWindow = (
 
   win.on("closed", () => {
     detachedWindows.delete(instanceId);
-    // 通知其余窗口（主窗口面板）实例不再处于独立窗口中，用于恢复面板展示。
+    // 通知其余窗口（主窗口面板）该实例不再处于独立窗口中，用于恢复面板展示。
     for (const other of BrowserWindow.getAllWindows()) {
       if (!other.isDestroyed() && other !== win) {
-        other.webContents.send("browser:detached-window-closed");
+        other.webContents.send("browser:detached-window-closed", { instanceId });
       }
     }
   });
