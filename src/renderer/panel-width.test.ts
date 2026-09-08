@@ -1,9 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clampInspectWidth, readInspectWidth, writeInspectWidth } from "./panel-width";
+import { clampInspectWidth, readInspectWidth, shouldAutoCollapseSidebar, writeInspectWidth } from "./panel-width";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("右侧面板动态宽度", () => {
+  it("向左拖大使会话不足420px时才触发收起", () => {
+    expect(shouldAutoCollapseSidebar(268, 780, 1200)).toBe(false);
+    expect(shouldAutoCollapseSidebar(268, 781, 1200)).toBe(true);
+    expect(shouldAutoCollapseSidebar(268, 1500, 1200)).toBe(true);
+    expect(shouldAutoCollapseSidebar(900, 850, 1200)).toBe(false);
+    expect(shouldAutoCollapseSidebar(900, 900, 1200)).toBe(false);
+  });
+
+  it("越过最小宽度的拖动保持220px，不反跳到默认宽度", () => {
+    expect(clampInspectWidth(100, 1200)).toBe(220);
+    expect(clampInspectWidth(0, 1200)).toBe(220);
+    expect(clampInspectWidth(-500, 1200)).toBe(220);
+  });
   it("宽窗口可超过480px，并为对话保留320px", () => {
     expect(clampInspectWidth(900, 1220)).toBe(900);
     expect(clampInspectWidth(1500, 1220)).toBe(900);

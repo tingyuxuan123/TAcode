@@ -88,7 +88,7 @@ For pasted images:
 
 Desktop sessions automatically load `browser_*` tools for the visible embedded browser. Ask the agent to open `localhost:5177`, fill a search field, submit it, and verify the results. No additional browser MCP or Playwright installation is required.
 
-The left sidebar can collapse to a 56px rail using its top button. Projects and sessions remain visible as abbreviated names with full-title tooltips, direct switching, active indicators, and scrolling. New chat, projects, and settings remain available, and the collapsed state is remembered. The released space can be used for chat or a wider browser panel without reloading pages.
+The left sidebar can collapse to a 56px rail using its top button. Dragging the right panel wider automatically collapses it when chat would have less than 420px of space. Both directions use a 180ms linear width transition and respect reduced-motion preferences. Automatic collapse stays in place until manually expanded; it does not overwrite the saved manual choice. Projects and sessions remain visible as abbreviated names with full-title tooltips, direct switching, active indicators, and scrolling. New chat, projects, and settings remain available. Releasing the divider freezes the right panel width, leaving any space released by the remaining animation to chat. Layout changes do not reload pages.
 
 The right panel uses one tab bar for review and web pages, with each page labeled by its title. The plus button, page links, and agent-created pages all open tabs there; middle-click opens in the background without changing the current selection. Detached browser windows keep their own tab bar, and restoring a window returns each page as a separate top-level tab.
 

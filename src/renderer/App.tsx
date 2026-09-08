@@ -68,6 +68,7 @@ import {
 } from "./ui";
 import { WorkbenchPanels } from "./browser/workbench-panels";
 import { useBrowserPanels } from "./browser/use-browser-panels";
+import { useSidebarLayout } from "./sidebar-layout";
 import { ArrowDown } from "lucide-react";
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
@@ -417,6 +418,7 @@ export function App() {
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FileChange>();
   const browserPanels = useBrowserPanels();
+  const sidebarLayout = useSidebarLayout();
   const [featureTodos, setFeatureTodos] = useState<SessionTodo[]>([]);
   const [agentSkills, setAgentSkills] = useState<AgentSkillCommand[]>([]);
   const [stoppedJobs, setStoppedJobs] = useState<string[]>([]);
@@ -1370,6 +1372,8 @@ export function App() {
   return (
     <div className={["app", darwin && "darwin", fullscreen && "fullscreen"].filter(Boolean).join(" ")}>
       <SidebarNav
+        collapsed={sidebarLayout.collapsed}
+        onToggle={sidebarLayout.toggle}
         onNew={() => void newThread()}
         onOpen={() => void openFolder()}
         account={(
@@ -1447,6 +1451,7 @@ export function App() {
       </SidebarNav>
 
       <Chat
+        onSidebarAutoCollapse={sidebarLayout.collapseAutomatically}
         home={home}
         title={sessions.find((session) => isSameSession(session, activeSession))?.title || (workspace ? baseName(workspace) : undefined)}
         composer={home ? undefined : composer}

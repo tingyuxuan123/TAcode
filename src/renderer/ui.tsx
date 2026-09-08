@@ -21,7 +21,7 @@ import { useI18n } from "./i18n";
 import type { MessageKey } from "../shared/i18n";
 import { ExecutionFlow } from "./execution-flow";
 import { startPanelResize } from "./panel-resize";
-import { clampInspectWidth, readInspectWidth, writeInspectWidth } from "./panel-width";
+import { clampInspectWidth, readInspectWidth, shouldAutoCollapseSidebar, writeInspectWidth } from "./panel-width";
 import { buildTurnPresentation, toolRow } from "./conversation";
 import logo from "./logo.svg";
 
@@ -185,25 +185,21 @@ export function Elapsed({ start, end, live }: { start?: number; end?: number; li
 }
 
 export function SidebarNav({
+  collapsed,
+  onToggle,
   onNew,
   onOpen,
   account,
   children,
 }: {
+  collapsed: boolean;
+  onToggle(): void;
   onNew(): void;
   onOpen(): void;
   account: ReactNode;
   children: ReactNode;
 }) {
   const { t } = useI18n();
-  const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem("tether.sidebarCollapsed") === "true"; } catch { return false; }
-  });
-  const toggleSidebar = () => {
-    const next = !collapsed;
-    setCollapsed(next);
-    try { localStorage.setItem("tether.sidebarCollapsed", String(next)); } catch { /* Storage may be unavailable. */ }
-  };
   return (
     <aside className={collapsed ? "sidebar is-collapsed" : "sidebar"}>
       <header className="sidebar-titlebar">
@@ -214,7 +210,7 @@ export function SidebarNav({
         <button
           type="button"
           className="sidebar-toggle"
-          onClick={toggleSidebar}
+          onClick={onToggle}
           title={t(collapsed ? "nav.expandSidebar" : "nav.collapseSidebar")}
           aria-label={t(collapsed ? "nav.expandSidebar" : "nav.collapseSidebar")}
           aria-expanded={!collapsed}
@@ -245,6 +241,7 @@ export function Chat({
   inspect,
   nav,
   title,
+  onSidebarAutoCollapse,
 }: {
   children: ReactNode;
   composer?: ReactNode;
@@ -252,6 +249,7 @@ export function Chat({
   inspect?: ReactNode;
   nav?: ReactNode;
   title?: string;
+  onSidebarAutoCollapse?(): void;
 }) {
   const { t } = useI18n();
   const [drawer, setDrawer] = useState(true);
@@ -287,13 +285,23 @@ export function Chat({
     finishResizeRef.current?.();
     const startX = event.clientX;
     const startWidth = widthRef.current;
+    let requestedWidth = startWidth;
     finishResizeRef.current = startPanelResize(event.currentTarget, event, (clientX) => {
-      const next = clampInspectWidth(startWidth + startX - clientX, chatBodyRef.current?.clientWidth);
-      widthRef.current = next;
-      setPreferredInspectWidth(next);
+      requestedWidth = clampInspectWidth(startWidth + startX - clientX);
+      const availableWidth = chatBodyRef.current?.clientWidth;
+      if (availableWidth !== undefined && shouldAutoCollapseSidebar(startWidth, requestedWidth, availableWidth)) {
+        onSidebarAutoCollapse?.();
+      }
+      widthRef.current = clampInspectWidth(requestedWidth, availableWidth);
+      // 保留指针对应的目标，侧栏动画释放空间后仍可继续向目标宽度变化。
+      setPreferredInspectWidth(requestedWidth);
     }, () => {
       finishResizeRef.current = null;
-      writeInspectWidth(widthRef.current);
+      // 松开时固定当前可显示的宽度；之后的侧栏动画只给会话区增加空间。
+      const next = clampInspectWidth(requestedWidth, chatBodyRef.current?.clientWidth);
+      widthRef.current = next;
+      setPreferredInspectWidth(next);
+      writeInspectWidth(next);
     });
   };
 

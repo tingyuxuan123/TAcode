@@ -161,12 +161,20 @@ textarea::selection,
 
 .sidebar {
   width: 252px;
-  min-width: 252px;
+  min-width: 56px;
+  flex: none;
+  overflow: hidden;
+  transition: width 180ms linear;
   height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--page);
   border-right: 1px solid var(--line);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
 }
 /* Windows/Linux put the window controls on the right, so the left strip only needs drag height. */
 .sidebar-titlebar {

@@ -2,6 +2,7 @@ import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { WorkbenchPanels } from "../../src/renderer/browser/workbench-panels";
 import { useBrowserPanels } from "../../src/renderer/browser/use-browser-panels";
+import { useSidebarLayout } from "../../src/renderer/sidebar-layout";
 import { LocaleProvider } from "../../src/renderer/i18n";
 import { Chat, SidebarNav } from "../../src/renderer/ui";
 import { AccountMenu, SessionRow } from "../../src/renderer/App";
@@ -9,6 +10,7 @@ import "../../src/renderer/styles.css";
 
 function Fixture() {
   const panels = useBrowserPanels();
+  const sidebarLayout = useSidebarLayout();
   const [action, setAction] = useState("");
   const [activeProject, setActiveProject] = useState("xc-app");
   const [activeSession, setActiveSession] = useState("web-1");
@@ -22,6 +24,8 @@ function Fixture() {
   return <div className={withChat ? `app ${window.harness.platform === "darwin" ? "darwin" : ""}` : undefined} style={{ display: "flex", width: "100%", height: "100vh" }}>
     {withChat ? <>
       <SidebarNav
+        collapsed={sidebarLayout.collapsed}
+        onToggle={sidebarLayout.toggle}
         onNew={() => setAction("已新建对话")}
         onOpen={() => setAction("已打开项目")}
         account={<AccountMenu model="本地模型" configured onOpenSettings={() => setAction("已打开设置")} />}
@@ -52,7 +56,7 @@ function Fixture() {
           </div>
         ))}
       </SidebarNav>
-      <Chat inspect={content} title="浏览器宽度测试">
+      <Chat inspect={content} title="浏览器宽度测试" onSidebarAutoCollapse={sidebarLayout.collapseAutomatically}>
         <div className="conversation" style={{ padding: 24 }}>对话区保持可用，拖动分隔线可为网页分配更多空间。<p role="status">{action}</p></div>
       </Chat>
     </> : content}

@@ -177,3 +177,12 @@
 - 窄栏列表可滚动、各项目分组和会话条目可直接点击，展开态继续显示完整名称；会话置顶标记、右键菜单保留，重命名输入框显示在窄栏右侧，避免在56px内输入。未改原项目/会话切换回调或展开状态。
 - 扩展真实Electron回归：两个项目、四个真实SessionRow；原生点击切换项目/会话且保持56px，缩短窗口验证列表滚动，原生右键重命名并检查活动状态，展开/收起保持节点及guest。旧标签/动态宽度/拖拽释放回归继续通过。
 - pnpm typecheck、完整构建与pnpm test:browser、git diff --check通过。全量337/338，唯一仍为既有conversation.test.ts:308识图标题断言。README双语更新。证据：sidebar-navigation-smoke.txt / sidebar-navigation-tests.txt / collapsed-sidebar-electron.png（本会话工作台）。未重启用户应用、未提交或发布、未改AGENTS.md。
+
+
+## 2026-09-08：拖大右侧自动收起左栏与线性动画（13:04，Asia/Shanghai）
+
+- 用户要求右侧拉大到一定程度时自动收起左栏，给会话区留空间，动画更线性。新增sidebar-layout.ts管理手动与自动折叠状态，App及真实fixture共享。拖大后会话可用空间不足420px触发自动收起；缩回保持收起，用户可手动展开，自动状态不覆盖已保存的手动选择。
+- 侧栏252→56px采用180ms linear宽度过渡，遵循系统减少动态效果偏好。调整min-width与flex约束使宽度过渡生效，溢出文字不进入会话区。既有项目/会话窄栏导航与右键菜单保持可用。
+- 拖动中保留目标宽度，侧栏释放空间时仍能向指针对应宽度变化；松开时将当下实际宽度固定并保存，剩余动画仅扩大会话区。修正越过面板最小宽度时从220反跳到默认268的问题。
+- 真实Electron验证：剩余440px不触发、400px触发并增加196px到596px；线性0.18s样式与单调中间帧；同一拖动中反向移动不展开，继续拉大可到1064px且保留320px会话；手动展开、动画中快速松开后宽度稳定、窗口缩放/刷新、guest和手动偏好保持。旧浏览器工具/单层标签/拖拽释放/窄栏导航及重命名回归通过。
+- pnpm typecheck、pnpm test:browser（含完整构建）、git diff --check通过；全量342/343，仅既有conversation.test.ts:308识图标题断言失败，新增5项单测通过。README双语更新。证据：会话工作台auto-sidebar-smoke.txt / auto-sidebar-tests.txt / expanded-panel-electron.png（本轮自动收起后的截图）。未重启用户应用，未提交/发布，未改AGENTS.md。

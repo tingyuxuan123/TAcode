@@ -76,6 +76,9 @@ export async function verifyAdaptivePanelWidth(win: BrowserWindow): Promise<Buff
       chat: document.querySelector('.chat-main').getBoundingClientRect().width,
       bodyX: body.getBoundingClientRect().x, dividerX: divider.x + divider.width / 2,
       dividerY: divider.y + 120, stored: Number(localStorage.getItem('tether.inspectWidth')),
+      sidebar: document.querySelector('.sidebar').getBoundingClientRect().width,
+      collapsed: document.querySelector('.sidebar').classList.contains('is-collapsed'),
+      manualCollapsed: localStorage.getItem('tether.sidebarCollapsed'),
       resizing: document.documentElement.classList.contains('is-resizing-panel'),
       guest: document.querySelector('webview')?.getWebContentsId()
     };
@@ -89,16 +92,48 @@ export async function verifyAdaptivePanelWidth(win: BrowserWindow): Promise<Buff
     }
     throw new Error(`Adaptive width did not settle: ${JSON.stringify(await read())}`);
   };
-  const initial = await wait((state) => !!state.guest && state.available > 1000);
+  const initial = await wait((state) => !!state.guest && state.available > 1000 && state.sidebar === 252);
   const x = Math.round(initial.dividerX);
   const y = Math.round(initial.dividerY);
   const targetX = Math.round(initial.bodyX + 80);
+  const comfortableX = Math.round(initial.bodyX + 440);
+  const crowdedX = Math.round(initial.bodyX + 400);
   win.webContents.sendInputEvent({ type: "mouseMove", x, y });
   win.webContents.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
   await wait((state) => state.resizing);
+  win.webContents.sendInputEvent({ type: "mouseMove", x: comfortableX, y, button: "left", modifiers: ["leftButtonDown"] });
+  const comfortable = await wait((state) => state.chat === 440);
+  assert.equal(comfortable.sidebar, 252, "roomy chat must not collapse the sidebar");
+  await win.webContents.executeJavaScript(`(() => {
+    window.__sidebarFrames = [];
+    window.__recordSidebar = true;
+    const sample = () => {
+      if (!window.__recordSidebar) return;
+      window.__sidebarFrames.push(document.querySelector('.sidebar').getBoundingClientRect().width);
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  })()`);
+  win.webContents.sendInputEvent({ type: "mouseMove", x: crowdedX, y, button: "left", modifiers: ["leftButtonDown"] });
+  const automatic = await wait((state) => state.sidebar === 56 && state.chat === 596);
+  assert.equal(automatic.panel, initial.available - 400, "released sidebar space belongs to chat while the pointer is stationary");
+  assert.equal(automatic.manualCollapsed, "false", "automatic collapse must not overwrite the manual preference");
+  const animation = await win.webContents.executeJavaScript(`(() => {
+    window.__recordSidebar = false;
+    const style = getComputedStyle(document.querySelector('.sidebar'));
+    return { frames: window.__sidebarFrames, reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, duration: style.transitionDuration, timing: style.transitionTimingFunction };
+  })()`);
+  if (!animation.reduced) {
+    assert.equal(animation.duration, "0.18s");
+    assert.equal(animation.timing, "linear");
+    assert(animation.frames.some((width: number) => width > 56 && width < 252), "collapse must render intermediate widths");
+    assert(animation.frames.every((width: number, index: number, frames: number[]) => index === 0 || width <= frames[index - 1]), "collapse must not reverse direction during the gesture");
+  }
+  win.webContents.sendInputEvent({ type: "mouseMove", x: comfortableX, y, button: "left", modifiers: ["leftButtonDown"] });
+  await wait((state) => state.chat === 636 && state.sidebar === 56);
   win.webContents.sendInputEvent({ type: "mouseMove", x: targetX, y, button: "left", modifiers: ["leftButtonDown"] });
-  const expanded = await wait((state) => state.panel === state.available - 320);
-  assert(expanded.panel > 800, "wide web pages must be able to exceed the old 480px limit");
+  const expanded = await wait((state) => state.sidebar === 56 && state.panel === state.available - 320);
+  assert(expanded.panel > 1000, "automatic collapse must release space for wider web pages");
   assert.equal(expanded.chat, 320);
   win.webContents.sendInputEvent({ type: "mouseUp", x: targetX, y, button: "left", clickCount: 1 });
   await wait((state) => !state.resizing && state.stored === expanded.panel);
@@ -114,8 +149,25 @@ export async function verifyAdaptivePanelWidth(win: BrowserWindow): Promise<Buff
   assert.equal(restored.guest, initial.guest, "resizing must not recreate the browser guest");
   await win.webContents.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
   const screenshot = (await win.webContents.capturePage()).toPNG();
+  // A manual expansion stays open until the next growing gesture. Releasing during
+  // the next collapse must freeze the browser width even while the sidebar animates.
+  const toggle = await win.webContents.executeJavaScript("(() => {const r=document.querySelector('.sidebar-toggle').getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()");
+  win.webContents.sendInputEvent({ type: "mouseMove", ...toggle });
+  win.webContents.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, ...toggle });
+  win.webContents.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, ...toggle });
+  const manual = await wait((state) => state.sidebar === 252 && state.panel === state.available - 320);
+  const fastX = Math.round(manual.dividerX);
+  win.webContents.sendInputEvent({ type: "mouseMove", x: fastX, y });
+  win.webContents.sendInputEvent({ type: "mouseDown", x: fastX, y, button: "left", clickCount: 1 });
+  await wait((state) => state.resizing);
+  win.webContents.sendInputEvent({ type: "mouseMove", x: fastX - 200, y, button: "left", modifiers: ["leftButtonDown"] });
+  win.webContents.sendInputEvent({ type: "mouseUp", x: fastX - 200, y, button: "left", clickCount: 1 });
+  const released = await wait((state) => !state.resizing && state.collapsed && state.stored === state.panel);
+  const settled = await wait((state) => state.sidebar === 56);
+  assert.equal(settled.panel, released.panel, "after release only chat may grow with the remaining sidebar animation");
+  assert.equal(settled.guest, initial.guest);
   await new Promise<void>((resolve) => { win.webContents.once("did-finish-load", resolve); win.webContents.reload(); });
-  await wait((state) => state.panel === expanded.panel && state.stored === expanded.panel);
-  console.log(`Adaptive panel width passed: ${expanded.panel}px browser, 320px chat, automatic shrink/restore, preserved guest and reload persistence.`);
+  await wait((state) => state.sidebar === 252 && state.stored === released.panel && state.panel === Math.min(released.panel, state.available - 320));
+  console.log(`Adaptive panel width passed: automatic sidebar collapse at 420px, linear animation, no oscillation, ${expanded.panel}px browser, release during animation, preserved guest and manual preference.`);
   return screenshot;
 }
