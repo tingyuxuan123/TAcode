@@ -6,6 +6,7 @@ import { App } from "./App";
 import { LocaleProvider } from "./i18n";
 // Bundled so Windows/Linux render the same Latin text as macOS instead of thin Segoe UI.
 import "@fontsource-variable/inter/wght.css";
+import "katex/dist/katex.min.css";
 import "./styles.css";
 
 applyTheme(readStoredTheme());

@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -14,7 +14,7 @@ import { effortLabelKey, reasoningLevelsAvailable } from "../shared/thinking";
 import type { ModelOption } from "../shared/model-selection";
 import { EffortPicker, ModelPicker, usePickerPopover } from "./composer-pickers";
 import { PromptToolbar } from "./prompt-toolbar";
-import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolSummary, toolWritePreview, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
+import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolPath, toolSummary, toolWritePreview, toolWriteSource, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
 import { tokenizeCode } from "./highlight";
 import type { AgentSkillCommand } from "../shared/skills";
 import { PROJECT_SKILL_ROOTS, USER_SKILL_ROOTS, skillSlashCommand } from "../shared/skills";
@@ -25,6 +25,11 @@ import { startPanelResize } from "./panel-resize";
 import { clampInspectWidth, readInspectWidth, shouldAutoCollapseSidebar, writeInspectWidth } from "./panel-width";
 import { buildTurnPresentation, toolRow } from "./conversation";
 import logo from "./logo.svg";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
+import { CodeBlock, HighlightedFileCode } from "./codeblock";
+import { highlightToTokens, isHighlighterReady, onHighlighterReady } from "./shiki";
 
 const MAX_UPLOAD_IMAGES = 4;
 const PATH_MIME = "text/tether-path";
@@ -795,6 +800,25 @@ function traceDetail(row: TraceRow): ReactNode {
   if (web && (web.sources.length > 0 || web.summary)) {
     return <WebSearchDetail card={web} />;
   }
+  // File reads: render markdown sources as rich text and everything else as a
+  // numbered, syntax-highlighted block instead of the plain pre fallback below.
+  if (/read|cat|view/i.test(tool.name)) {
+    const path = toolPath(tool);
+    const text = tool.output?.trim() || "";
+    if (!text) return null;
+    if (/\\.(md|markdown)$/i.test(path)) {
+      return <div className="trace-detail-text markdown"><Markdown>{text}</Markdown></div>;
+    }
+    return (
+      <pre className="trace-detail-file">
+        <HighlightedFileCode code={text} language={path} />
+      </pre>
+    );
+  }
+  if (/write|edit|patch/i.test(tool.name)) {
+    const source = toolWriteSource(tool);
+    if (source.patch.trim() || source.plain.trim()) return <WriteDiff tool={tool} />;
+  }
   const preview = toolWritePreview(tool, 24);
   const body = preview || tool.output?.trim() || "";
   if (!body) return null;
@@ -824,6 +848,59 @@ function WebSearchDetail({ card }: { card: NonNullable<ReturnType<typeof webSear
       ))}
     </div>
   );
+}
+
+/** Line number comes from the file the row belongs to: old file for dels, new file otherwise. */
+type WriteDiffRow = { kind: "ctx" | "add" | "del" | "plain"; text: string; no?: number };
+
+function writeDiffRows(source: { patch: string; plain: string }): WriteDiffRow[] {
+  if (source.patch.trim()) {
+    let oldNo = 0;
+    let nextNo = 0;
+    return splitPatch(source.patch.replace(/\n+$/, ""))
+      .filter((row) => row.kind === "ctx" || row.kind === "add" || row.kind === "del")
+      .map((row) => ({
+        kind: row.kind as WriteDiffRow["kind"],
+        text: row.kind === "del" ? row.old : row.next,
+        no: row.kind === "del" ? ++oldNo : ++nextNo,
+      }));
+  }
+  return source.plain.replace(/\n+$/, "").split("\n").map((text, index) => ({ kind: "plain" as const, text, no: index + 1 }));
+}
+
+/** Inline write diff mirroring the drawer diff: numbered tinted rows with edge markers. */
+function WriteDiff({ tool, limit = 24 }: { tool: ToolActivity; limit?: number }) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const source = toolWriteSource(tool);
+  const rows = writeDiffRows(source);
+  const visible = expanded ? rows : rows.slice(0, limit);
+  if (rows.length === 0) return null;
+  return (
+    <div className="write-diff">
+      <div className="write-diff-table">
+        {visible.map((row, index) => (
+          <div key={index} className={`wd-row ${row.kind}`}>
+            <i>{row.no}</i>
+            <pre>{writeDiffTokens(row.text, source.path)}</pre>
+          </div>
+        ))}
+        {!expanded && rows.length > visible.length && (
+          <button type="button" className="wd-more" onClick={() => setExpanded(true)}>
+            {t("trace.writeMore", { n: rows.length - visible.length })}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function writeDiffTokens(text: string, path: string): ReactNode {
+  const tokens = tokenizeCode(text, path)[0] ?? [];
+  if (tokens.length === 0) return " ";
+  return tokens.map((token, spot) => token.kind
+    ? <em key={spot} className={token.kind}>{token.text}</em>
+    : <span key={spot}>{token.text}</span>);
 }
 
 function DelegateDetail({ tool }: { tool: ToolActivity }) {
@@ -1027,19 +1104,30 @@ function copyMarkdownPlain(event: { preventDefault(): void; clipboardData: DataT
   event.clipboardData?.setData("text/plain", selected);
 }
 
+function useAppTheme(): string {
+  const subscribe = useCallback((notify: () => void) => {
+    const observer = new MutationObserver(notify);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+  return useSyncExternalStore(subscribe, () => document.documentElement.dataset.theme ?? "paper", () => "paper");
+}
+
 function Markdown({ children, streaming }: { children: string; streaming?: boolean }) {
+  const theme = useAppTheme();
   const source = compactFencedCode(
     stripEmptyMarkdown(repairMarkdownTables(streaming ? closeOpenFences(children) : children)),
   );
   if (!source) return null;
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex, rehypeRaw]}
       components={{
         pre({ children }) {
           const plain = extractNodeText(children).trim();
           if (!plain) return null;
-          return <pre>{children}</pre>;
+          return <CodeBlock theme={theme}>{children}</CodeBlock>;
         },
         code({ children, className, ...props }) {
           const plain = extractNodeText(children).trim();
@@ -1788,18 +1876,7 @@ export function FileDrawer({ file, workspace, onClose }: { file: FileChange; wor
         </div>
       ) : (
         <pre className="file-code" key={file.path}>
-          {tokenizeCode(body, file.path).map((tokens, index) => (
-            <span key={index} className="code-line">
-              <i>{index + 1}</i>
-              <span>
-                {tokens.length === 0
-                  ? " "
-                  : tokens.map((token, spot) => token.kind
-                    ? <em key={spot} className={token.kind}>{token.text}</em>
-                    : <span key={spot}>{token.text}</span>)}
-              </span>
-            </span>
-          ))}
+          <HighlightedFileCode code={body} language={file.path} />
         </pre>
       )}
     </aside>

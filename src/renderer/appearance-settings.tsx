@@ -10,10 +10,12 @@ import type { MessageKey } from "../shared/i18n";
 import { useI18n } from "./i18n";
 
 const THEME_LABEL: Record<ThemeId, MessageKey> = {
-  white: "settings.themeWhite", paper: "settings.themePaper", dark: "settings.themeDark",
+  white: "settings.themeWhite", paper: "settings.themePaper", green: "settings.themeGreen",
+  blue: "settings.themeBlue", dark: "settings.themeDark",
 };
 const THEME_DESC: Record<ThemeId, MessageKey> = {
-  white: "settings.themeWhiteDesc", paper: "settings.themePaperDesc", dark: "settings.themeDarkDesc",
+  white: "settings.themeWhiteDesc", paper: "settings.themePaperDesc", green: "settings.themeGreenDesc",
+  blue: "settings.themeBlueDesc", dark: "settings.themeDarkDesc",
 };
 const FONT_LABEL: Record<string, MessageKey> = {
   default: "settings.fontDefault", system: "settings.fontSystem", serif: "settings.fontSerif", custom: "settings.fontCustom",

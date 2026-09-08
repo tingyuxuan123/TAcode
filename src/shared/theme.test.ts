@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_THEME, parseTheme } from "./theme";
 
 describe("parseTheme", () => {
-  it("accepts the three themes", () => {
+  it("accepts all themes", () => {
     expect(parseTheme("white")).toBe("white");
     expect(parseTheme("paper")).toBe("paper");
+    expect(parseTheme("green")).toBe("green");
+    expect(parseTheme("blue")).toBe("blue");
     expect(parseTheme("dark")).toBe("dark");
   });
 

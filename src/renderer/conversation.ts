@@ -674,6 +674,18 @@ function patchTarget(input: string): { action: "add" | "update" | "delete"; path
   return { action, path: match[2].trim() };
 }
 
+/** Raw patch / plain contents behind a write tool, for diff rendering instead of +/- text. */
+export function toolWriteSource(tool: ToolActivity): { patch: string; plain: string; path: string } {
+  if (tool.status === "error" || !/write|edit|patch/i.test(tool.name)) return { patch: "", plain: "", path: "" };
+  const args = isRecord(tool.args) ? tool.args : {};
+  const patch = stringField(args, "input");
+  return {
+    patch,
+    plain: patch.trim() ? "" : stringField(args, "contents") || stringField(args, "content"),
+    path: toolPath(tool),
+  };
+}
+
 /** Code the model is writing, so the trace can show it instead of a one-line tool title. */
 export function toolWritePreview(tool: ToolActivity, limit = 80): string {
   if (tool.status === "error" || !/write|edit|patch/i.test(tool.name)) return "";
@@ -1720,7 +1732,7 @@ function isPlanProgressWork(tool: ToolActivity): boolean {
   return /write|edit|patch/.test(name);
 }
 
-function toolPath(tool: ToolActivity): string {
+export function toolPath(tool: ToolActivity): string {
   const args = isRecord(tool.args) ? tool.args : {};
   const details = isRecord(tool.details) ? tool.details : {};
   return stringField(args, "path") || stringField(args, "file_path") || stringField(args, "target_file") || stringField(details, "path");
