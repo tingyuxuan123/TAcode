@@ -53,12 +53,12 @@ it.each([false, true])("advertises and executes browser tools, recovering from a
     expect(errors).toEqual([]);
     expect(calls).toHaveLength(attemptExternal ? 3 : 2);
     expect(JSON.stringify(calls[0].tools)).toContain("browser_observe");
-    expect(JSON.stringify(calls[0].messages)).toContain("Tether 内置浏览器");
+    expect(JSON.stringify(calls[0].messages)).toContain("TACode 内置浏览器");
     expect(execute).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith("browser_navigate", { url: "http://localhost:9001/unibest/" }, expect.any(AbortSignal));
     expect(JSON.stringify(calls.at(-1)!.messages)).toContain("本地浏览器测试页");
     if (attemptExternal) {
-      expect(JSON.stringify(calls[1].messages)).toContain("Tether 默认在内嵌浏览器打开网页");
+      expect(JSON.stringify(calls[1].messages)).toContain("TACode 默认在内嵌浏览器打开网页");
       await expect(access(join(dir, "opener-was-run"))).rejects.toThrow();
     }
   } finally {

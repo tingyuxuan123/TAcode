@@ -2,7 +2,7 @@
  * 文件路径识别（纯逻辑，与 React 解耦，便于确定性测试）。
  *
  * 判断行内 code 文本是否为「文件路径」，决定渲染成文件 chip 还是普通强调 code。
- * 规则参考 Proma（file-path-chip-utils），但 Tether 无主进程存在性校验，仅按格式与扩展名判定。
+ * 规则参考 Proma（file-path-chip-utils），但 TACode 无主进程存在性校验，仅按格式与扩展名判定。
  */
 
 const PATH_SEP_RE = /[\\/]/

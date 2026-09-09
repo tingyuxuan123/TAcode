@@ -42,7 +42,7 @@ const ensureGlobalListener = (): void => {
 };
 
 /**
- * 浏览器默认起始页：localStorage 持久化（对齐 Tether 既有 UI 偏好存储方式），
+ * 浏览器默认起始页：localStorage 持久化（对齐 TACode 既有 UI 偏好存储方式），
  * 模块级缓存 + 变更事件同步所有浏览器实例。
  */
 export function useBrowserHomepage(): {

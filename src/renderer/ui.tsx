@@ -227,7 +227,7 @@ export function SidebarNav({
       <header className="sidebar-titlebar">
         <div className="sidebar-brand">
           <img className="brand-mark" src={logo} alt="" width={24} height={14} />
-          <strong>Tether</strong>
+          <strong>TACode</strong>
         </div>
         <button
           type="button"

@@ -34,7 +34,7 @@ const RELOAD_BASE_DELAY_MS = 1000;
 
 const crashPage = (target: string): string => `<!doctype html>
 <meta charset="utf-8" />
-<title>Tether Browser</title>
+<title>TACode Browser</title>
 <style>
   body { margin: 0; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 12px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2328; background: #fafafb; }
@@ -97,7 +97,7 @@ export const createDetachedBrowserWindow = (
     height: DEFAULT_WINDOW_HEIGHT,
     minWidth: MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
-    title: "Tether Browser",
+    title: "TACode Browser",
     icon: appIconPath(),
     autoHideMenuBar: true,
     backgroundColor: getWindowBackgroundColor(),

@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="build/icon.png" width="96" alt="Tether logo" />
+<img src="build/icon.png" width="96" alt="TACode logo" />
 
-# Tether
+# TACode
 
 **A local-first AI coding workbench built on the Pi ecosystem**
 
@@ -16,29 +16,29 @@ Let DeepSeek and OpenAI-compatible models inspect, edit, and verify your reposit
 
 </div>
 
-Tether is an Electron desktop agent for real codebases. It brings model calls, workspace tools, terminal commands, permission prompts, session history, and diff review into one local workbench. The UI and session data stay on your machine; model requests go directly to the provider or local gateway you configure, without a Tether relay.
+TACode is an Electron desktop agent for real codebases. It brings model calls, workspace tools, terminal commands, permission prompts, session history, and diff review into one local workbench. The UI and session data stay on your machine; model requests go directly to the provider or local gateway you configure, without a TACode relay.
 
-## Why Tether
+## Why TACode
 
 - **DeepSeek first** — custom Base URL, model discovery, and reasoning-level controls, plus OpenAI-compatible endpoints such as OneAPI, Ollama, and vLLM.
 - **Visible and controllable** — inspect tool calls, command output, file changes, and context usage as work happens.
 - **Permission boundaries** — Plan, Ask, Workspace, and Full Access modes.
 - **Recoverable edits** — patch checkpoints let `/undo` restore the previous turn's file changes.
-- **Local-first state** — settings, credentials, and sessions live under `~/.tether`; no telemetry or Tether-hosted model proxy.
+- **Local-first state** — settings, credentials, and sessions live under `~/.tether`; no telemetry or TACode-hosted model proxy.
 - **Desktop workflow** — project threads, `@` file mentions, steer-while-generating, image input, themes (white / paper / dark), diff previews, and Chinese/English UI.
 
-## What Tether uses from Pi
+## What TACode uses from Pi
 
-Tether does not reimplement the agent foundations. [`tether-agent-core`](https://www.npmjs.com/package/tether-agent-core) wraps the [Pi ecosystem](https://github.com/earendil-works/pi) and extends it:
+TACode does not reimplement the agent foundations. [`tether-agent-core`](https://www.npmjs.com/package/tether-agent-core) wraps the [Pi ecosystem](https://github.com/earendil-works/pi) and extends it:
 
-| Pi package | Used by Tether for |
+| Pi package | Used by TACode for |
 | --- | --- |
 | `@earendil-works/pi-agent-core` | Agent state, message streams, tool calls, and thinking-level types |
 | `@earendil-works/pi-ai` | Model/provider contracts, message/image/usage types, and OpenAI API foundations |
 | `@earendil-works/pi-coding-agent` | Coding-agent extensions, sessions/settings, project trust, and RPC client/worker |
 | `@earendil-works/pi-tui` | Text components, themes, and terminal interaction used by the Runtime CLI |
 
-Tether adds:
+TACode adds:
 
 - DeepSeek defaults and an OpenAI-compatible gateway workflow
 - Four permission modes, macOS Seatbelt, and an experimental Windows sandbox helper (install + enable)
@@ -46,7 +46,7 @@ Tether adds:
 - MCP, Hooks, Skills, planning, and subagent integration
 - The `~/.tether` local data conventions and Electron/React desktop workbench
 
-Pi provides the runtime foundations; Tether defines the product boundary, safety policy, and desktop experience. We are grateful to the Pi maintainers for the open-source foundation.
+Pi provides the runtime foundations; TACode defines the product boundary, safety policy, and desktop experience. We are grateful to the Pi maintainers for the open-source foundation.
 
 ## Architecture
 
@@ -60,14 +60,14 @@ Electron Main
         │  JSON-RPC over stdio
         ▼
 tether-agent-core
-  Tether permissions, sandbox, tools, checkpoints, MCP, sessions
+  TACode permissions, sandbox, tools, checkpoints, MCP, sessions
         │
         ▼
 Pi ecosystem
   agent loop · model protocol · coding-agent extensions · RPC · TUI
 ```
 
-The renderer has no direct Node.js access; desktop capabilities cross the typed IPC contract in `src/shared/types.ts`. The agent runs in a separate worker process. After a crash, an on-disk session can continue as a conversation, but Tether does not silently replay unfinished commands.
+The renderer has no direct Node.js access; desktop capabilities cross the typed IPC contract in `src/shared/types.ts`. The agent runs in a separate worker process. After a crash, an on-disk session can continue as a conversation, but TACode does not silently replay unfinished commands.
 
 ## Models and images
 
@@ -98,7 +98,7 @@ Existing Runtime permissions still apply: Ask mode requests approval, and Plan m
 
 Opening a project web app defaults to the embedded browser. Start the development server without `--open`, then navigate to its actual URL with `browser_navigate`. Common system browser launchers are blocked unless the user explicitly requests an external browser.
 
-After changing the desktop host or extension, fully quit and relaunch Tether, then start/restart the Agent session. Refreshing the UI or creating a new conversation does not update an already running desktop host. Run `pnpm test:browser` for an isolated Electron smoke test against local fixture pages, without accessing real accounts or a cloud model.
+After changing the desktop host or extension, fully quit and relaunch TACode, then start/restart the Agent session. Refreshing the UI or creating a new conversation does not update an already running desktop host. Run `pnpm test:browser` for an isolated Electron smoke test against local fixture pages, without accessing real accounts or a cloud model.
 
 ## Permission modes
 
@@ -113,7 +113,7 @@ Sandboxing is defense in depth, not a replacement for reviewing commands in an u
 
 ## Agent Skills
 
-Skills are loaded by the Pi runtime (Tether does not ship a separate loader). Standard locations:
+Skills are loaded by the Pi runtime (TACode does not ship a separate loader). Standard locations:
 
 | Scope | Path |
 | --- | --- |
@@ -126,7 +126,7 @@ Each skill is a directory with a `SKILL.md` file. Frontmatter must include `name
 - List paths and loaded skills under **Settings → Agent Skills**
 - Project skills require trusting the workspace; `@` mentions only scan project `.agents/skills` and `.pi/skills`
 
-## Use Tether
+## Use TACode
 
 Download from [GitHub Releases](https://github.com/tt-11-dd/tether-ai/releases/latest):
 
@@ -146,7 +146,7 @@ While a reply is generating, you can still type and press Enter. That text is st
 The current macOS package uses development signing. If Gatekeeper blocks it, right-click the app and choose **Open**, or run:
 
 ```bash
-xattr -cr /Applications/Tether.app
+xattr -cr /Applications/TACode.app
 ```
 
 ## Develop locally
@@ -175,11 +175,11 @@ The app consumes `tether-agent-core` from npm. When developing the Runtime itsel
 
 ## Acknowledgments
 
-Tether's agent runtime is built on the open-source [Pi ecosystem](https://github.com/earendil-works/pi) (`@earendil-works/pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`). [`tether-agent-core`](https://www.npmjs.com/package/tether-agent-core) wraps Pi with Tether's DeepSeek defaults, permission modes, sandboxing, checkpoints, MCP, Hooks, and local data layout. Pi dependencies retain their own licenses and copyright.
+TACode's agent runtime is built on the open-source [Pi ecosystem](https://github.com/earendil-works/pi) (`@earendil-works/pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`). [`tether-agent-core`](https://www.npmjs.com/package/tether-agent-core) wraps Pi with TACode's DeepSeek defaults, permission modes, sandboxing, checkpoints, MCP, Hooks, and local data layout. Pi dependencies retain their own licenses and copyright.
 
 ## Privacy
 
-Tether runs no telemetry or model relay service. Sessions, settings, and credentials stay local. To perform a task, prompts, relevant code context, and images are still sent to the model, gateway, or OCR service you choose. Review third-party privacy policies; sensitive projects can use a compatible local endpoint.
+TACode runs no telemetry or model relay service. Sessions, settings, and credentials stay local. To perform a task, prompts, relevant code context, and images are still sent to the model, gateway, or OCR service you choose. Review third-party privacy policies; sensitive projects can use a compatible local endpoint.
 
 Diagnostics stay on this machine too: `~/.tether/logs/tether.log` records startup failures, worker exits, request timeouts, renderer crashes and config recovery, with a size cap and rotation. Known credentials are redacted before writing, and prompt text and full file contents are never logged.
 

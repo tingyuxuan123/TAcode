@@ -1,9 +1,9 @@
 {
-  "name": "tether",
-  "productName": "Tether",
+  "name": "tacode",
+  "productName": "TACode",
   "version": "0.2.9",
   "private": true,
-  "description": "Tether — a local AI coding agent workbench",
+  "description": "TACode — a local AI coding agent workbench",
   "license": "MIT",
   "type": "module",
   "main": "dist-electron/main/index.mjs",

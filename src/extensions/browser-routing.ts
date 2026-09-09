@@ -72,6 +72,6 @@ export function browserRoutingBlock(toolName: string | undefined, input: { cmd?:
   if (typeof command !== "string" || !externalBrowserCommand(command)) return;
   return {
     block: true,
-    reason: "Tether 默认在内嵌浏览器打开网页。此命令会启动系统外部浏览器，已阻止执行。请改用 browser_navigate({url: 实际访问地址})。开发服务器只负责启动，去掉 --open 等自动打开参数；确认端口和路径后再调用 browser_navigate。不要重复使用系统 open/xdg-open/start，也不要声称网页已经打开。只有用户明确指定外部浏览器时才使用系统启动器。",
+    reason: "TACode 默认在内嵌浏览器打开网页。此命令会启动系统外部浏览器，已阻止执行。请改用 browser_navigate({url: 实际访问地址})。开发服务器只负责启动，去掉 --open 等自动打开参数；确认端口和路径后再调用 browser_navigate。不要重复使用系统 open/xdg-open/start，也不要声称网页已经打开。只有用户明确指定外部浏览器时才使用系统启动器。",
   };
 }

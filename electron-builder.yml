@@ -1,5 +1,5 @@
-appId: local.tether
-productName: Tether
+appId: local.tacode
+productName: TACode
 directories:
   output: release
 
@@ -45,7 +45,7 @@ win:
 
 nsis:
   oneClick: true
-  shortcutName: Tether
+  shortcutName: TACode
   artifactName: ${productName}-Setup-${version}.exe
 
 publish: null

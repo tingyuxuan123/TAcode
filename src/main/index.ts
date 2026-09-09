@@ -316,7 +316,7 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-app.setName("Tether");
+app.setName("TACode");
 fs.mkdirSync(userDataPath, { recursive: true, mode: 0o700 });
 app.setPath("userData", userDataPath);
 
@@ -1904,12 +1904,12 @@ app.whenReady().then(async () => {
   // 初始化失败不再静默退出：写本地诊断并在退出前给出可操作的错误对话框。
   diagnostics.error(
     "startup",
-    "Tether failed to start",
+    "TACode failed to start",
     error instanceof Error ? `${error.name}: ${error.message}\n${error.stack}` : String(error),
   );
   await diagnostics.flush();
   dialog.showErrorBox(
-    "Tether 启动失败",
+    "TACode 启动失败",
     `应用未能完成初始化。\n\n${error instanceof Error ? error.message : String(error)}\n\n诊断日志：${diagnostics.filePath}`,
   );
   app.exit(1);

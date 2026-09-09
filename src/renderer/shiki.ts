@@ -2,7 +2,7 @@ import { createHighlighter, bundledLanguages } from "shiki";
 import type { HighlighterGeneric, BundledLanguage, BundledTheme } from "shiki";
 
 /**
- * Shiki 语法高亮服务（Tether 适配版）。
+ * Shiki 语法高亮服务（TACode 适配版）。
  *
  * 懒加载的高亮器单例 + 就绪订阅。纯逻辑层，不依赖 React。
  *

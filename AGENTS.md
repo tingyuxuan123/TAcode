@@ -1,4 +1,4 @@
-# Tether
+# TACode
 
 面向仓库的 AI 编程桌面工作台。Agent 循环、沙箱、会话在 npm 包 `tether-agent-core`；本仓库只做 Electron 壳和中文工作流界面。
 
@@ -16,7 +16,7 @@
 
 ## Agent Skills
 
-Skills 由 Pi 运行时加载（Tether 不另写 loader）。标准路径：
+Skills 由 Pi 运行时加载（TACode 不另写 loader）。标准路径：
 
 | 范围 | 路径 |
 | --- | --- |

@@ -187,7 +187,7 @@ export function AppearanceSettings() {
             <div className="user-turn"><article className="user">{t("settings.themePreviewUser")}</article></div>
             <article className="turn markdown">
               <p>{t("settings.themePreviewBot")}</p>
-              <pre><code><span className="font-preview-keyword">const</span>{' greeting = "Hello, Tether!";\n'}<span className="font-preview-keyword">const</span>{' count = 1234567890;'}</code></pre>
+              <pre><code><span className="font-preview-keyword">const</span>{' greeting = "Hello, TACode!";\n'}<span className="font-preview-keyword">const</span>{' count = 1234567890;'}</code></pre>
             </article>
             <div className="theme-live-input">{t("settings.themePreviewInput")}</div>
           </main>

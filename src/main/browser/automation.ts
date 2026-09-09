@@ -157,7 +157,7 @@ export class BrowserAutomation {
 
   private async create(url: string, signal: AbortSignal, session: AgentSession): Promise<Tab> {
     const win = this.getMainWindow();
-    if (!win || win.isDestroyed()) throw new Error("主窗口不可用，请重新打开 Tether");
+    if (!win || win.isDestroyed()) throw new Error("主窗口不可用，请重新打开 TACode");
     const instanceId = `agent-browser-${randomUUID()}`;
     win.webContents.send("browser:agent-presentation", { action: "open", instanceId, url: "about:blank" });
     win.show();

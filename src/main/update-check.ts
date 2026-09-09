@@ -31,7 +31,7 @@ export async function getLatestUpdate(
   const response = await fetchImpl(LATEST_RELEASE_API, {
     headers: {
       Accept: "application/vnd.github+json",
-      "User-Agent": `Tether/${currentVersion}`,
+      "User-Agent": `TACode/${currentVersion}`,
     },
     signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS),
   });

@@ -1,14 +1,14 @@
-# Tether 开发文档
+# TACode 开发文档
 
 > English: [DEVELOPMENT.en.md](DEVELOPMENT.en.md)
 
-> 面向仓库的 AI 编程桌面工作台。本文面向在 Tether 仓库内做开发的工程师：解释架构、模块职责、关键数据流与常见开发任务。产品说明与用户文档见根目录 `README.md` / `README.zh-CN.md`。
+> 面向仓库的 AI 编程桌面工作台。本文面向在 TACode 仓库内做开发的工程师：解释架构、模块职责、关键数据流与常见开发任务。产品说明与用户文档见根目录 `README.md` / `README.zh-CN.md`。
 
 ## 1. 项目概览
 
-Tether 是一个基于 Electron 的本地优先 AI 编程桌面工作台：模型调用、工作区工具、终端命令、权限确认、会话历史与 diff 审查集中在一个桌面应用里。UI 与会话数据留在本机，模型请求直连用户配置的 provider 或本地网关。
+TACode 是一个基于 Electron 的本地优先 AI 编程桌面工作台：模型调用、工作区工具、终端命令、权限确认、会话历史与 diff 审查集中在一个桌面应用里。UI 与会话数据留在本机，模型请求直连用户配置的 provider 或本地网关。
 
-**核心定位**：Tether 不重新实现 agent 基础能力。agent 循环、沙箱、会话、工具、checkpoint、MCP、Hooks 都由 npm 包 `tether-agent-core`（内部再封装 Pi 生态 `@earendil-works/pi-*`）提供。本仓库只负责：
+**核心定位**：TACode 不重新实现 agent 基础能力。agent 循环、沙箱、会话、工具、checkpoint、MCP、Hooks 都由 npm 包 `tether-agent-core`（内部再封装 Pi 生态 `@earendil-works/pi-*`）提供。本仓库只负责：
 
 - Electron 壳（窗口、菜单、IPC、权限入口、工作区文件访问、更新检查）
 - 渲染进程 UI（React，中文/英文界面）
@@ -40,7 +40,7 @@ tether-agent-core（node_modules 依赖，RPC worker 进程）
   权限、沙箱、工具、checkpoint、MCP、会话文件、Pi agent 循环
 ```
 
-渲染进程没有任何 Node.js 直连能力；桌面能力全部通过 `src/shared/types.ts` 里定义的类型化 `DesktopApi` 契约走 IPC。agent 运行在独立子进程（通过 `process.execPath` + `ELECTRON_RUN_AS_NODE=1` 启动），崩溃后磁盘上的会话仍可继续作为对话恢复，但 Tether 不会静默重放未完成的命令。
+渲染进程没有任何 Node.js 直连能力；桌面能力全部通过 `src/shared/types.ts` 里定义的类型化 `DesktopApi` 契约走 IPC。agent 运行在独立子进程（通过 `process.execPath` + `ELECTRON_RUN_AS_NODE=1` 启动），崩溃后磁盘上的会话仍可继续作为对话恢复，但 TACode 不会静默重放未完成的命令。
 
 ## 2. 目录结构
 
@@ -385,7 +385,7 @@ shared 层 `vision-api.ts` 提供纯函数：请求构造、响应解析、结�
 
 ## 11. 技能（Skills）系统
 
-技能由 Pi 运行时加载（Tether 不另写 loader），本仓库只做 UI 与文件系统辅助：
+技能由 Pi 运行时加载（TACode 不另写 loader），本仓库只做 UI 与文件系统辅助：
 
 - **扫描**：`src/main/skills-fs.ts` 扫用户级（`~/.tether/skills`、`~/.agents/skills`）与项目级（`.agents/skills`、`.pi/skills`，需信任项目）；`app:list-skills` 供设置页展示。
 - **运行时命令**：agent 侧 `get_commands` 返回 `source === "skill"` 的命令，`src/shared/skills.ts` 的 `parseSkillCommands` 解析出 `AgentSkillCommand[]`（name / description / path），供 `/` 补全与设置页。
@@ -418,7 +418,7 @@ dev server 固定 `127.0.0.1:5177`（strictPort）；build 产物 `dist/`，`bas
 
 ### 12.4 Electron 二进制补齐（scripts/ensure-electron.mjs）
 
-postinstall / predev 执行：检查 Electron 发行二进制是否完整，缺失时跑 `install.js`，macOS 下还会从 `~/Library/Caches/electron` 缓存 zip 解压，并把 `Info.plist` 的 `CFBundleName` / `CFBundleDisplayName` 改为 Tether。
+postinstall / predev 执行：检查 Electron 发行二进制是否完整，缺失时跑 `install.js`，macOS 下还会从 `~/Library/Caches/electron` 缓存 zip 解压，并把 `Info.plist` 的 `CFBundleName` / `CFBundleDisplayName` 改为 TACode。
 
 ## 13. 测试
 

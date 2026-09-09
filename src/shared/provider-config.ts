@@ -55,7 +55,7 @@ export function validateService(record: ProviderRecord): ProviderRecord {
     defaultModelId: ids.has(record.defaultModelId ?? "") ? record.defaultModelId : models[0].id };
 }
 
-/** Tether's CLI only accepts its built-in provider IDs. Override the OpenAI slot
+/** TACode's CLI only accepts its built-in provider IDs. Override the OpenAI slot
  * in this worker alone; never mutate the user's global models or credentials. */
 export function serviceRuntimeConfig(provider: ProviderRecord) {
   const apis: Partial<Record<CatalogApiStyle, string>> = {

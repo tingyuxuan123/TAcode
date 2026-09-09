@@ -13,7 +13,7 @@ interface ExtensionAPI {
 /** Private Node IPC, inherited only by the desktop Agent worker; no HTTP port or credential file. */
 export function requestBrowser(tool: string, params: BrowserParams, signal?: AbortSignal): Promise<BrowserToolResult> {
   validateBrowserParams(tool, params);
-  if (!process.send || !process.connected) return Promise.reject(new Error("浏览器未连接桌面宿主，请从 Tether 桌面重新启动会话。"));
+  if (!process.send || !process.connected) return Promise.reject(new Error("浏览器未连接桌面宿主，请从 TACode 桌面重新启动会话。"));
   if (signal?.aborted) return Promise.reject(new Error("浏览器操作已取消"));
   const id = randomUUID();
   return new Promise((resolve, reject) => {

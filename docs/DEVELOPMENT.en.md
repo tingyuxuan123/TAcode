@@ -1,14 +1,14 @@
-# Tether Development Guide
+# TACode Development Guide
 
 > 简体中文: [DEVELOPMENT.md](DEVELOPMENT.md)
 
-> A repo-oriented AI coding desktop workbench. This guide is for engineers working inside the Tether repository: architecture, module responsibilities, key data flows, and common development tasks. Product description and user documentation live in `README.md` / `README.zh-CN.md`.
+> A repo-oriented AI coding desktop workbench. This guide is for engineers working inside the TACode repository: architecture, module responsibilities, key data flows, and common development tasks. Product description and user documentation live in `README.md` / `README.zh-CN.md`.
 
 ## 1. Project Overview
 
-Tether is a local-first AI coding desktop workbench built on Electron: model calls, workspace tools, terminal commands, permission prompts, session history, and diff review all live in one desktop app. The UI and session data stay on your machine; model requests go directly to the provider or local gateway you configure.
+TACode is a local-first AI coding desktop workbench built on Electron: model calls, workspace tools, terminal commands, permission prompts, session history, and diff review all live in one desktop app. The UI and session data stay on your machine; model requests go directly to the provider or local gateway you configure.
 
-**Core positioning**: Tether does not reimplement agent foundations. The agent loop, sandbox, sessions, tools, checkpoints, MCP, and Hooks are all provided by the npm package `tether-agent-core` (which wraps the Pi ecosystem `@earendil-works/pi-*`). This repository is responsible for:
+**Core positioning**: TACode does not reimplement agent foundations. The agent loop, sandbox, sessions, tools, checkpoints, MCP, and Hooks are all provided by the npm package `tether-agent-core` (which wraps the Pi ecosystem `@earendil-works/pi-*`). This repository is responsible for:
 
 - The Electron shell (windows, menus, IPC, permission entry points, workspace file access, update checks)
 - The renderer UI (React, Chinese/English interface)
@@ -40,7 +40,7 @@ tether-agent-core (node_modules dependency, RPC worker process)
   permissions, sandbox, tools, checkpoints, MCP, session files, Pi agent loop
 ```
 
-The renderer has no direct Node.js access; all desktop capabilities cross the typed `DesktopApi` contract defined in `src/shared/types.ts` over IPC. The agent runs in a separate child process (spawned via `process.execPath` with `ELECTRON_RUN_AS_NODE=1`). After a crash, an on-disk session can still continue as a conversation, but Tether never silently replays unfinished commands.
+The renderer has no direct Node.js access; all desktop capabilities cross the typed `DesktopApi` contract defined in `src/shared/types.ts` over IPC. The agent runs in a separate child process (spawned via `process.execPath` with `ELECTRON_RUN_AS_NODE=1`). After a crash, an on-disk session can still continue as a conversation, but TACode never silently replays unfinished commands.
 
 ## 2. Directory Layout
 
@@ -385,7 +385,7 @@ Environment variables: `TETHER_CREDENTIALS_STORE=file` (avoids keyring prompts i
 
 ## 11. Skills System
 
-Skills are loaded by the Pi runtime (Tether does not ship a separate loader); this repository only provides UI and filesystem helpers:
+Skills are loaded by the Pi runtime (TACode does not ship a separate loader); this repository only provides UI and filesystem helpers:
 
 - **Scanning**: `src/main/skills-fs.ts` scans user-level (`~/.tether/skills`, `~/.agents/skills`) and project-level (`.agents/skills`, `.pi/skills`, requires trusting the project) roots; `app:list-skills` feeds the settings page.
 - **Runtime commands**: the agent's `get_commands` returns commands with `source === "skill"`; `src/shared/skills.ts` `parseSkillCommands` produces `AgentSkillCommand[]` (name / description / path) for `/` completion and the settings page.
@@ -418,7 +418,7 @@ Dev server is pinned to `127.0.0.1:5177` (strictPort); build output goes to `dis
 
 ### 12.4 Electron Binary Fix-up (scripts/ensure-electron.mjs)
 
-Runs on postinstall / predev: checks whether the Electron distribution binaries are complete, runs `install.js` when missing, unpacks from the `~/Library/Caches/electron` zip cache on macOS, and patches `CFBundleName` / `CFBundleDisplayName` in `Info.plist` to Tether.
+Runs on postinstall / predev: checks whether the Electron distribution binaries are complete, runs `install.js` when missing, unpacks from the `~/Library/Caches/electron` zip cache on macOS, and patches `CFBundleName` / `CFBundleDisplayName` in `Info.plist` to TACode.
 
 ## 13. Testing
 

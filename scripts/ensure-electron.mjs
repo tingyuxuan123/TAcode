@@ -50,7 +50,7 @@ if (installed()) fs.writeFileSync(path.join(dir, "path.txt"), relative);
 if (process.platform === "darwin") {
   const plist = path.join(dist, "Electron.app/Contents/Info.plist");
   if (fs.existsSync(plist)) {
-    const name = "Tether";
+    const name = "TACode";
     for (const key of ["CFBundleName", "CFBundleDisplayName"]) {
       const replace = spawnSync("plutil", ["-replace", key, "-string", name, plist]);
       if (replace.status !== 0) spawnSync("plutil", ["-insert", key, "-string", name, plist]);

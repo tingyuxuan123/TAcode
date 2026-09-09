@@ -313,7 +313,7 @@ export class AgentHost {
           stderr: detail.slice(-2_000),
         });
         reject(
-          new Error(`Tether did not respond to ${type}. ${detail}`.trim()),
+          new Error(`TACode did not respond to ${type}. ${detail}`.trim()),
         );
       }, timeoutForRequest(type));
       this.pending.set(id, {
@@ -372,7 +372,7 @@ export class AgentHost {
       if (!pending) return;
       clearTimeout(pending.timeout);
       this.pending.delete(data.id);
-      if (data.success === false) pending.reject(new Error(String(data.error ?? "Tether command failed")));
+      if (data.success === false) pending.reject(new Error(String(data.error ?? "TACode command failed")));
       else pending.resolve(data.data);
       return;
     }
