@@ -13,6 +13,7 @@ class FakeHost {
   requests: Array<{ type: string; data?: Record<string, unknown> }> = [];
   uiResponses: Array<{ id: string; response: Record<string, unknown> }> = [];
   running = false;
+  turnActive = false;
   /** 每次 start 后由测试设置，模拟底层会话文件。 */
   nextSessionFile?: string;
   private seq = 0;
@@ -25,6 +26,10 @@ class FakeHost {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  isInTurn(): boolean {
+    return this.turnActive;
   }
 
   get lastSnapshotSeq(): number {
@@ -46,6 +51,7 @@ class FakeHost {
     this.starts += 1;
     this.requestedSessionPath = options.sessionPath;
     this.running = true;
+    this.turnActive = true;
     this.sessionKey = this.options.file?.(options);
     this.emit("agent_start", this.sessionKey);
     this.snapshotSeq = this.seq;
@@ -60,6 +66,7 @@ class FakeHost {
   async stop(): Promise<void> {
     this.stops += 1;
     this.running = false;
+    this.turnActive = false;
   }
 
   async request<T>(type: string, data?: Record<string, unknown>): Promise<T> {
@@ -180,7 +187,7 @@ describe("AgentManager", () => {
   it("reports running sessions for renderer recovery", async () => {
     const a = await manager.start(options("/a.jsonl"));
     const b = await manager.start(options("/b.jsonl"));
-    hosts[1].running = false;
+    hosts[1].turnActive = false;
     const list = manager.list();
     expect(list).toEqual([
       expect.objectContaining({ runtimeId: a.runtimeId, running: true }),

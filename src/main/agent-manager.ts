@@ -83,7 +83,7 @@ export class AgentManager {
       ...(host.requestedSessionPath
         ? { requestedSessionPath: host.requestedSessionPath }
         : {}),
-      running: host.isRunning(),
+      running: host.isInTurn(),
     }));
   }
 

@@ -141,7 +141,9 @@ export interface AgentStartResult extends AgentSnapshot {
   replay?: AgentEvent[];
 }
 
-/** 运行中会话查询结果，供渲染层重载后重新发现后台会话。 */
+/** 运行中会话查询结果，供渲染层重载后重新发现后台会话。
+ * `running` 表示该会话是否正执行一轮生成（agent_start ~ agent_settled）；
+ * worker 存活但空闲时不算「正在运行」。 */
 export interface AgentRuntimeInfo {
   runtimeId: string;
   sessionKey?: string;

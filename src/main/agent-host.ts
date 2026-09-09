@@ -47,6 +47,8 @@ export class AgentHost {
   private secrets: string[] = [];
   /** 无法解析的 RPC 行只诊断一次，避免坏输出刷屏。 */
   private malformedLines = 0;
+  /** 是否正在进行一轮生成（agent_start ~ agent_settled）；供侧边栏“正在运行”徽标与 renderer 重载恢复使用。 */
+  private turnActive = false;
 
   /** 壳层分配的稳定句柄；不随会话文件路径变化，命令按它路由。 */
   public runtimeId = "";
@@ -84,6 +86,10 @@ export class AgentHost {
 
   /** 给事件附上所属会话 id 与运行句柄，供渲染层按活动会话路由并去重。 */
   private tagged(event: AgentEvent): AgentEvent {
+    // 以 agent_start / agent_settled 驱动“活跃轮次”状态，供重载后恢复徽标：
+    // 仅真正生成中的会话显示“正在运行”，空闲但存活的 worker 不再误报。
+    if (event.type === "agent_start") this.turnActive = true;
+    else if (event.type === "agent_settled") this.turnActive = false;
     const next: AgentEvent = {
       ...event,
       __seq: ++this.seq,
@@ -98,6 +104,11 @@ export class AgentHost {
 
   isRunning(): boolean {
     return Boolean(this.child && this.child.exitCode === null);
+  }
+
+  /** 是否正在执行一轮生成（worker 存活但空闲时返回 false）。 */
+  isInTurn(): boolean {
+    return this.turnActive;
   }
 
   async snapshot(): Promise<AgentSnapshot> {
@@ -270,6 +281,7 @@ export class AgentHost {
 
   async stop(): Promise<void> {
     this.cancelBrowserRequests();
+    this.turnActive = false;
     const child = this.child;
     if (!child) return;
     this.child = undefined;
