@@ -25,11 +25,37 @@ const downloads = new Map<number, BrowserDownloadItem>();
 /** 进行中的 DownloadItem 引用（cancel 用）。 */
 const activeItems = new Map<number, DownloadItem>();
 
+/** 下载历史保留上限与过期时间；进行中的任务永不清理。 */
+const MAX_DOWNLOADS = 200;
+const DOWNLOAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 let nextDownloadId = 1;
 let installed = false;
 
-const snapshot = (): BrowserDownloadItem[] =>
-  Array.from(downloads.values()).sort((a, b) => b.startedAt - a.startedAt);
+/** 先按过期时间清理已结束的下载，再按数量上限从最旧的开始裁剪。 */
+const pruneDownloads = (): void => {
+  const now = Date.now();
+  for (const [id, item] of downloads) {
+    if (item.state === "progressing") continue;
+    if (item.endedAt !== null && now - item.endedAt > DOWNLOAD_TTL_MS)
+      downloads.delete(id);
+  }
+  if (downloads.size <= MAX_DOWNLOADS) return;
+  const finished = [...downloads.values()]
+    .filter((item) => item.state !== "progressing")
+    .sort((left, right) => left.startedAt - right.startedAt);
+  let overflow = downloads.size - MAX_DOWNLOADS;
+  for (const item of finished) {
+    if (overflow <= 0) break;
+    downloads.delete(item.id);
+    overflow -= 1;
+  }
+};
+
+const snapshot = (): BrowserDownloadItem[] => {
+  pruneDownloads();
+  return Array.from(downloads.values()).sort((a, b) => b.startedAt - a.startedAt);
+};
 
 /** 推送列表快照到 webContents 的宿主窗口。 */
 const pushSnapshot = (webContents: WebContents | null): void => {
@@ -87,6 +113,7 @@ export const installWebviewDownloadHandler = (): void => {
     };
     downloads.set(record.id, record);
     activeItems.set(record.id, item);
+    pruneDownloads();
 
     item.on("updated", (_e, state) => {
       record.state = state === "progressing" ? "progressing" : "interrupted";

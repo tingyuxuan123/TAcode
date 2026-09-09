@@ -7690,3 +7690,61 @@ kbd {
 }
 
 
+/* 渲染层错误边界：App 抛错时替代白屏，提供“重新加载界面”与折叠的技术细节。 */
+.error-boundary {
+  height: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 48px max(28px, 6vw);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 14px;
+  overflow: auto;
+}
+.error-boundary-title {
+  margin: 0;
+  font-size: calc(20px * var(--ui-font-scale));
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.error-boundary-detail {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--ink-2);
+  font-size: calc(13px * var(--ui-font-scale));
+  line-height: 1.6;
+}
+.error-boundary-retry {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--surface);
+  font-size: calc(13px * var(--ui-font-scale));
+}
+.error-boundary-retry:hover {
+  background: var(--accent-ink);
+}
+.error-boundary-trace {
+  width: 100%;
+  color: var(--ink-3);
+  font-size: calc(12px * var(--ui-font-scale));
+}
+.error-boundary-trace summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
+.error-boundary-trace pre {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--inset);
+  color: var(--ink-2);
+  font: calc(11px * var(--ui-font-scale))/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+}

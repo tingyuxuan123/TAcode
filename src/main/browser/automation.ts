@@ -6,8 +6,19 @@ import { normalizeUrl } from "../../renderer/browser/url";
 import { BrowserRefs, type AXNode } from "./accessibility";
 import { pageOperation } from "./page-operations";
 
-interface Tab extends BrowserRegistration { guest: WebContents; owner: WebContents; refs: BrowserRefs }
+interface Tab extends BrowserRegistration { guest: WebContents; owner: WebContents; refs: BrowserRefs; ownerRuntimeId?: string }
 type RemoteResult = { result: { objectId?: string; value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } };
+
+/** 单个 Agent 运行句柄的浏览器状态；工作标签与操作队列按它隔离。 */
+interface AgentSession {
+  runtimeId?: string;
+  workingTabId?: string;
+  queue: Promise<unknown>;
+  queued: number;
+}
+
+/** 同一会话排队等待的浏览器操作上限，防止异常输入把内存撑爆。 */
+const MAX_QUEUED_OPERATIONS = 8;
 
 function aborted(signal: AbortSignal) { if (signal.aborted) throw new Error("浏览器操作已取消或超时"); }
 async function bounded<T>(promise: Promise<T>, signal: AbortSignal, timeoutMs = 8000): Promise<T> {
@@ -25,15 +36,39 @@ async function bounded<T>(promise: Promise<T>, signal: AbortSignal, timeoutMs = 
   });
 }
 
-/** Owns only registered browser guests. All commands are serialized, including observations. */
+/** Owns only registered browser guests. Commands are serialized per Agent runtime. */
 export class BrowserAutomation {
   private tabs = new Map<string, Tab>();
-  private workingTabId?: string;
+  /** 每个 Agent 运行句柄一份工作标签与操作队列，互不干扰。 */
+  private sessions = new Map<string, AgentSession>();
   private presentations = new Map<string, { owner: WebContents; resolve: () => void }>();
-  private queue: Promise<unknown> = Promise.resolve();
+  /** 每个宿主窗口只注册一次销毁清理，避免多标签重复挂监听。 */
+  private watchedOwners = new WeakSet<WebContents>();
   constructor(private readonly getMainWindow: () => BrowserWindow | undefined) {}
 
-  resetAgent() { this.workingTabId = undefined; for (const tab of this.tabs.values()) tab.refs.clear(); }
+  private session(runtimeId?: string): AgentSession {
+    const key = runtimeId || "default";
+    let session = this.sessions.get(key);
+    if (!session) {
+      session = { ...(runtimeId ? { runtimeId } : {}), queue: Promise.resolve(), queued: 0 };
+      this.sessions.set(key, session);
+    }
+    return session;
+  }
+
+  /** 只清理该 runtime 的工作标签与页面引用；其他 Agent 的页面不受影响。
+   * 不传 runtimeId 时（兼容旧调用）清空全部。 */
+  resetAgent(runtimeId?: string) {
+    if (runtimeId === undefined) {
+      for (const session of this.sessions.values()) session.workingTabId = undefined;
+      for (const tab of this.tabs.values()) tab.refs.clear();
+      return;
+    }
+    const session = this.sessions.get(runtimeId);
+    if (session) session.workingTabId = undefined;
+    for (const tab of this.tabs.values())
+      if (tab.ownerRuntimeId === runtimeId) tab.refs.clear();
+  }
 
   register(owner: WebContents, registration: BrowserRegistration) {
     if (!registration || typeof registration.tabId !== "string" || typeof registration.instanceId !== "string" || !registration.tabId || !registration.instanceId || !Number.isInteger(registration.webContentsId)) throw new Error("无效的浏览器标签登记");
@@ -42,39 +77,65 @@ export class BrowserAutomation {
     const previous = this.tabs.get(registration.tabId);
     if (previous?.guest === guest) return;
     if (previous) throw new Error("浏览器标签 ID 已被使用");
-    const tab = { ...registration, owner, guest, refs: new BrowserRefs() };
+    const tab: Tab = { ...registration, owner, guest, refs: new BrowserRefs() };
     this.tabs.set(tab.tabId, tab);
     const invalidate = () => tab.refs.clear();
     guest.on("did-start-navigation", invalidate);
     guest.on("render-process-gone", invalidate);
     guest.once("destroyed", () => this.remove(tab));
+    if (!this.watchedOwners.has(owner)) {
+      this.watchedOwners.add(owner);
+      // WebContents 在真实运行时是 EventEmitter；测试替身可能没有事件接口。
+      if (typeof owner.once === "function")
+        owner.once("destroyed", () => this.cleanupOwner(owner));
+    }
   }
 
   private remove(tab: Tab) {
     if (this.tabs.get(tab.tabId) !== tab) return;
     this.tabs.delete(tab.tabId);
     tab.refs.clear();
-    if (this.workingTabId === tab.tabId) this.workingTabId = undefined;
+    for (const session of this.sessions.values())
+      if (session.workingTabId === tab.tabId) session.workingTabId = undefined;
   }
 
-  execute(tool: string, params: BrowserParams, externalSignal: AbortSignal): Promise<BrowserToolResult> {
+  /** 宿主窗口销毁：移除它的标签映射与未完成的 presentation 等待，避免残留引用。 */
+  private cleanupOwner(owner: WebContents) {
+    for (const tab of [...this.tabs.values()])
+      if (tab.owner === owner) this.remove(tab);
+    for (const [requestId, pending] of this.presentations)
+      if (pending.owner === owner) this.presentations.delete(requestId);
+  }
+
+  execute(tool: string, params: BrowserParams, externalSignal: AbortSignal, runtimeId?: string): Promise<BrowserToolResult> {
     validateBrowserParams(tool, params);
+    const session = this.session(runtimeId);
+    if (session.queued >= MAX_QUEUED_OPERATIONS) return Promise.reject(new Error("浏览器操作排队过多，请等待当前操作结束后重试。"));
     const signal = AbortSignal.any([externalSignal, AbortSignal.timeout(40000)]);
-    const run = this.queue.catch(() => {}).then(() => { aborted(signal); return this.perform(tool, params, signal); });
-    this.queue = run;
+    session.queued += 1;
+    const run = session.queue.catch(() => {}).then(() => {
+      session.queued = Math.max(0, session.queued - 1);
+      aborted(signal);
+      return this.perform(tool, params, signal, session);
+    });
+    session.queue = run.catch(() => undefined);
     return run;
   }
 
-  private list() {
-    for (const tab of this.tabs.values()) if (tab.guest.isDestroyed() || tab.owner.isDestroyed()) this.remove(tab);
-    return [...this.tabs.values()].map((tab) => ({ tabId: tab.tabId, instanceId: tab.instanceId, url: tab.guest.getURL(), title: tab.guest.getTitle(), working: this.workingTabId === tab.tabId }));
+  private list(session?: AgentSession) {
+    for (const tab of [...this.tabs.values()]) if (tab.guest.isDestroyed() || tab.owner.isDestroyed()) this.remove(tab);
+    return [...this.tabs.values()].map((tab) => ({ tabId: tab.tabId, instanceId: tab.instanceId, url: tab.guest.getURL(), title: tab.guest.getTitle(), working: session?.workingTabId === tab.tabId }));
   }
 
-  private target(params: BrowserParams): Tab {
-    this.list();
-    const id = params.tabId as string | undefined ?? this.workingTabId;
+  private target(params: BrowserParams, session: AgentSession): Tab {
+    this.list(session);
+    const explicit = params.tabId as string | undefined;
+    const id = explicit ?? session.workingTabId;
     const tab = id ? this.tabs.get(id) : undefined;
     if (!tab) throw new Error("没有可用的目标标签。请 browser_list_tabs 后 select_tab，或用 browser_navigate/browser_new_tab 打开页面。");
+    // 归属校验：显式指定的标签必须属于本会话，或是用户自己打开（无归属）的标签。
+    if (explicit && tab.ownerRuntimeId && tab.ownerRuntimeId !== session.runtimeId)
+      throw new Error("该浏览器标签属于其他 Agent 会话，请用 browser_list_tabs 重新选择。");
     return tab;
   }
 
@@ -94,7 +155,7 @@ export class BrowserAutomation {
     } finally { this.presentations.delete(requestId); }
   }
 
-  private async create(url: string, signal: AbortSignal): Promise<Tab> {
+  private async create(url: string, signal: AbortSignal, session: AgentSession): Promise<Tab> {
     const win = this.getMainWindow();
     if (!win || win.isDestroyed()) throw new Error("主窗口不可用，请重新打开 Tether");
     const instanceId = `agent-browser-${randomUUID()}`;
@@ -105,7 +166,8 @@ export class BrowserAutomation {
       aborted(signal);
       const tab = [...this.tabs.values()].find((item) => item.instanceId === instanceId);
       if (tab) {
-        this.workingTabId = tab.tabId;
+        tab.ownerRuntimeId = session.runtimeId;
+        session.workingTabId = tab.tabId;
         if (url !== "about:blank") await this.navigate(tab, url, signal);
         return tab;
       }
@@ -274,14 +336,14 @@ export class BrowserAutomation {
     return { dispatched: true };
   }
 
-  private async perform(tool: string, params: BrowserParams, signal: AbortSignal): Promise<BrowserToolResult> {
-    if (tool === "browser_list_tabs") return browserText({ tabs: this.list(), workingTabId: this.workingTabId ?? null });
-    if (tool === "browser_new_tab" || (tool === "browser_navigate" && !params.tabId && !this.workingTabId)) {
-      const tab = await this.create(this.url(params.url as string | undefined ?? "about:blank"), signal);
+  private async perform(tool: string, params: BrowserParams, signal: AbortSignal, session: AgentSession): Promise<BrowserToolResult> {
+    if (tool === "browser_list_tabs") return browserText({ tabs: this.list(session), workingTabId: session.workingTabId ?? null });
+    if (tool === "browser_new_tab" || (tool === "browser_navigate" && !params.tabId && !session.workingTabId)) {
+      const tab = await this.create(this.url(params.url as string | undefined ?? "about:blank"), signal, session);
       return browserText(await this.observe(tab, {}, signal));
     }
-    const tab = this.target(params);
-    if (tool === "browser_select_tab") { this.workingTabId = tab.tabId; await this.show(tab, signal); return browserText(await this.observe(tab, {}, signal)); }
+    const tab = this.target(params, session);
+    if (tool === "browser_select_tab") { session.workingTabId = tab.tabId; await this.show(tab, signal); return browserText(await this.observe(tab, {}, signal)); }
     if (tool === "browser_close_tab") {
       tab.owner.send("browser:agent-presentation", { action: "close", instanceId: tab.instanceId, tabId: tab.tabId });
       const deadline = Date.now() + 5000;

@@ -5,6 +5,8 @@ import type { AgentEvent, AgentSessionStats, AgentSnapshot, AgentStartOptions } 
 import { parseSkillCommands } from "../shared/skills";
 import { killProcessTree } from "./process-tree";
 import { drainUtf8Lines } from "./rpc-lines";
+import { IPC_LIMITS, formatBytes, redactSecrets } from "./ipc-validation";
+import type { DiagnosticSink } from "./local-logger";
 import { type BrowserParams, type BrowserRequest, type BrowserToolResult } from "../shared/browser-tools";
 
 interface PendingRequest {
@@ -35,6 +37,19 @@ export class AgentHost {
   private requestId = 0;
   private pending = new Map<string, PendingRequest>();
   private static readonly STDERR_CAP = 200_000;
+  /** 短期事件回放缓冲：snapshot 期间到达的事件按序号补齐，避免快照与实时流之间出现缺口。 */
+  private static readonly REPLAY_CAP = 500;
+  private seq = 0;
+  private replayBuffer: AgentEvent[] = [];
+  /** 最近一次 snapshot 应答时的事件序号；replay 从它之后开始。 */
+  private snapshotSeq = 0;
+  /** 启动时交给 worker 的凭据；stderr/错误文本落日志前先脱敏。 */
+  private secrets: string[] = [];
+  /** 无法解析的 RPC 行只诊断一次，避免坏输出刷屏。 */
+  private malformedLines = 0;
+
+  /** 壳层分配的稳定句柄；不随会话文件路径变化，命令按它路由。 */
+  public runtimeId = "";
 
   /** 会话标识（Phase 3a）：事件据此路由回对应会话视图。
    * 新建会话在 `start` 拿到 sessionFile 后由 index.ts 设置；复用会话已存在。 */
@@ -44,16 +59,41 @@ export class AgentHost {
 
   constructor(
     private readonly emitEvent: (event: AgentEvent) => void,
-    private readonly emitError: (message: string, sessionKey?: string) => void,
+    private readonly emitError: (message: string, sessionKey?: string, runtimeId?: string) => void,
     private readonly executeBrowser?: (tool: string, params: BrowserParams, signal: AbortSignal) => Promise<BrowserToolResult>,
     private readonly resetBrowser?: () => void,
+    private readonly log?: DiagnosticSink,
   ) {}
 
-  /** 给事件附上所属会话 id，供渲染层按活动会话路由，避免后台会话污染当前视图。 */
+  /** 已发出事件的最高序号；snapshot 用它切出需要回放的事件。 */
+  get lastSeq(): number {
+    return this.seq;
+  }
+
+  /** 最近一次 snapshot 的应答序号，回放缺口从这里开始。 */
+  get lastSnapshotSeq(): number {
+    return this.snapshotSeq;
+  }
+
+  /** 序号大于 `afterSeq` 的缓冲事件，用于 snapshot 之后补齐缺口。 */
+  replaySince(afterSeq: number): AgentEvent[] {
+    return this.replayBuffer.filter(
+      (event) => typeof event.__seq === "number" && event.__seq > afterSeq,
+    );
+  }
+
+  /** 给事件附上所属会话 id 与运行句柄，供渲染层按活动会话路由并去重。 */
   private tagged(event: AgentEvent): AgentEvent {
-    return this.sessionKey
-      ? { ...event, __sessionId: this.sessionKey }
-      : event;
+    const next: AgentEvent = {
+      ...event,
+      __seq: ++this.seq,
+      ...(this.runtimeId ? { __runtimeId: this.runtimeId } : {}),
+      ...(this.sessionKey ? { __sessionId: this.sessionKey } : {}),
+    };
+    this.replayBuffer.push(next);
+    if (this.replayBuffer.length > AgentHost.REPLAY_CAP)
+      this.replayBuffer.splice(0, this.replayBuffer.length - AgentHost.REPLAY_CAP);
+    return next;
   }
 
   isRunning(): boolean {
@@ -65,6 +105,9 @@ export class AgentHost {
       this.request<Record<string, unknown>>("get_state"),
       this.request<{ messages: unknown[] }>("get_messages"),
     ]);
+    // 快照应答按 stdout 顺序处理：此刻之前解析的事件都已反映在 messages 里，
+    // 之后的事件才需要用 replay 补齐，避免 message_start 之类事件重复插入。
+    this.snapshotSeq = this.seq;
     void this.emitSnapshotMeta();
     return {
       state,
@@ -113,6 +156,7 @@ export class AgentHost {
     desktopProvider?: { config: unknown; apiKey: string };
   }): Promise<AgentSnapshot> {
     this.requestedSessionPath = options.sessionPath;
+    this.secrets = options.desktopProvider ? [options.desktopProvider.apiKey] : [];
     await this.stop();
     this.resetBrowser?.();
     const args = [
@@ -191,12 +235,22 @@ export class AgentHost {
       // EPIPE when the RPC worker exits mid-write must not crash the Electron main process.
       if (this.child !== child) return;
       const detail = error instanceof Error ? error.message : String(error);
-      if (!/EPIPE|ECONNRESET|broken pipe/i.test(detail)) this.emitError(detail, this.sessionKey);
+      if (!/EPIPE|ECONNRESET|broken pipe/i.test(detail)) {
+        this.log?.error("worker", `stdin error: ${detail}`, {
+          runtimeId: this.runtimeId,
+          sessionKey: this.sessionKey,
+        });
+        this.emitError(detail, this.sessionKey, this.runtimeId);
+      }
     });
     child.once("error", (error) => {
       if (this.child !== child) return;
       this.child = undefined;
       if (child.pid !== undefined) killProcessTree(child.pid, "SIGTERM");
+      this.log?.error("worker", `spawn error: ${redactSecrets(error.message, this.secrets)}`, {
+        runtimeId: this.runtimeId,
+        sessionKey: this.sessionKey,
+      });
       this.handleExit(error);
     });
     child.once("exit", (code, signal) => {
@@ -204,6 +258,10 @@ export class AgentHost {
       this.child = undefined;
       // Worker may die before its own wipe; reap leftover shells/delegates.
       if (child.pid !== undefined) killProcessTree(child.pid, "SIGTERM");
+      this.log?.error("worker", `worker exited (code ${code ?? "unknown"}${signal ? `, ${signal}` : ""})`, {
+        runtimeId: this.runtimeId,
+        sessionKey: this.sessionKey,
+      });
       this.handleExit(new Error(`Agent stopped (code ${code ?? "unknown"}${signal ? `, ${signal}` : ""})`));
     });
 
@@ -248,7 +306,15 @@ export class AgentHost {
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Tether did not respond to ${type}. ${this.stderr}`.trim()));
+        const detail = redactSecrets(this.stderr, this.secrets);
+        this.log?.error("rpc", `request timed out: ${type}`, {
+          runtimeId: this.runtimeId,
+          sessionKey: this.sessionKey,
+          stderr: detail.slice(-2_000),
+        });
+        reject(
+          new Error(`Tether did not respond to ${type}. ${detail}`.trim()),
+        );
       }, timeoutForRequest(type));
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
@@ -276,8 +342,15 @@ export class AgentHost {
   }
 
   private handleChunk(chunk: Buffer): void {
-    const drained = drainUtf8Lines(this.lineBuffer, chunk);
+    const drained = drainUtf8Lines(this.lineBuffer, chunk, {
+      maxLineBytes: IPC_LIMITS.rpcLineBytes,
+    });
     this.lineBuffer = Buffer.from(drained.rest);
+    if (drained.oversized > 0) {
+      const detail = `RPC 输出单行超过 ${formatBytes(IPC_LIMITS.rpcLineBytes)}，已丢弃 ${drained.oversized} 行`;
+      this.log?.warn("rpc", detail, { runtimeId: this.runtimeId, sessionKey: this.sessionKey });
+      this.emitError(detail, this.sessionKey, this.runtimeId);
+    }
     for (const line of drained.lines) this.handleLine(line);
   }
 
@@ -286,6 +359,12 @@ export class AgentHost {
     try {
       data = JSON.parse(line) as Record<string, unknown>;
     } catch {
+      if (this.malformedLines === 0) {
+        const detail = `RPC 输出包含无法解析的 JSON，已忽略：${redactSecrets(line.slice(0, 200), this.secrets)}`;
+        this.log?.warn("rpc", detail, { runtimeId: this.runtimeId, sessionKey: this.sessionKey });
+        this.emitError(detail, this.sessionKey, this.runtimeId);
+      }
+      this.malformedLines += 1;
       return;
     }
     if (data.type === "response" && typeof data.id === "string") {
@@ -307,14 +386,20 @@ export class AgentHost {
 
   private handleExit(error: Error): void {
     this.cancelBrowserRequests();
-    const detail = this.stderr.trim();
-    const message = detail ? `${error.message}\n${detail}` : error.message;
+    const detail = redactSecrets(this.stderr.trim(), this.secrets);
+    const message = detail
+      ? `${redactSecrets(error.message, this.secrets)}\n${detail}`
+      : redactSecrets(error.message, this.secrets);
+    this.log?.error("worker", message.slice(0, 1_000), {
+      runtimeId: this.runtimeId,
+      sessionKey: this.sessionKey,
+    });
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(new Error(message));
     }
     this.pending.clear();
-    this.emitError(message, this.sessionKey);
+    this.emitError(message, this.sessionKey, this.runtimeId);
   }
 }
 

@@ -79,10 +79,15 @@ describe("desktop provider repository", () => {
     await expect(repo.update({ id: a.id, baseUrl: "https://other.test/v1" })).rejects.toThrow("重新填写");
     expect((await repo.load()).providers[0].baseUrl).toBe(input.baseUrl);
   });
-  it("surfaces a corrupt store instead of overwriting it", async () => {
+  it("backs up a corrupt store and starts from safe defaults instead of overwriting it", async () => {
     await writeFile(file, "broken-json");
-    await expect(repo.create(input)).rejects.toThrow();
-    expect(await readFile(file, "utf8")).toBe("broken-json");
+    const created = await repo.create(input);
+    expect(created.id).toBeTruthy();
+    // 损坏内容不会被静默丢弃：原文件已改名为带时间戳的 .corrupt 备份。
+    const backups = (await fs.readdir(dir)).filter((name) => name.endsWith(".corrupt"));
+    expect(backups).toHaveLength(1);
+    expect(await readFile(join(dir, backups[0]), "utf8")).toBe("broken-json");
+    expect(JSON.parse(await readFile(file, "utf8")).providers).toHaveLength(1);
   });
   it("persists per-model capability settings", async () => {
     await repo.create({ ...input, models: [{ id: "a", reasoning: true, supportsImages: true, thinkingLevels: ["low", "high"], contextWindow: 32000, maxTokens: 4096 }] });

@@ -3,10 +3,11 @@ import { join } from "node:path";
 import { createTetherCredentialStore } from "tether-agent-core";
 import { ProviderRepository, serviceCredentialId } from "./provider-store";
 import { listModels } from "../shared/openai-models";
-import { serviceBaseUrl, serviceRuntimeConfig } from "../shared/provider-config";
+import { serviceBaseUrl, serviceRuntimeConfig, SUPPORTED_SERVICE_STYLES } from "../shared/provider-config";
 import { testModelConnection } from "../shared/provider-connection";
 import type { ProviderConnection } from "../shared/types";
 import { desktopProviderStatuses } from "../shared/model-selection";
+import { requireRecord, requireString, validateConnectionInput } from "./ipc-validation";
 
 let repository: ProviderRepository;
 export function providerRepository(): ProviderRepository {
@@ -18,6 +19,21 @@ export function providerRepository(): ProviderRepository {
     async write(id, key) { await (await createTetherCredentialStore()).modify(id, async () => ({ type: "api_key", key })); },
     async delete(id) { await (await createTetherCredentialStore()).delete(id); },
   });
+}
+
+/** IPC 输入的运行时校验：类型/长度/接口格式都不信任渲染进程的断言。 */
+function validateProviderConnection(raw: unknown): ProviderConnection {
+  const record = requireRecord(raw, "供应商连接参数");
+  const checked = validateConnectionInput(record.baseUrl, record.apiKey ?? "", record.apiStyle);
+  const style = checked.apiStyle as ProviderConnection["apiStyle"] | undefined;
+  if (!style || !SUPPORTED_SERVICE_STYLES.includes(style))
+    throw new Error("不支持的接口格式");
+  return {
+    baseUrl: checked.baseUrl,
+    apiStyle: style,
+    ...(record.id ? { id: requireString(record.id, "id", { maxLength: 128 }) } : {}),
+    ...(checked.apiKey ? { apiKey: checked.apiKey } : {}),
+  };
 }
 
 async function connectionKey(input: ProviderConnection): Promise<string> {
@@ -56,12 +72,21 @@ export function registerProviderIpcHandlers(): void {
   ipcMain.handle("providers:update", (_e, input) => repo.update(input));
   ipcMain.handle("providers:delete", (_e, id) => repo.delete(id));
   ipcMain.handle("providers:set-default", (_e, id, model) => repo.setDefault(id, model));
-  ipcMain.handle("providers:discover", async (_e, input: ProviderConnection) => {
+  ipcMain.handle("providers:discover", async (_e, raw: unknown) => {
+    const input = validateProviderConnection(raw);
     const key = await connectionKey(input);
     return listModels(serviceBaseUrl(input.baseUrl, input.apiStyle), key, input.apiStyle);
   });
-  ipcMain.handle("providers:test-connection", async (_e, input: ProviderConnection & { modelId: string }) => {
-    try { return await testModelConnection(input, await connectionKey(input)); }
+  ipcMain.handle("providers:test-connection", async (_e, raw: unknown) => {
+    try {
+      const input = validateProviderConnection(raw);
+      const modelId = requireString(
+        requireRecord(raw, "供应商连接参数").modelId,
+        "modelId",
+        { maxLength: 200 },
+      );
+      return await testModelConnection({ ...input, modelId }, await connectionKey(input));
+    }
     catch (error) { return { ok: false, message: error instanceof Error ? error.message : String(error) }; }
   });
   ipcMain.handle("providers:test", async (_e, id: string) => {

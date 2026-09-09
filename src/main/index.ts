@@ -33,11 +33,21 @@ import {
   type SupportedProviderId,
 } from "tether-agent-core";
 import { AgentHost } from "./agent-host";
+import { AgentManager, sessionFileOf } from "./agent-manager";
 import { closeAllBrowserPopups } from "./browser/popups";
 import { closeAllDetachedBrowserWindows } from "./browser/windows";
 import { registerBrowserIpc } from "./browser/ipc";
 import { BrowserAutomation } from "./browser/automation";
+import {
+  consumeConfigNotices,
+  noteConfigRecovered,
+  protectedMessageFileName,
+  readJsonFile,
+  writeFileAtomic,
+  writeJsonAtomic,
+} from "./atomic-file";
 import { isPathInsideRoot } from "./workspace-path";
+import { LocalLogger } from "./local-logger";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { apiBaseUrl, listModels } from "../shared/openai-models";
 import {
@@ -49,7 +59,6 @@ import {
   officialDeepSeekKey,
   parseChatProfiles,
   type ChatProfiles,
-  type CustomApiProfile,
 } from "../shared/chat-profiles";
 import {
   mergeWebSearchConfig,
@@ -79,6 +88,17 @@ import {
   type Locale,
 } from "../shared/i18n";
 import { getLatestUpdate } from "./update-check";
+import {
+  IPC_LIMITS,
+  assertPayloadLimit,
+  base64PayloadBytes,
+  formatBytes,
+  requireRecord,
+  requireString,
+  validateAgentStartOptions,
+  validateConnectionInput,
+  validatePromptMessage,
+} from "./ipc-validation";
 import {
   PREVIEW_SCHEME,
   UPLOADS_HOST,
@@ -128,43 +148,36 @@ process.env.TETHER_CREDENTIALS_STORE = "file";
 
 let mainWindow: BrowserWindow | undefined;
 const browserAutomation = new BrowserAutomation(() => mainWindow);
+
+/** 本地诊断日志（只写本机、限大小、可轮转，不上传；写入前脱敏已知凭据）。 */
+const diagnostics = new LocalLogger({
+  dir: path.join(getTetherHome(), "logs"),
+  secrets: () =>
+    SUPPORTED_PROVIDER_IDS.map((id) => {
+      const name = providerEnvironmentKey(id);
+      return name ? process.env[name] : undefined;
+    }),
+});
+
 /** Phase 3a：每个会话一个独立 AgentHost（各自 spawn 一个 RPC worker）。
- * 切换会话不再杀其它会话的 host，后台会话继续运行。key = 会话文件路径。 */
-const agentHosts = new Map<string, AgentHost>();
+ * 切换会话不再杀其它会话的 host，后台会话继续运行；命令按 runtimeId 路由。 */
+const agentManager = new AgentManager({
+  createHost: (runtimeId) =>
+    new AgentHost(
+      (event) => mainWindow?.webContents.send("agent:event", event),
+      (message, sessionKey, errorRuntimeId) =>
+        mainWindow?.webContents.send("agent:error", {
+          message,
+          __sessionId: sessionKey,
+          __runtimeId: errorRuntimeId,
+        }),
+      (tool, params, signal) =>
+        browserAutomation.execute(tool, params, signal, runtimeId),
+      () => browserAutomation.resetAgent(runtimeId),
+      diagnostics,
+    ),
+});
 let activeAgentCwd: string | undefined;
-let activeSessionPath: string | undefined;
-
-function createAgentHost(): AgentHost {
-  return new AgentHost(
-    (event) => mainWindow?.webContents.send("agent:event", event),
-    (message, sessionKey) =>
-      mainWindow?.webContents.send("agent:error", { message, __sessionId: sessionKey }),
-    (tool, params, signal) => browserAutomation.execute(tool, params, signal),
-    () => browserAutomation.resetAgent(),
-  );
-}
-
-/** 按请求的 sessionPath 定位已有 host（key 或 requestedSessionPath 命中）。 */
-function findAgentHost(sessionPath?: string): AgentHost | undefined {
-  if (!sessionPath) return undefined;
-  const byKey = agentHosts.get(sessionPath);
-  if (byKey) return byKey;
-  for (const host of agentHosts.values()) {
-    if (host.sessionKey === sessionPath || host.requestedSessionPath === sessionPath)
-      return host;
-  }
-  return undefined;
-}
-
-/** 当前活动会话的 host（`agent:command` / `agent:stop` / `agent:ui-response` 路由）。 */
-function activeAgentHost(): AgentHost | undefined {
-  return activeSessionPath ? agentHosts.get(activeSessionPath) : undefined;
-}
-
-/** 应用退出 / 窗口关闭时回收全部 host 的 RPC worker 树。 */
-function stopAllAgentHosts(): void {
-  for (const host of agentHosts.values()) void host.stop();
-}
 
 
 /**
@@ -182,10 +195,20 @@ function stopAllAgentHosts(): void {
  * 说明：这是壳层对 Phase 1 的实现；后续可下沉为持久化的应用自管索引
  * （参考 Proma `agent-sessions.json` 创建即写），此处先以进程内注册表止血。
  */
-const loadedSessions = new Map<
-  string,
-  { cwd: string; provider?: string; model?: string; title?: string }
->();
+interface LoadedSessionEntry {
+  cwd: string;
+  provider?: string;
+  model?: string;
+  title?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  messageCount?: number;
+}
+
+/** 超过这个时间且磁盘上仍无会话文件的登记项会被清理。 */
+const LOADED_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+const loadedSessions = new Map<string, LoadedSessionEntry>();
 
 // 本会话内已删除会话的路径黑名单。双重保险：即使 loadedSessions 因清理失败残留了
 // 某条目，mergeLoadedSessions 也不会再把它合成回侧边栏（避免删除后 title 退化为 cwd 名）。
@@ -197,35 +220,82 @@ const deletedSessionPaths = new Set<string>();
 function loadedSessionsPath(): string {
   return path.join(getTetherHome(), "loaded-sessions.json");
 }
-function persistLoadedSessions(): void {
-  try {
-    const data = Object.fromEntries(loadedSessions);
-    void fsp
-      .mkdir(path.dirname(loadedSessionsPath()), { recursive: true, mode: 0o700 })
-      .then(() =>
-        fsp.writeFile(loadedSessionsPath(), JSON.stringify(data, null, 2), {
-          mode: 0o600,
-        }),
-      )
-      .catch(() => undefined);
-  } catch {
-    // 尽力而为。
-  }
+
+/** 校验并归一化单条运行中会话登记；路径必须绝对，非法条目直接丢弃。 */
+function normalizeLoadedSessionEntry(
+  value: unknown,
+): LoadedSessionEntry | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.cwd !== "string" || !path.isAbsolute(record.cwd))
+    return undefined;
+  const entry: LoadedSessionEntry = { cwd: path.normalize(record.cwd) };
+  if (typeof record.provider === "string" && record.provider)
+    entry.provider = record.provider;
+  if (typeof record.model === "string" && record.model)
+    entry.model = record.model;
+  if (typeof record.title === "string" && record.title.trim())
+    entry.title = record.title.trim().slice(0, 200);
+  if (typeof record.createdAt === "string") entry.createdAt = record.createdAt;
+  if (typeof record.updatedAt === "string") entry.updatedAt = record.updatedAt;
+  if (typeof record.messageCount === "number" && Number.isFinite(record.messageCount))
+    entry.messageCount = Math.max(0, Math.floor(record.messageCount));
+  return entry;
 }
-function loadLoadedSessions(): void {
-  try {
-    const raw = fs.readFileSync(loadedSessionsPath(), "utf8");
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") {
-      for (const [key, value] of Object.entries(parsed)) {
-        if (value && typeof value === "object") {
-          loadedSessions.set(key, value as { cwd: string });
-        }
+
+function persistLoadedSessions(): void {
+  void writeJsonAtomic(
+    loadedSessionsPath(),
+    Object.fromEntries(loadedSessions),
+  ).catch(() => undefined);
+}
+
+/** 更新一条运行中会话登记（标题 / 消息数 / 时间），用于重启后恢复占位信息。 */
+function touchLoadedSession(
+  sessionKey: string | undefined,
+  patch: Partial<LoadedSessionEntry>,
+): void {
+  if (!sessionKey) return;
+  const current = loadedSessions.get(sessionKey);
+  if (!current) return;
+  loadedSessions.set(sessionKey, {
+    ...current,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  });
+  persistLoadedSessions();
+}
+
+async function loadLoadedSessions(): Promise<void> {
+  const result = await readJsonFile<Record<string, LoadedSessionEntry>>(
+    loadedSessionsPath(),
+    () => ({}),
+    (raw) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+      const entries: Record<string, LoadedSessionEntry> = {};
+      for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (!path.isAbsolute(key)) continue;
+        const entry = normalizeLoadedSessionEntry(value);
+        if (entry) entries[path.normalize(key)] = entry;
       }
+      return entries;
+    },
+  );
+  noteConfigRecovered("loaded-sessions.json", result);
+  let pruned = false;
+  const now = Date.now();
+  for (const [key, entry] of Object.entries(result.value)) {
+    // 过期且磁盘上仍无会话文件的登记项：清理，避免长期运行无限累积。
+    const stale = entry.updatedAt
+      ? now - Date.parse(entry.updatedAt) > LOADED_SESSION_MAX_AGE_MS
+      : false;
+    if (stale && !fs.existsSync(key)) {
+      pruned = true;
+      continue;
     }
-  } catch {
-    // 首次运行或文件损坏：忽略。
+    loadedSessions.set(key, entry);
   }
+  if (pruned) persistLoadedSessions();
 }
 let workspaceWatcher: fs.FSWatcher | undefined;
 let watchedWorkspace = "";
@@ -307,12 +377,16 @@ async function checkForUpdates(manual = false): Promise<void> {
   } catch (error) {
     // Startup checks stay silent; a manual click deserves an answer.
     if (!manual || !mainWindow || mainWindow.isDestroyed()) return;
+    // 超时/中止用统一文案，不把底层 AbortError 原文抛给用户。
+    const timedOut =
+      error instanceof Error &&
+      (error.name === "TimeoutError" || error.name === "AbortError");
     await dialog.showMessageBox(mainWindow, {
       type: "warning",
       title: t(appLocale, "update.title"),
       message: t(appLocale, "update.failed"),
       detail:
-        error instanceof Error
+        !timedOut && error instanceof Error
           ? error.message
           : t(appLocale, "update.failedDetail"),
       buttons: [t(appLocale, "update.ok")],
@@ -373,7 +447,7 @@ function createWindow(): void {
     closeAllDetachedBrowserWindows();
     // macOS keeps the app alive after the window closes; still reap the RPC tree
     // so sandbox shells don't keep burning RAM in the background.
-    stopAllAgentHosts();
+    void agentManager.stopAll();
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
@@ -428,6 +502,23 @@ function registerIpc(): void {
   ipcMain.handle("app:version", () => app.getVersion());
   ipcMain.handle("app:check-update", () => checkForUpdates(true));
   ipcMain.handle("app:get-locale", () => appLocale);
+  ipcMain.handle("app:config-notices", () => {
+    const notices = consumeConfigNotices();
+    for (const notice of notices) diagnostics.warn("config", notice);
+    return notices;
+  });
+  ipcMain.handle(
+    "app:log-diagnostic",
+    (event, scope: unknown, message: unknown, details?: unknown) => {
+      if (event.sender.getType() !== "window")
+        throw new Error("Host renderer only");
+      diagnostics.error(
+        requireString(scope, "日志 scope", { maxLength: 64 }),
+        requireString(message, "日志内容", { allowEmpty: true, maxLength: 500 }),
+        typeof details === "string" ? details.slice(0, 4_000) : undefined,
+      );
+    },
+  );
   ipcMain.handle("app:set-locale", async (_event, locale: unknown) => {
     if (!isLocale(locale)) throw new Error("Unsupported locale");
     await saveLocale(locale);
@@ -470,7 +561,8 @@ function registerIpc(): void {
     return recentWorkspaces.touch(result.filePaths[0]);
   });
   ipcMain.handle("workspace:recent", () => recentWorkspaces.list());
-  ipcMain.handle("workspace:forget", async (_event, workspacePath: string) => {
+  ipcMain.handle("workspace:forget", async (_event, rawPath: unknown) => {
+    const workspacePath = requireString(rawPath, "工作区路径", { maxLength: 4_096 });
     const store = new TetherStateStore();
     try {
       await store.refresh();
@@ -484,18 +576,31 @@ function registerIpc(): void {
   });
   ipcMain.handle(
     "workspace:read",
-    async (_event, relativePath: string, workspacePath?: string) => {
+    async (_event, rawPath: unknown, workspacePath?: unknown) => {
+      const relativePath = requireString(rawPath, "文件路径", { maxLength: 4_096 });
       try {
-        const resolved = await resolveInWorkspace(relativePath, workspacePath);
-        const buffer = await fsp.readFile(resolved);
+        const resolved = await resolveInWorkspace(
+          relativePath,
+          workspacePath === undefined
+            ? undefined
+            : requireString(workspacePath, "工作区路径", { maxLength: 4_096 }),
+        );
+        // 先 stat 再按需读：超大文件只取前缀，避免整块读进主进程内存。
+        const stat = await fsp.stat(resolved);
+        if (stat.isDirectory()) throw new Error("这是一个目录，无法预览");
+        const truncated = stat.size > IPC_LIMITS.workspaceReadBytes;
+        const buffer = truncated
+          ? await readFilePrefix(resolved, IPC_LIMITS.workspaceReadBytes)
+          : await fsp.readFile(resolved);
         if (buffer.includes(0))
           return { path: relativePath, binary: true, content: "" };
         const text = buffer.toString("utf8");
         return {
           path: relativePath,
           binary: false,
-          content:
-            text.length > 200_000 ? `${text.slice(0, 200_000)}\n…` : text,
+          content: truncated
+            ? `${text}\n…（文件超过 ${formatBytes(IPC_LIMITS.workspaceReadBytes)}，仅显示开头）`
+            : text,
         };
       } catch (error) {
         if (
@@ -512,22 +617,32 @@ function registerIpc(): void {
   );
   ipcMain.handle(
     "workspace:open",
-    async (_event, relativePath: string, workspacePath?: string) => {
+    async (_event, rawPath: unknown, workspacePath?: unknown) => {
+      const relativePath = requireString(rawPath, "文件路径", { maxLength: 4_096 });
       const error = await shell.openPath(
-        await resolveInWorkspace(relativePath, workspacePath),
+        await resolveInWorkspace(
+          relativePath,
+          workspacePath === undefined
+            ? undefined
+            : requireString(workspacePath, "工作区路径", { maxLength: 4_096 }),
+        ),
       );
       if (error) throw new Error(error);
     },
   );
   ipcMain.handle(
     "workspace:reveal",
-    async (_event, relativePath: string, workspacePath?: string) => {
+    async (_event, relativePath: unknown, workspacePath?: unknown) => {
+      const target = requireString(relativePath, "文件路径", {
+        allowEmpty: true,
+        maxLength: 4_096,
+      });
       shell.showItemInFolder(
         await resolveInWorkspace(
-          typeof relativePath === "string" && relativePath.trim()
-            ? relativePath
-            : ".",
-          workspacePath,
+          target.trim() ? target : ".",
+          workspacePath === undefined
+            ? undefined
+            : requireString(workspacePath, "工作区路径", { maxLength: 4_096 }),
         ),
       );
     },
@@ -536,30 +651,53 @@ function registerIpc(): void {
     "workspace:restore",
     async (_event, files: unknown, workspacePath?: string) => {
       if (!Array.isArray(files)) throw new Error("Invalid restore payload");
-      const restored: string[] = [];
+      if (files.length > IPC_LIMITS.restoreFiles)
+        throw new Error(`恢复文件过多（上限 ${IPC_LIMITS.restoreFiles} 个）`);
+      // 预检全部路径：任何一条越界/不可写，都不开始写，避免“UI 已回退、磁盘只恢复一半”。
+      const planned: Array<{ path: string; resolved: string; content: string | null; mode?: number }> = [];
+      let plannedBytes = 0;
       for (const file of files) {
         if (!file || typeof file !== "object") continue;
-        const item = file as {
-          path?: unknown;
-          content?: unknown;
-          mode?: unknown;
-        };
+        const item = file as { path?: unknown; content?: unknown; mode?: unknown };
         if (typeof item.path !== "string" || !item.path.trim()) continue;
-        const resolved = await resolveInWorkspace(item.path, workspacePath);
-        if (item.content === null) {
-          await fsp.rm(resolved, { force: true });
-        } else if (typeof item.content === "string") {
-          await fsp.mkdir(path.dirname(resolved), { recursive: true });
-          await fsp.writeFile(resolved, item.content, {
-            encoding: "utf8",
-            ...(typeof item.mode === "number" ? { mode: item.mode } : {}),
-          });
-        } else {
-          continue;
+        if (item.content !== null && typeof item.content !== "string") continue;
+        if (typeof item.content === "string") {
+          plannedBytes += Buffer.byteLength(item.content, "utf8");
+          if (plannedBytes > IPC_LIMITS.restoreBytes)
+            throw new Error(
+              `恢复内容过大（上限 ${formatBytes(IPC_LIMITS.restoreBytes)}）`,
+            );
         }
-        restored.push(item.path);
+        const resolved = await resolveInWorkspace(item.path, workspacePath);
+        planned.push({
+          path: item.path,
+          resolved,
+          content: item.content,
+          ...(typeof item.mode === "number" ? { mode: item.mode } : {}),
+        });
       }
-      return { restored };
+      const restored: string[] = [];
+      const failed: Array<{ path: string; error: string }> = [];
+      for (const item of planned) {
+        try {
+          if (item.content === null) {
+            await fsp.rm(item.resolved, { force: true });
+          } else {
+            await fsp.mkdir(path.dirname(item.resolved), { recursive: true });
+            await fsp.writeFile(item.resolved, item.content, {
+              encoding: "utf8",
+              ...(item.mode !== undefined ? { mode: item.mode } : {}),
+            });
+          }
+          restored.push(item.path);
+        } catch (error) {
+          failed.push({
+            path: item.path,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return { restored, failed };
     },
   );
   ipcMain.handle("workspace:list", async (_event, workspacePath?: string) => {
@@ -579,16 +717,19 @@ function registerIpc(): void {
     return listWorkspaceFiles(root);
   });
   ipcMain.handle("vision:config", async () => {
-    let raw: unknown = {};
-    try {
-      raw = JSON.parse(await fsp.readFile(visionConfigPath(), "utf8")) as unknown;
-    } catch {
-      raw = {
+    const result = await readJsonFile<Record<string, unknown>>(
+      visionConfigPath(),
+      () => ({
         ...DEFAULT_VISION_CONFIG,
         apiKey: process.env.ZHIPU_API_KEY?.trim() ?? "",
-      };
-    }
-    const store = parseVisionStore(raw);
+      }),
+      (raw) =>
+        raw && typeof raw === "object" && !Array.isArray(raw)
+          ? (raw as Record<string, unknown>)
+          : undefined,
+    );
+    noteConfigRecovered("vision-config.json", result);
+    const store = parseVisionStore(result.value);
     const profiles = await loadChatProfiles().catch(() => undefined);
     const chatKey = profiles ? officialDeepSeekKey(profiles) : "";
     const next = store.profiles.map((item) => {
@@ -608,27 +749,37 @@ function registerIpc(): void {
     "vision:save-config",
     async (
       _event,
-      next: {
-        profiles?: CustomApiProfile[];
-        activeProfileId?: string;
-      },
+      raw: unknown,
     ) => {
+      const next = requireRecord(raw, "视觉配置");
+      const rawProfiles = Array.isArray(next.profiles) ? next.profiles : [];
+      if (rawProfiles.length > 50)
+        throw new Error("自定义模型配置过多（上限 50 个）");
       const store = parseVisionStore({
-        profiles: Array.isArray(next.profiles) ? next.profiles : [],
+        profiles: rawProfiles,
         activeProfileId: next.activeProfileId,
       });
-      await fsp.writeFile(
+      await writeJsonAtomic(
         visionConfigPath(),
-        `${JSON.stringify(serializeVisionStore(store.profiles, store.activeProfileId), null, 2)}\n`,
-        { mode: 0o600 },
+        serializeVisionStore(store.profiles, store.activeProfileId),
       );
     },
   );
   ipcMain.handle("vision:stage", async (_event, images: string[]) => {
     const refs = Array.isArray(images)
-      ? images.filter((item) => typeof item === "string" && item).slice(0, 4)
+      ? images.filter((item) => typeof item === "string" && item).slice(0, IPC_LIMITS.visionImages)
       : [];
     if (refs.length === 0) throw new Error("先上传至少一张图片");
+    // 解码前按 base64 长度估算大小，避免一次性把超大图片解码进内存。
+    let totalBytes = 0;
+    for (const ref of refs) {
+      const size = base64PayloadBytes(ref);
+      if (size > IPC_LIMITS.visionImageBytes)
+        throw new Error(`图片过大（上限 ${formatBytes(IPC_LIMITS.visionImageBytes)}）`);
+      totalBytes += size;
+    }
+    if (totalBytes > IPC_LIMITS.visionTotalBytes)
+      throw new Error(`图片总大小超限（上限 ${formatBytes(IPC_LIMITS.visionTotalBytes)}）`);
     const dir = visionUploadsDir();
     await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
     const stamp = Date.now();
@@ -680,13 +831,19 @@ function registerIpc(): void {
     if (!key || !isDeepSeekUrl(chat.url)) return null;
     const response = await fetch("https://api.deepseek.com/user/balance", {
       headers: { authorization: `Bearer ${key}` },
+      // 网络挂起时不要让设置页一直转圈；超时按查询失败处理。
+      signal: AbortSignal.timeout(15_000),
     });
     const payload: unknown = await response.json().catch(() => undefined);
     if (!response.ok) throw new Error(`DeepSeek 余额查询失败（${response.status}）`);
     return parseDeepSeekBalance(payload) ?? null;
   });
 
-  ipcMain.handle("sessions:list", async (_event, cwd?: string) => {
+  ipcMain.handle("sessions:list", async (_event, rawCwd?: unknown) => {
+    const cwd =
+      rawCwd === undefined
+        ? undefined
+        : requireString(rawCwd, "cwd", { maxLength: 4_096 });
     const threads = await listTetherThreads(cwd ? { cwd } : {});
     const mapped = threads.map(
       (thread): SessionSummary => ({
@@ -707,7 +864,8 @@ function registerIpc(): void {
     );
     return mergeLoadedSessions(mapped, cwd);
   });
-  ipcMain.handle("sessions:remove", async (_event, id: string) => {
+  ipcMain.handle("sessions:remove", async (_event, rawId: unknown) => {
+    const id = requireString(rawId, "会话 id", { maxLength: 256 });
     const store = new TetherStateStore();
     try {
       await store.refresh();
@@ -734,11 +892,8 @@ function registerIpc(): void {
       }
       // 同步清理该会话对应的 host（停止并移出注册表），避免删除后残留后台进程。
       for (const path of targets) {
-        const host = agentHosts.get(path);
-        if (host) {
-          agentHosts.delete(path);
-          void host.stop();
-        }
+        const host = agentManager.findBySession(path);
+        if (host) void agentManager.stop(host.runtimeId);
       }
       persistLoadedSessions();
       await store.archive(id);
@@ -748,7 +903,9 @@ function registerIpc(): void {
   });
   ipcMain.handle(
     "sessions:pin",
-    async (_event, id: string, pinned: boolean) => {
+    async (_event, rawId: unknown, pinned: unknown) => {
+      const id = requireString(rawId, "会话 id", { maxLength: 256 });
+      if (typeof pinned !== "boolean") throw new Error("无效的 pinned");
       const store = new TetherStateStore();
       try {
         await store.refresh();
@@ -761,8 +918,11 @@ function registerIpc(): void {
   );
   ipcMain.handle(
     "sessions:rename",
-    async (_event, id: string, title: string) => {
-      const name = title.trim().slice(0, 96);
+    async (_event, rawId: unknown, title: unknown) => {
+      const id = requireString(rawId, "会话 id", { maxLength: 256 });
+      const name = requireString(title, "会话标题", { allowEmpty: true, maxLength: 512 })
+        .trim()
+        .slice(0, 96);
       if (!name) throw new Error("Conversation name cannot be empty");
       const store = new TetherStateStore();
       try {
@@ -778,6 +938,15 @@ function registerIpc(): void {
           })}\n`,
         );
         await store.indexSession(thread.storagePath);
+        for (const [key] of loadedSessions) {
+          if (
+            key === thread.sessionPath ||
+            key === thread.storagePath ||
+            sessionIdFromPath(key) === id
+          ) {
+            touchLoadedSession(key, { title: name });
+          }
+        }
       } finally {
         store.close();
       }
@@ -850,10 +1019,9 @@ function registerIpc(): void {
   });
   ipcMain.handle(
     "auth:list-models",
-    async (_event, baseUrl: string, apiKey: string, apiStyle?: string) => {
-      if (typeof baseUrl !== "string" || typeof apiKey !== "string")
-        throw new Error("先填写 API URL 和 Key");
-      return listModels(baseUrl, apiKey, apiStyle);
+    async (_event, baseUrl: unknown, apiKey: unknown, apiStyle?: unknown) => {
+      const input = validateConnectionInput(baseUrl, apiKey, apiStyle);
+      return listModels(input.baseUrl, input.apiKey, input.apiStyle);
     },
   );
   ipcMain.handle(
@@ -865,7 +1033,8 @@ function registerIpc(): void {
 
   registerProviderIpcHandlers();
 
-  ipcMain.handle("agent:start", async (_event, options: AgentStartOptions) => {
+  ipcMain.handle("agent:start", async (_event, rawOptions: unknown) => {
+    const options = validateAgentStartOptions(rawOptions);
     const tasksDir = path.resolve(path.join(userDataPath, "tasks"));
     const cwd = options.cwd ? path.resolve(options.cwd) : tasksDir;
     await fsp.mkdir(cwd, { recursive: true });
@@ -885,12 +1054,11 @@ function registerIpc(): void {
 
     // 命中已在运行的同一会话（切回后台会话，含 openSession 的 resume=false）：
     // 直接复用，不杀不重开。不依赖 resume 标志——只要该会话已有存活 host 就复用。
-    const existing = findAgentHost(sessionPath);
+    const existing = agentManager.findBySession(sessionPath);
     if (existing?.isRunning()) {
       activeAgentCwd = cwd;
       if (options.project || cwd !== tasksDir) await recentWorkspaces.touch(cwd);
-      activeSessionPath = existing.sessionKey ?? existing.requestedSessionPath ?? sessionPath;
-      return { ...(await existing.snapshot()), cwd: activeAgentCwd ?? cwd };
+      return { ...(await agentManager.resume(existing.runtimeId)), cwd: activeAgentCwd ?? cwd };
     }
 
     activeAgentCwd = cwd;
@@ -914,8 +1082,7 @@ function registerIpc(): void {
     const desktopProvider = startOptions.serviceId
       ? await resolveDesktopProvider(startOptions.serviceId, startOptions.model) : undefined;
     // 每个会话独立 host：已有实例（同会话重启）则复用，否则新建，绝不停止其它会话。
-    const host = existing ?? createAgentHost();
-    const snapshot = await host.start({
+    const started = await agentManager.start({
       ...startOptions,
       ...(sessionPath ? { sessionPath } : {}),
       cwd,
@@ -935,37 +1102,39 @@ function registerIpc(): void {
         desktopProvider,
       } : {}),
     });
-    const file = sessionFileOf(snapshot) ?? sessionPath;
-    host.sessionKey = file ?? sessionPath;
-    if (file) agentHosts.set(file, host);
-    activeSessionPath = host.sessionKey;
+    const snapshot: AgentSnapshot = started;
+    const host = agentManager.findRuntime(started.runtimeId);
+    const file = host?.sessionKey ?? sessionPath;
+    const sessionKey = file ?? sessionPath;
     // 该会话重新建立/打开：从已删除黑名单移除（曾删除后重开同名路径的会话要能再次出现）。
-    if (activeSessionPath) deletedSessionPaths.delete(activeSessionPath);
+    if (sessionKey) deletedSessionPaths.delete(sessionKey);
     // Phase 2：兜底首轮未落盘的 user 消息。
     // - 底层 session 文件已在磁盘生成（有 assistant、已 flush）：视为接管，从运行中
     //   注册表移除（磁盘索引接管），并清空受保护消息。
     // - 尚未落盘：登记到运行中注册表（保证列表可见、崩溃后可恢复），并把缺失的 user
     //   消息合并进返回的 messages，供切回/重启后显示。
-    if (activeSessionPath) {
+    if (sessionKey) {
       const persisted = file ? fs.existsSync(file) : false;
       if (persisted) {
-        if (loadedSessions.delete(activeSessionPath)) persistLoadedSessions();
+        if (loadedSessions.delete(sessionKey)) persistLoadedSessions();
       } else {
-        loadedSessions.set(activeSessionPath, {
+        loadedSessions.set(sessionKey, {
           cwd,
           provider: startOptions.provider,
           ...(startOptions.model ? { model: startOptions.model } : {}),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         });
         persistLoadedSessions();
       }
-      const protectedMsgs = await readProtectedUserMessages(activeSessionPath);
+      const protectedMsgs = await readProtectedUserMessages(sessionKey);
       if (protectedMsgs.length) {
         if (persisted) {
-          await clearProtectedUserMessages(activeSessionPath);
+          await clearProtectedUserMessages(sessionKey);
         } else {
-          const existing = collectUserTexts(snapshot.messages);
+          const existingTexts = collectUserTexts(snapshot.messages);
           const missing = protectedMsgs.filter(
-            (msg) => !existing.has(msg.message),
+            (msg) => !existingTexts.has(msg.message),
           );
           if (missing.length) {
             snapshot.messages = [
@@ -980,95 +1149,94 @@ function registerIpc(): void {
         }
       }
     }
-    return { ...snapshot, cwd };
+    return { ...started, ...snapshot, cwd };
   });
-  ipcMain.handle("agent:stop", () => {
-    const host = activeAgentHost();
-    activeSessionPath = undefined;
-    return host?.stop();
-  });
+  ipcMain.handle("agent:stop", (_event, runtimeId?: string) =>
+    agentManager.stop(runtimeId),
+  );
+  ipcMain.handle("agent:runtimes", () => agentManager.list());
+  ipcMain.handle("agent:replay", (_event, runtimeId: string, afterSeq: number) =>
+    agentManager.replay(runtimeId, Number.isFinite(afterSeq) ? afterSeq : 0),
+  );
   ipcMain.handle(
     "agent:command",
-    async (_event, type: string, data?: Record<string, unknown>) => {
-      if (!ALLOWED_AGENT_COMMANDS.has(type))
-        throw new Error(`Unsupported agent command: ${type}`);
-      const host = activeAgentHost();
+    async (
+      _event,
+      type: unknown,
+      data?: unknown,
+      runtimeId?: unknown,
+    ) => {
+      const command = requireString(type, "命令类型", { maxLength: 64 });
+      if (!ALLOWED_AGENT_COMMANDS.has(command))
+        throw new Error(`Unsupported agent command: ${command}`);
+      const payload = data === undefined ? {} : requireRecord(data, "命令内容");
+      assertPayloadLimit(payload, IPC_LIMITS.commandPayloadBytes, "命令内容");
+      if (payload.message !== undefined) validatePromptMessage(payload.message);
+      const handle = runtimeId === undefined ? undefined : requireString(runtimeId, "runtimeId", { maxLength: 128 });
+      const host = agentManager.activeHost(handle);
       if (!host) throw new Error("No active agent session");
-      // Phase 2：用户消息发出即落盘到受保护文件，兜底底层延迟写盘。
-      if (type === "prompt" && typeof data?.message === "string") {
-        void appendProtectedUserMessage(host.sessionKey, data.message);
-      }
-      const result = await host.request(type, data);
-      if (
-        type === "new_session" ||
-        type === "get_state" ||
-        type === "get_session_stats"
-      ) {
-        const file = sessionFileFromUnknown(result);
-        if (file) {
-          activeSessionPath = file;
-          host.sessionKey = file;
-          if (!agentHosts.has(file)) agentHosts.set(file, host);
+      // Phase 2：用户消息发出即同步落盘到受保护文件，兜底底层延迟写盘。
+      // 必须先写完再发给 worker，否则最脆弱的窗口仍可能丢消息。
+      if (command === "prompt" && typeof payload.message === "string") {
+        try {
+          await appendProtectedUserMessage(host.sessionKey, payload.message);
+          recordPromptInLoadedSession(host.sessionKey, payload.message);
+        } catch (error) {
+          mainWindow?.webContents.send("agent:error", {
+            message: `首条消息保护写入失败，重启后可能无法恢复：${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            __sessionId: host.sessionKey,
+            __runtimeId: host.runtimeId,
+          });
         }
       }
-      return result;
+      return agentManager.command(handle, command, payload);
     },
   );
   ipcMain.handle(
     "agent:ui-response",
-    (_event, id: string, response: Record<string, unknown>) => {
-      const host = activeAgentHost();
-      return host ? host.respondToUi(id, response) : undefined;
-    },
+    (_event, id: unknown, response: unknown, runtimeId?: unknown) =>
+      agentManager.respondToUi(
+        runtimeId === undefined ? undefined : requireString(runtimeId, "runtimeId", { maxLength: 128 }),
+        requireString(id, "请求 id", { maxLength: 256 }),
+        assertPayloadLimit(requireRecord(response, "应答内容"), IPC_LIMITS.uiResponseBytes, "应答内容"),
+      ),
   );
 }
 
 async function readHomeJson(name: string): Promise<unknown> {
-  try {
-    return JSON.parse(await fsp.readFile(path.join(getTetherHome(), name), "utf8"));
-  } catch {
-    return {};
-  }
+  const result = await readJsonFile<unknown>(
+    path.join(getTetherHome(), name),
+    () => ({}),
+    (raw) => (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : undefined),
+  );
+  noteConfigRecovered(name, result);
+  return result.value;
 }
 
 async function writeHomeJson(name: string, value: unknown): Promise<void> {
-  const file = path.join(getTetherHome(), name);
-  await fsp.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await fsp.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await writeJsonAtomic(path.join(getTetherHome(), name), value);
 }
 
 async function saveDefaultModel(
   providerId: string,
   modelId: string,
 ): Promise<void> {
-  const settingsPath = path.join(getTetherHome(), "settings.json");
-  let settings: Record<string, unknown> = {};
-  try {
-    settings = JSON.parse(await fsp.readFile(settingsPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-  } catch {
-    /* first write */
-  }
+  const settings = await readSettingsFile();
   settings.defaultProvider = providerId;
   settings.defaultModel = modelId;
-  await fsp.mkdir(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
-  await fsp.writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, {
-    mode: 0o600,
-  });
+  await writeJsonAtomic(path.join(getTetherHome(), "settings.json"), settings);
 }
 
 async function readSettingsFile(): Promise<Record<string, unknown>> {
-  const settingsPath = path.join(getTetherHome(), "settings.json");
-  try {
-    return JSON.parse(await fsp.readFile(settingsPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-  } catch {
-    return {};
-  }
+  const result = await readJsonFile<Record<string, unknown>>(
+    path.join(getTetherHome(), "settings.json"),
+    () => ({}),
+    (raw) => (raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined),
+  );
+  noteConfigRecovered("settings.json", result);
+  return result.value;
 }
 
 async function loadLocale(): Promise<Locale> {
@@ -1083,13 +1251,9 @@ async function loadLocale(): Promise<Locale> {
 }
 
 async function saveLocale(locale: Locale): Promise<void> {
-  const settingsPath = path.join(getTetherHome(), "settings.json");
   const settings = await readSettingsFile();
   settings.locale = locale;
-  await fsp.mkdir(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
-  await fsp.writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, {
-    mode: 0o600,
-  });
+  await writeJsonAtomic(path.join(getTetherHome(), "settings.json"), settings);
   appLocale = locale;
   installMenu();
 }
@@ -1104,46 +1268,53 @@ function isSafeExternalUrl(url: string): boolean {
 }
 
 const recentFile = path.join(userDataPath, "recent-workspaces.json");
+
+/** 最近项目是 read-modify-write，串行化避免并发 touch/forget 互相覆盖。 */
+let recentWorkspacesQueue: Promise<unknown> = Promise.resolve();
+function withRecentWorkspacesLock<T>(action: () => Promise<T>): Promise<T> {
+  const next = recentWorkspacesQueue.then(action, action);
+  recentWorkspacesQueue = next.catch(() => undefined);
+  return next;
+}
+
 const recentWorkspaces = {
   async list(): Promise<WorkspaceItem[]> {
-    try {
-      const parsed = JSON.parse(
-        await fsp.readFile(recentFile, "utf8"),
-      ) as unknown;
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter(isWorkspaceItem).slice(0, 12);
-    } catch {
-      return [];
-    }
-  },
-  async touch(workspacePath: string): Promise<string> {
-    const resolved = path.resolve(workspacePath);
-    const stat = await fsp.stat(resolved);
-    if (!stat.isDirectory())
-      throw new Error("Selected workspace is not a folder");
-    const current = await this.list();
-    const next = [
-      {
-        path: resolved,
-        name: path.basename(resolved) || resolved,
-        lastOpenedAt: new Date().toISOString(),
-      },
-      ...current.filter((item) => item.path !== resolved),
-    ].slice(0, 12);
-    await fsp.mkdir(path.dirname(recentFile), { recursive: true });
-    await fsp.writeFile(recentFile, `${JSON.stringify(next, null, 2)}\n`, {
-      mode: 0o600,
-    });
-    return resolved;
-  },
-  async forget(workspacePath: string): Promise<WorkspaceItem[]> {
-    const next = (await this.list()).filter(
-      (item) => item.path !== workspacePath,
+    const result = await readJsonFile<WorkspaceItem[]>(
+      recentFile,
+      () => [],
+      (raw) =>
+        Array.isArray(raw) ? raw.filter(isWorkspaceItem).slice(0, 12) : undefined,
     );
-    await fsp.writeFile(recentFile, `${JSON.stringify(next, null, 2)}\n`, {
-      mode: 0o600,
+    noteConfigRecovered("recent-workspaces.json", result);
+    return result.value;
+  },
+  touch(workspacePath: string): Promise<string> {
+    return withRecentWorkspacesLock(async () => {
+      const resolved = path.resolve(workspacePath);
+      const stat = await fsp.stat(resolved);
+      if (!stat.isDirectory())
+        throw new Error("Selected workspace is not a folder");
+      const current = await this.list();
+      const next = [
+        {
+          path: resolved,
+          name: path.basename(resolved) || resolved,
+          lastOpenedAt: new Date().toISOString(),
+        },
+        ...current.filter((item) => item.path !== resolved),
+      ].slice(0, 12);
+      await writeJsonAtomic(recentFile, next);
+      return resolved;
     });
-    return next;
+  },
+  forget(workspacePath: string): Promise<WorkspaceItem[]> {
+    return withRecentWorkspacesLock(async () => {
+      const next = (await this.list()).filter(
+        (item) => item.path !== workspacePath,
+      );
+      await writeJsonAtomic(recentFile, next);
+      return next;
+    });
   },
 };
 
@@ -1180,14 +1351,14 @@ function chatProfilesPath(): string {
 }
 
 async function loadChatProfiles(): Promise<ChatProfiles> {
-  try {
-    const parsed = parseChatProfiles(
-      JSON.parse(await fsp.readFile(chatProfilesPath(), "utf8")),
-    );
-    if (parsed) return parsed;
-  } catch {
-    /* migrate from the single stored slot */
-  }
+  const result = await readJsonFile<ChatProfiles>(
+    chatProfilesPath(),
+    () => migrateChatProfiles({ url: "", model: "", apiKey: "" }),
+    (raw) => parseChatProfiles(raw),
+  );
+  noteConfigRecovered("chat-profiles.json", result);
+  if (result.status === "ok") return result.value;
+  // 首次运行或迁移自旧的单槽位凭据。
   const stored = await (await createTetherCredentialStore()).read("deepseek");
   const apiKey =
     stored && stored.type === "api_key" && typeof stored.key === "string"
@@ -1203,15 +1374,7 @@ async function loadChatProfiles(): Promise<ChatProfiles> {
 
 async function saveChatProfiles(next: ChatProfiles): Promise<void> {
   const merged = mergeChatProfiles(await loadChatProfiles(), next);
-  await fsp.mkdir(path.dirname(chatProfilesPath()), {
-    recursive: true,
-    mode: 0o700,
-  });
-  await fsp.writeFile(
-    chatProfilesPath(),
-    `${JSON.stringify(merged, null, 2)}\n`,
-    { mode: 0o600 },
-  );
+  await writeJsonAtomic(chatProfilesPath(), merged);
   const chat = activeChat(merged);
   if (chat.apiKey) await saveProviderApiKey("deepseek", chat.apiKey);
   if (chat.url) await saveDeepSeekBaseUrl(chat.url.replace(/\/+$/, ""));
@@ -1227,24 +1390,29 @@ function visionExtensionPath(): string {
 }
 
 async function loadVisionConfig(): Promise<VisionConfig> {
-  try {
-    const raw = JSON.parse(
-      await fsp.readFile(visionConfigPath(), "utf8"),
-    ) as Partial<VisionConfig>;
-    const settings = resolveVisionSettings(raw);
-    const base: VisionConfig = {
-      ...settings,
-      apiKey: typeof raw.apiKey === "string" ? raw.apiKey.trim() : "",
-    };
-    if (base.provider === "deepseek")
-      return materializeDeepSeekVision(base.apiKey);
-    return base;
-  } catch {
+  const result = await readJsonFile<Record<string, unknown>>(
+    visionConfigPath(),
+    () => ({}),
+    (raw) =>
+      raw && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : undefined,
+  );
+  if (result.status !== "ok") {
     return {
       ...DEFAULT_VISION_CONFIG,
       apiKey: process.env.ZHIPU_API_KEY?.trim() ?? "",
     };
   }
+  const settings = resolveVisionSettings(result.value);
+  const base: VisionConfig = {
+    ...settings,
+    apiKey:
+      typeof result.value.apiKey === "string" ? result.value.apiKey.trim() : "",
+  };
+  if (base.provider === "deepseek")
+    return materializeDeepSeekVision(base.apiKey);
+  return base;
 }
 
 async function materializeDeepSeekVision(
@@ -1279,11 +1447,7 @@ async function syncDeepSeekVisionConfig(): Promise<void> {
   const current = await loadVisionConfig();
   if (current.provider !== "deepseek") return;
   const next = await materializeDeepSeekVision(current.apiKey);
-  await fsp.writeFile(
-    visionConfigPath(),
-    `${JSON.stringify(next, null, 2)}\n`,
-    { mode: 0o600 },
-  );
+  await writeJsonAtomic(visionConfigPath(), next);
 }
 
 async function resolveInWorkspace(
@@ -1342,17 +1506,16 @@ async function realpathExistingOrJoin(target: string): Promise<string> {
   }
 }
 
-function sessionFileOf(snapshot: AgentSnapshot): string | undefined {
-  return (
-    sessionFileFromUnknown(snapshot.stats) ??
-    sessionFileFromUnknown(snapshot.state)
-  );
-}
-
-function sessionFileFromUnknown(value: unknown): string | undefined {
-  if (!value || typeof value !== "object" || !("sessionFile" in value))
-    return undefined;
-  return typeof value.sessionFile === "string" ? value.sessionFile : undefined;
+/** 读取文件前缀（至多 maxBytes）：用于超大文件预览，避免整块读入内存。 */
+async function readFilePrefix(file: string, maxBytes: number): Promise<Buffer> {
+  const handle = await fsp.open(file, "r");
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    return Buffer.from(buffer.subarray(0, bytesRead));
+  } finally {
+    await handle.close();
+  }
 }
 
 // ---------- Phase 2：应用侧受保护 user 消息（兜底底层延迟写盘） ----------
@@ -1365,6 +1528,10 @@ function protectedDir(): string {
   return path.join(getTetherHome(), "protected");
 }
 function protectedPath(sessionId: string): string {
+  return path.join(protectedDir(), protectedMessageFileName(sessionId));
+}
+/** 旧版按 basename 命名的受保护文件；读取时兼容，避免升级后旧消息失联。 */
+function legacyProtectedPath(sessionId: string): string {
   const safe = sessionId.split(/[\\/]/).pop() || sessionId;
   return path.join(protectedDir(), `${safe}.jsonl`);
 }
@@ -1373,50 +1540,74 @@ async function appendProtectedUserMessage(
   message: string | undefined,
 ): Promise<void> {
   if (!sessionId || !message || !message.trim()) return;
+  await fsp.mkdir(protectedDir(), { recursive: true, mode: 0o700 });
+  const handle = await fsp.open(protectedPath(sessionId), "a", 0o600);
   try {
-    await fsp.mkdir(protectedDir(), { recursive: true, mode: 0o700 });
-    await fsp.appendFile(
-      protectedPath(sessionId),
+    await handle.writeFile(
       `${JSON.stringify({ message, ts: Date.now() })}\n`,
-      { encoding: "utf8" },
+      "utf8",
     );
-  } catch {
-    // 尽力而为；落盘失败不阻断消息发送。
+    // 首条消息的崩溃保护价值取决于真的落到磁盘，而不是停在页缓存。
+    await handle.sync().catch(() => undefined);
+  } finally {
+    await handle.close().catch(() => undefined);
   }
 }
 async function readProtectedUserMessages(
   sessionId: string | undefined,
 ): Promise<Array<{ message: string; ts: number }>> {
   if (!sessionId) return [];
+  let raw: string;
   try {
-    const raw = await fsp.readFile(protectedPath(sessionId), "utf8");
-    return raw
-      .split("\n")
-      .filter((line) => line.trim())
-      .map((line) => {
-        try {
-          const parsed = JSON.parse(line);
-          return typeof parsed?.message === "string"
-            ? { message: parsed.message, ts: parsed.ts ?? Date.now() }
-            : null;
-        } catch {
-          return null;
-        }
-      })
-      .filter((x): x is { message: string; ts: number } => x !== null);
+    raw = await fsp.readFile(protectedPath(sessionId), "utf8");
   } catch {
-    return [];
+    try {
+      raw = await fsp.readFile(legacyProtectedPath(sessionId), "utf8");
+    } catch {
+      return [];
+    }
   }
+  return raw
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      try {
+        const parsed = JSON.parse(line);
+        return typeof parsed?.message === "string"
+          ? { message: parsed.message, ts: parsed.ts ?? Date.now() }
+          : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((x): x is { message: string; ts: number } => x !== null);
 }
 async function clearProtectedUserMessages(
   sessionId: string | undefined,
 ): Promise<void> {
   if (!sessionId) return;
-  try {
-    await fsp.rm(protectedPath(sessionId), { force: true });
-  } catch {
-    // 忽略清理失败。
+  await Promise.all([
+    fsp.rm(protectedPath(sessionId), { force: true }).catch(() => undefined),
+    fsp.rm(legacyProtectedPath(sessionId), { force: true }).catch(() => undefined),
+  ]);
+}
+
+/** 首条 prompt 发送前同步登记：标题与消息计数在重启后仍可恢复。 */
+function recordPromptInLoadedSession(
+  sessionKey: string | undefined,
+  message: string,
+): void {
+  if (!sessionKey) return;
+  const current = loadedSessions.get(sessionKey);
+  if (!current) return;
+  const patch: Partial<LoadedSessionEntry> = {
+    messageCount: (current.messageCount ?? 0) + 1,
+  };
+  if (!current.title) {
+    const title = message.trim().split("\n")[0]?.trim().slice(0, 96);
+    if (title) patch.title = title;
   }
+  touchLoadedSession(sessionKey, patch);
 }
 
 /** 从底层消息里抽取 user 消息文本，用于和受保护消息去重（避免重复插入）。 */
@@ -1543,11 +1734,19 @@ const SKIP_DIRS = new Set([
 ]);
 
 // ponytail: one recursive fs.watch, 200ms debounce. Ceiling: skip SKIP_DIRS/dotdirs; upgrade to chokidar if events drop on Linux/network FS.
+const WATCH_MAX_RETRIES = 3;
+let watchRetries = 0;
+
 function watchWorkspace(root: string): void {
-  if (watchedWorkspace === root) return;
+  if (watchedWorkspace === root && workspaceWatcher) return;
   workspaceWatcher?.close();
   workspaceWatcher = undefined;
   watchedWorkspace = root;
+  watchRetries = 0;
+  startWorkspaceWatcher(root);
+}
+
+function startWorkspaceWatcher(root: string): void {
   try {
     workspaceWatcher = fs.watch(
       root,
@@ -1563,11 +1762,25 @@ function watchWorkspace(root: string): void {
     workspaceWatcher.on("error", () => {
       workspaceWatcher?.close();
       workspaceWatcher = undefined;
-      watchedWorkspace = "";
+      retryWorkspaceWatcher(root);
     });
   } catch {
-    watchedWorkspace = "";
+    workspaceWatcher = undefined;
+    retryWorkspaceWatcher(root);
   }
+}
+
+/** 监听器异常后有限退避重试；仍失败则明确提示用户重新打开项目。 */
+function retryWorkspaceWatcher(root: string): void {
+  if (watchRetries >= WATCH_MAX_RETRIES) {
+    watchedWorkspace = "";
+    sendAppCommand("workspace-watch-failed");
+    return;
+  }
+  watchRetries += 1;
+  setTimeout(() => {
+    if (watchedWorkspace === root && !workspaceWatcher) startWorkspaceWatcher(root);
+  }, 500 * 2 ** watchRetries);
 }
 
 function skipWatch(filename: string | null): boolean {
@@ -1666,9 +1879,19 @@ async function addSkillManifests(root: string, files: string[]): Promise<void> {
 
 app.whenReady().then(async () => {
   await initializeTetherHome();
-  loadLoadedSessions();
+  await loadLoadedSessions();
   await loadLocale();
   protocol.handle(PREVIEW_SCHEME, servePreview);
+  // 统一观察主窗口、webview guest 与独立浏览器窗口的渲染进程崩溃。
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("render-process-gone", (_goneEvent, details) => {
+      diagnostics.error(
+        "renderer",
+        `render process gone (${contents.getType()})`,
+        { reason: details.reason, exitCode: details.exitCode },
+      );
+    });
+  });
   registerIpc();
   registerBrowserIpc(() => mainWindow, browserAutomation);
   installMenu();
@@ -1677,6 +1900,19 @@ app.whenReady().then(async () => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+}).catch(async (error: unknown) => {
+  // 初始化失败不再静默退出：写本地诊断并在退出前给出可操作的错误对话框。
+  diagnostics.error(
+    "startup",
+    "Tether failed to start",
+    error instanceof Error ? `${error.name}: ${error.message}\n${error.stack}` : String(error),
+  );
+  await diagnostics.flush();
+  dialog.showErrorBox(
+    "Tether 启动失败",
+    `应用未能完成初始化。\n\n${error instanceof Error ? error.message : String(error)}\n\n诊断日志：${diagnostics.filePath}`,
+  );
+  app.exit(1);
 });
 
 app.on("window-all-closed", () => {
@@ -1693,7 +1929,8 @@ app.on("before-quit", (event) => {
   workspaceWatcher?.close();
   closeAllBrowserPopups();
   closeAllDetachedBrowserWindows();
-  Promise.all(Array.from(agentHosts.values(), (host) => host.stop()))
+  agentManager
+    .stopAll()
     .catch(() => undefined)
     .finally(() => app.exit(0));
 });

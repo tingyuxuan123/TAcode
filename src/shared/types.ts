@@ -119,11 +119,34 @@ export interface AgentSnapshot {
 export type AgentEvent = Record<string, unknown> & { type: string } & {
   /** Phase 3a：事件所属会话 id，渲染层据此按活动会话路由，避免后台会话污染当前视图。 */
   __sessionId?: string;
+  /** 壳层分配的运行句柄；同一会话的所有事件共享它。 */
+  __runtimeId?: string;
+  /** 该运行句柄内单调递增的序号，用于 snapshot 回放与去重。 */
+  __seq?: number;
 };
 
 export interface AgentErrorPayload {
   message: string;
   __sessionId?: string;
+  __runtimeId?: string;
+}
+
+/** `agent:start` 的结果：快照 + 运行句柄 + 需要补齐的事件。 */
+export interface AgentStartResult extends AgentSnapshot {
+  /** 稳定运行句柄；后续 command / stop / ui-response 按它路由。 */
+  runtimeId: string;
+  /** 快照生成时刻的事件序号；replay 中的事件序号都大于它。 */
+  lastSeq: number;
+  /** snapshot 与实时事件流之间缺口的事件，渲染层先套快照再按序补齐。 */
+  replay?: AgentEvent[];
+}
+
+/** 运行中会话查询结果，供渲染层重载后重新发现后台会话。 */
+export interface AgentRuntimeInfo {
+  runtimeId: string;
+  sessionKey?: string;
+  requestedSessionPath?: string;
+  running: boolean;
 }
 
 export type ExtensionUiRequest = {
@@ -149,6 +172,10 @@ export interface DesktopApi {
     checkUpdate(): Promise<void>;
     getLocale(): Promise<Locale>;
     setLocale(locale: Locale): Promise<void>;
+    /** 启动时取走“配置已损坏、已备份并回退默认值”的提示（消费一次）。 */
+    configNotices(): Promise<string[]>;
+    /** 渲染层错误上报到本地诊断日志（只写本机，不上传）。 */
+    logDiagnostic(scope: string, message: string, details?: string): Promise<void>;
   };
   /** Frameless windows off macOS need the renderer to drive the caption buttons. */
   window: {
@@ -164,7 +191,7 @@ export interface DesktopApi {
     open(path: string, cwd?: string): Promise<void>;
     reveal(path: string, cwd?: string): Promise<void>;
     list(cwd?: string): Promise<string[]>;
-    restore(files: Array<{ path: string; content: string | null; mode?: number }>, cwd?: string): Promise<{ restored: string[] }>;
+    restore(files: Array<{ path: string; content: string | null; mode?: number }>, cwd?: string): Promise<{ restored: string[]; failed: Array<{ path: string; error: string }> }>;
     onChanged(listener: (root: string) => void): () => void;
   };
   vision: {
@@ -207,10 +234,14 @@ export interface DesktopApi {
     logout(provider: ProviderId): Promise<void>;
   };
   agent: {
-    start(options: AgentStartOptions): Promise<AgentSnapshot>;
-    stop(): Promise<void>;
-    command<T = unknown>(type: string, data?: Record<string, unknown>): Promise<T>;
-    respondToUi(id: string, response: Record<string, unknown>): Promise<void>;
+    start(options: AgentStartOptions): Promise<AgentStartResult>;
+    stop(runtimeId?: string): Promise<void>;
+    command<T = unknown>(type: string, data?: Record<string, unknown>, runtimeId?: string): Promise<T>;
+    respondToUi(id: string, response: Record<string, unknown>, runtimeId?: string): Promise<void>;
+    /** 重载后重新发现仍在运行的会话（按运行句柄）。 */
+    runtimes(): Promise<AgentRuntimeInfo[]>;
+    /** 取回序号大于 afterSeq 的事件，用于补齐 snapshot 与实时流之间的缺口。 */
+    replay(runtimeId: string | undefined, afterSeq: number): Promise<AgentEvent[]>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
     onError(listener: (payload: AgentErrorPayload) => void): () => void;
   };

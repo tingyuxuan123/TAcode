@@ -166,7 +166,10 @@ Checks:
 pnpm typecheck
 pnpm test
 pnpm build
+git diff --check
 ```
+
+Stability gate before shipping a change: the four commands above, plus `pnpm test:browser` for the Electron browser smoke test. The smoke test drives a real window and native input, so it needs a desktop session and can fail intermittently on headless or heavily loaded machines; re-run it before treating a failure as a regression.
 
 The app consumes `tether-agent-core` from npm. When developing the Runtime itself, temporarily link `../tether-runtime/packages/core`.
 
@@ -177,6 +180,8 @@ Tether's agent runtime is built on the open-source [Pi ecosystem](https://github
 ## Privacy
 
 Tether runs no telemetry or model relay service. Sessions, settings, and credentials stay local. To perform a task, prompts, relevant code context, and images are still sent to the model, gateway, or OCR service you choose. Review third-party privacy policies; sensitive projects can use a compatible local endpoint.
+
+Diagnostics stay on this machine too: `~/.tether/logs/tether.log` records startup failures, worker exits, request timeouts, renderer crashes and config recovery, with a size cap and rotation. Known credentials are redacted before writing, and prompt text and full file contents are never logged.
 
 ## License
 

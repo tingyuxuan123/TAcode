@@ -21,6 +21,11 @@ import { createDetachedBrowserWindow } from "./windows";
 import type { BrowserAutomation } from "./automation";
 import type { BrowserRegistration } from "../../shared/browser-tools";
 import {
+  IPC_LIMITS,
+  base64PayloadBytes,
+  formatBytes,
+} from "../ipc-validation";
+import {
   deletePasswordRecord,
   deletePasswordRecords,
   findPasswordForOrigin,
@@ -76,7 +81,7 @@ const isRestorePayload = (value: unknown): value is RestorePayload => {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   if (typeof record.instanceId !== "string" || !record.instanceId.trim()) return false;
-  if (!Array.isArray(record.tabs)) return false;
+  if (!Array.isArray(record.tabs) || record.tabs.length > IPC_LIMITS.browserTabs) return false;
   return record.tabs.every(isTabSnapshot);
 };
 
@@ -128,6 +133,11 @@ export const registerBrowserIpc = (
     if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) {
       throw new Error("A data:image URL is required");
     }
+    if (base64PayloadBytes(dataUrl) > IPC_LIMITS.browserImageBytes) {
+      throw new Error(
+        `截图过大（上限 ${formatBytes(IPC_LIMITS.browserImageBytes)}）`,
+      );
+    }
     const image = nativeImage.createFromDataURL(dataUrl);
     if (image.isEmpty()) throw new Error("Unsupported image data");
     clipboard.writeImage(image);
@@ -149,7 +159,9 @@ export const registerBrowserIpc = (
         throw new Error("A valid browser instanceId is required");
       }
       if (typeof url !== "string") throw new Error("A valid browser URL is required");
-      const tabSnapshot = Array.isArray(tabs) ? tabs.filter(isTabSnapshot) : undefined;
+      const tabSnapshot = Array.isArray(tabs)
+        ? tabs.filter(isTabSnapshot).slice(0, IPC_LIMITS.browserTabs)
+        : undefined;
       createDetachedBrowserWindow(instanceId.trim(), url.trim(), tabSnapshot);
     },
   );

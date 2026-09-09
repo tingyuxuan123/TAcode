@@ -1,8 +1,8 @@
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type { DesktopApi, ProviderRecord } from "../shared/types";
 import { validateService } from "../shared/provider-config";
+import { noteConfigRecovered, readJsonFile, writeJsonAtomic } from "./atomic-file";
 
 export interface ProviderStoreData {
   providers: ProviderRecord[];
@@ -33,15 +33,26 @@ export class ProviderRepository {
   constructor(private filePath: string, readonly credentials: ServiceCredentials) {}
 
   private async read(): Promise<ProviderStoreData> {
-    let raw: string;
-    try { raw = await readFile(this.filePath, "utf8"); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { providers: [], defaultProviderId: null, defaultModelId: null };
-      throw error;
-    }
-    const data = JSON.parse(raw) as ProviderStoreData;
-    if (!data || !Array.isArray(data.providers)) throw new Error("供应商配置文件损坏，请先备份并修复 providers.json");
-    return normalizeDefaults({ ...data, providers: data.providers.map(validateService) });
+    const result = await readJsonFile<ProviderStoreData>(
+      this.filePath,
+      () => ({ providers: [], defaultProviderId: null, defaultModelId: null }),
+      (raw) => {
+        if (!raw || typeof raw !== "object") return undefined;
+        const data = raw as ProviderStoreData;
+        if (!Array.isArray(data.providers)) return undefined;
+        try {
+          return normalizeDefaults({
+            ...data,
+            providers: data.providers.map(validateService),
+          });
+        } catch {
+          // 条目 schema 非法：整体按损坏处理，备份原文件后回退默认值。
+          return undefined;
+        }
+      },
+    );
+    noteConfigRecovered("providers.json", result);
+    return result.value;
   }
 
   async load(): Promise<ProviderStoreData> {
@@ -52,7 +63,6 @@ export class ProviderRepository {
   private mutate<T>(change: (store: ProviderStoreData, setKey: (id: string, key?: string) => Promise<void>) => Promise<T>): Promise<T> {
     const next = this.queue.then(async () => {
       const store = await this.read();
-      const temp = `${this.filePath}.${randomUUID()}.tmp`;
       const previousKeys = new Map<string, string>();
       const setKey = async (id: string, key?: string) => {
         if (!previousKeys.has(id)) previousKeys.set(id, await this.credentials.read(id));
@@ -61,9 +71,7 @@ export class ProviderRepository {
       };
       try {
         const result = await change(store, setKey);
-        await mkdir(dirname(this.filePath), { recursive: true });
-        await writeFile(temp, JSON.stringify(normalizeDefaults(store), null, 2), { mode: 0o600 });
-        await rename(temp, this.filePath);
+        await writeJsonAtomic(this.filePath, normalizeDefaults(store));
         return result;
       } catch (error) {
         // Compensate credential changes when metadata persistence fails.
@@ -77,8 +85,6 @@ export class ProviderRepository {
           throw new Error("供应商保存失败，且无法恢复原凭据。请检查凭据存储并重新填写该服务密钥");
         }
         throw error;
-      } finally {
-        await unlink(temp).catch(() => undefined);
       }
     });
     this.queue = next.catch(() => undefined);

@@ -124,6 +124,7 @@ const zh = {
   "toast.readOnlySession":
     "当前是只读会话。点输入框里的「打开仓库」后才能改本地文件。",
   "toast.backgroundSessionDone": "后台会话已完成：{{title}}",
+  "toast.workspaceWatchFailed": "工作区文件监听已停止，重新打开项目即可恢复自动刷新",
   "toast.notify": "通知",
   "toast.sandboxOff": "已关闭沙箱，命令不再询问主机权限",
   "toast.permissionChanged": "权限模式已切换，无需重开会话",
@@ -585,6 +586,10 @@ const zh = {
   "error.modelFailed": "模型请求失败",
   "error.toolFailed": "{title}失败，没有返回详情",
   "error.interrupted": "已中断",
+  "error.boundaryTitle": "界面遇到问题，已停止渲染",
+  "error.boundaryDetail": "会话和文件都保存在本机。重新加载界面即可继续，未发送的消息需要重新输入。",
+  "error.boundaryRetry": "重新加载界面",
+  "error.boundaryDetails": "技术细节",
   "undo.confirm": "撤回上一轮改动？",
   "undo.confirmNamed": "撤回「{label}」？",
 
@@ -738,6 +743,7 @@ const en: Record<MessageKey, string> = {
   "toast.readOnlySession":
     "This session is read-only. Use Open folder in the composer to edit local files.",
   "toast.backgroundSessionDone": "Background session done: {{title}}",
+  "toast.workspaceWatchFailed": "Workspace file watching stopped. Re-open the project to restore auto-refresh.",
   "toast.notify": "Notice",
   "toast.sandboxOff": "Sandbox off — commands won't ask for host permission",
   "toast.permissionChanged": "Permission mode updated without restarting the session",
@@ -1214,6 +1220,10 @@ const en: Record<MessageKey, string> = {
   "error.modelFailed": "Model request failed",
   "error.toolFailed": "{title} failed with no details",
   "error.interrupted": "Interrupted",
+  "error.boundaryTitle": "The interface hit an error and stopped rendering",
+  "error.boundaryDetail": "Sessions and files stay on this machine. Reload the interface to continue; unsent messages need to be typed again.",
+  "error.boundaryRetry": "Reload interface",
+  "error.boundaryDetails": "Technical details",
   "undo.confirm": "Undo the last turn?",
   "undo.confirmNamed": 'Undo "{label}"?',
 

@@ -8,6 +8,10 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
   return () => ipcRenderer.removeListener(channel, handler);
 }
 
+/** 当前活动会话的运行句柄；由最近一次 `agent.start` 写入，命令默认按它路由。 */
+let activeRuntimeId: string | undefined;
+let startToken = 0;
+
 const api: DesktopApi = {
   platform: process.platform,
   app: {
@@ -18,13 +22,15 @@ const api: DesktopApi = {
     checkUpdate: () => ipcRenderer.invoke("app:check-update"),
     getLocale: () => ipcRenderer.invoke("app:get-locale"),
     setLocale: (locale: Locale) => ipcRenderer.invoke("app:set-locale", locale),
+    configNotices: () => ipcRenderer.invoke("app:config-notices"),
+    logDiagnostic: (scope: string, message: string, details?: string) =>
+      ipcRenderer.invoke("app:log-diagnostic", scope, message, details),
   },
   window: {
     minimize: () => ipcRenderer.invoke("window:minimize"),
     toggleMaximize: () => ipcRenderer.invoke("window:toggle-maximize"),
     close: () => ipcRenderer.invoke("window:close"),
-  },
-  workspace: {
+  },  workspace: {
     choose: () => ipcRenderer.invoke("workspace:choose"),
     recent: () => ipcRenderer.invoke("workspace:recent"),
     forget: (workspacePath) => ipcRenderer.invoke("workspace:forget", workspacePath),
@@ -64,10 +70,28 @@ const api: DesktopApi = {
     logout: (provider) => ipcRenderer.invoke("auth:logout", provider),
   },
   agent: {
-    start: (options) => ipcRenderer.invoke("agent:start", options),
-    stop: () => ipcRenderer.invoke("agent:stop"),
-    command: (type, data) => ipcRenderer.invoke("agent:command", type, data),
-    respondToUi: (id, response) => ipcRenderer.invoke("agent:ui-response", id, response),
+    start: async (options) => {
+      const token = ++startToken;
+      const result = await ipcRenderer.invoke("agent:start", options);
+      // 只有最新一次 start 才能成为活动句柄，避免过期请求把命令路由到旧会话。
+      if (token === startToken && result && typeof result === "object") {
+        const runtimeId = (result as { runtimeId?: unknown }).runtimeId;
+        if (typeof runtimeId === "string") activeRuntimeId = runtimeId;
+      }
+      return result;
+    },
+    stop: (runtimeId) => {
+      const target = runtimeId ?? activeRuntimeId;
+      if (target === activeRuntimeId) activeRuntimeId = undefined;
+      return ipcRenderer.invoke("agent:stop", target);
+    },
+    command: (type, data, runtimeId) =>
+      ipcRenderer.invoke("agent:command", type, data, runtimeId ?? activeRuntimeId),
+    respondToUi: (id, response, runtimeId) =>
+      ipcRenderer.invoke("agent:ui-response", id, response, runtimeId ?? activeRuntimeId),
+    runtimes: () => ipcRenderer.invoke("agent:runtimes"),
+    replay: (runtimeId, afterSeq) =>
+      ipcRenderer.invoke("agent:replay", runtimeId ?? activeRuntimeId, afterSeq),
     onEvent: (listener) => subscribe<AgentEvent>("agent:event", listener),
     onError: (listener) => subscribe<AgentErrorPayload>("agent:error", listener),
   },

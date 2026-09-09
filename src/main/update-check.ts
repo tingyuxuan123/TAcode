@@ -1,4 +1,6 @@
 const LATEST_RELEASE_API = "https://api.github.com/repos/tt-11-dd/tether-ai/releases/latest";
+/** 更新检查是后台尽力而为的操作，网络挂起时不能拖住调用方。 */
+const UPDATE_CHECK_TIMEOUT_MS = 10_000;
 
 type Release = {
   tag_name?: unknown;
@@ -31,6 +33,7 @@ export async function getLatestUpdate(
       Accept: "application/vnd.github+json",
       "User-Agent": `Tether/${currentVersion}`,
     },
+    signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS),
   });
   if (!response.ok) return;
 

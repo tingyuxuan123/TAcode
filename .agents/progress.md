@@ -1,5 +1,31 @@
 # 模型供应商管理进度
 
+## 2026-09-09：稳定性加固 阶段 5 — 本地诊断、错误边界与故障回归（13:50，Asia/Shanghai）
+
+- 新增 `src/main/local-logger.ts`：本地 JSONL 诊断日志（默认 `~/.tether/logs/tether.log`，单文件 1 MB、保留 3 个历史文件轮转、内存最近 200 条、同路径串行写入、写入失败绝不抛出），写入前用 `redactSecrets` 脱敏、单条 message/details 截断，导出窄接口 `DiagnosticSink` 供 `AgentHost` 依赖（`local-logger.test.ts` 6 项）。
+- 主进程接线（`src/main/index.ts`）：启动即创建诊断日志；新增 `app:log-diagnostic` IPC（仅限宿主窗口）；配置损坏恢复提示同时写入日志；`web-contents-created` 统一记录主窗口 / webview guest / 独立浏览器窗口的 `render-process-gone`；`app.whenReady()` 初始化失败时写诊断、`showErrorBox` 给出日志路径并 `app.exit(1)`，不再静默退出。`src/main/agent-host.ts` 记录 worker spawn 错误 / 退出码、RPC 请求超时、无法解析的 JSON、超长行、stdin 错误，并对 `desktopProvider.apiKey` 脱敏。
+- 渲染层：新增 `src/renderer/ErrorBoundary.tsx`（`main.tsx` 内包住 `App`，位于 `LocaleProvider` 之下），App 抛错时显示“重新加载界面”按钮与折叠的技术细节，并上报主进程本地日志；纯逻辑抽到 `src/renderer/render-error.ts`（`render-error.test.ts` 4 项）；`src/shared/i18n.ts` 新增 4 个键，`styles.css` 增加对应样式。
+- 故障注入测试：新增 `src/main/agent-host-faults.test.ts`（真实 RPC worker 被 SIGKILL → 受控错误 + 日志且不含密钥；未应答请求 45s 超时 → 日志脱敏）与 `src/main/agent-host-diagnostics.test.ts`（畸形 JSON 只诊断一次、超长行丢弃后继续解析、密钥脱敏）。
+- 文档：README「Checks」补 `git diff --check` 与稳定性门槛（含 `pnpm test:browser` 的 GUI/偶发说明），「Privacy」补本地诊断日志只写本机、脱敏、不记 prompt 原文。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 47 文件 432 测试通过；`pnpm build` 通过；`git diff --check` 干净。`pnpm test:browser` 本机多次运行失败点漂移（三次分别停在 panel resize、adaptive width、composer overflow 等不同入口/断言），且把本次 renderer 改动 stash 后仍失败，判断为 GUI 时序偶发而非本次回归；已在 README 注明需桌面环境并建议复跑确认。
+- 待人工验证（需真实桌面环境）：首条 prompt 后强杀进程重启的恢复、renderer 重载后重新打开运行中会话、macOS/Windows 多会话并行与退出无孤儿进程。
+
+## 2026-09-09：稳定性加固 阶段 4 — IPC / 文件 / 网络边界防护（13:40，Asia/Shanghai）
+
+- 新增 `src/main/ipc-validation.ts`（纯函数，无 Electron 依赖，便于单测）：集中定义统一上限（prompt 1 MB、agent 命令 payload 32 MB、restore 500 文件 / 64 MB、workspace:read 4 MB、视觉 4 张 / 单张 10 MB / 合计 24 MB、浏览器标签 100 个 / 截图 20 MB、RPC 单行 8 MB、URL 2048 / Key 8192 字符）与运行时校验（`requireString` / `optionalStringArray` / `assertByteLimit` / `assertPayloadLimit` / `validateAgentStartOptions` / `validatePromptMessage` / `validateConnectionInput` / `redactSecrets` / `base64PayloadBytes`）。
+- 主进程接线（`src/main/index.ts`）：`agent:start` 用 `validateAgentStartOptions` 校验 provider/permission/sandbox 枚举与各可选字段；`agent:command` 校验命令类型、payload 上限与 prompt 字节上限（超限在进 worker 前抛错）；`agent:ui-response` 校验 id/应答；`sessions:list|remove|pin|rename`、`workspace:forget|read|open|reveal` 增加字符串/布尔校验；`workspace:read` 改为先 `stat`，超 4 MB 只读前缀（`readFilePrefix`）并附截断提示；`workspace:restore` 预检文件数与总字节；`vision:stage` 校验张数与单张/总量；`vision:save-config` 限制 50 个自定义配置；`auth:list-models` 与 `providers:discover|test-connection`（`src/main/providers.ts`）统一走 `validateConnectionInput` 并校验 apiStyle 属于受支持格式。
+- 网络超时：`src/main/update-check.ts` 更新检查加 `AbortSignal.timeout(10s)`，手动检查超时改用 i18n 统一文案而非底层 AbortError 原文；`services:deepseek-balance` 加 15s 超时（模型发现与连接测试此前已有 12s/20s 超时）。
+- RPC 与脱敏：`src/main/rpc-lines.ts` 的 `drainUtf8Lines` 支持 `maxLineBytes`，超长完整行与超长未完成缓冲都丢弃并计数（`oversized`）；`src/main/agent-host.ts` 用 8 MB 上限、对无法解析的 JSON 只诊断一次、对启动时下发的 `desktopProvider.apiKey` 在 stderr / 超时 / 退出错误里统一 `redactSecrets` 脱敏。
+- 浏览器：`src/main/browser/ipc.ts` 的 tab 快照（还原 / 独立窗口）限制 100 条，`browser:write-image` 截图数据限 20 MB。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 43 文件 416 测试全部通过（新增 `ipc-validation.test.ts` 17 项、`rpc-lines.test.ts` 扩 3 项）；`git diff --check` 干净。
+
+## 2026-09-09：稳定性加固 阶段 1–3 — 会话生命周期、浏览器隔离、原子持久化（上午，Asia/Shanghai）
+
+- 阶段 1：新增 `src/main/agent-manager.ts`，为每个 RPC 宿主分配稳定 `runtimeId`，start/stop/command 按句柄路由并对同一 runtime 串行化；`rekey` 消除旧路径别名；事件带 `__runtimeId`/`__seq`，`AgentHost` 增加 500 条事件回放缓冲与 `replaySince`，renderer 重载后可用 `agent:runtimes`/`agent:replay` 重新发现运行中会话并补齐快照缺口（`agent-lifecycle.test.ts`）。
+- 阶段 2：`BrowserAutomation` 的 working tab / 操作队列 / 取消范围改为 runtime 级，排队上限 8；owner、guest、独立窗口与 debugger 引用在销毁路径统一清理；下载记录上限 200 条；独立窗口 reload 退避重试；工作区 watcher 有限重试（`automation-concurrency.test.ts`）。
+- 阶段 3：新增 `src/main/atomic-file.ts`（同目录临时文件 + 可选 fsync + rename + 同路径串行写队列 + 损坏配置备份为 `.corrupt` 并提示），`loaded-sessions.json`、settings、recent-workspaces、chat-profiles、vision-config、web-search、mcp 等写入改走原子写；受保护首条 prompt 在发给 worker 前落盘、文件名按 canonical 路径生成、打开会话时对账去重；`workspace:restore` 预检全部路径后再写并逐文件返回结果（`atomic-file.test.ts`）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 43 文件 416 测试通过。
+
 ## 2026-09-09：修复流式滚动“滚回底部自动恢复跟随”（08:56，Asia/Shanghai）
 
 - 问题（用户报告）：agent 执行中往上回看历史后，就不再自动跟随滚动；希望滚回到底部时自动恢复跟随。

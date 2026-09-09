@@ -490,6 +490,10 @@ export function App() {
   const startSeq = useRef(0);
   const runEpoch = useRef(0);
   const permissionBeforePlan = useRef<Exclude<PermissionMode, "plan">>("auto");
+  /** 当前视图对应的 Agent 运行句柄；用于补齐 snapshot 缺口事件。 */
+  const runtimeIdRef = useRef<string | undefined>(undefined);
+  /** 每个会话已应用到的最高事件序号，用于丢弃 snapshot 回放与实时流的重复事件。 */
+  const eventSeqRef = useRef<Map<string, number>>(new Map());
 
   const applyThinkingForModel = useCallback((modelId: string, accounts = providers) => {
     const chat = activeChatProvider(accounts);
@@ -660,6 +664,8 @@ export function App() {
   ) => {
     const seq = ++startSeq.current;
     eventQueue.current?.clear();
+    // 重新加载快照后事件序号重新对账：丢弃的记录由 replay 补齐。
+    eventSeqRef.current.clear();
     live.current = false;
     setStopping(false);
     setTranscriptKey(sessionPath ?? seedMessage?.id ?? `session-${seq}`);
@@ -727,16 +733,27 @@ export function App() {
         ...(extraModels.length ? { extraModels } : {}),
       });
       if (seq !== startSeq.current) return false;
+      runtimeIdRef.current = snapshot.runtimeId;
       const file = sessionFileOf(snapshot) ?? sessionPath;
+      if (file) sessionRef.current = file;
+      // snapshot 与实时事件流之间可能漏事件：先套快照，再按序号补齐缓冲事件。
+      const replay = snapshot.replay ?? [];
+      const replaySeq = replay.reduce(
+        (highest, event) =>
+          typeof event.__seq === "number" ? Math.max(highest, event.__seq) : highest,
+        typeof snapshot.lastSeq === "number" ? snapshot.lastSeq : 0,
+      );
+      const withReplay = (input: ChatMessage[]): ChatMessage[] =>
+        replay.reduce((current, event) => applyAgentEvent(current, event), input);
       if (seedMessage) {
-        setMessages([...normalizeMessages(snapshot.messages), seedMessage]);
+        setMessages(withReplay([...normalizeMessages(snapshot.messages), seedMessage]));
         setStats(snapshot.stats);
         setAgentSkills(snapshot.skills ?? []);
         setRunning(true);
       } else {
         const raw = normalizeMessages(snapshot.messages);
         const hadRunning = Boolean(raw.at(-1)?.tools.some((tool) => tool.status === "running"));
-        const next = resume ? finalizeInterruptedTurn(raw) : raw;
+        const next = withReplay(resume ? finalizeInterruptedTurn(raw) : raw);
         setMessages(next);
         setStats(snapshot.stats);
         // Phase 3b：切回正在后台运行的会话时，以运行集合为准（比 isStreaming 启发式准）。
@@ -750,7 +767,33 @@ export function App() {
           setToast(t("toast.sessionEmpty"));
         }
       }
+      if (file) eventSeqRef.current.set(file, replaySeq);
       live.current = true;
+      // 快照生成到 renderer 进入 live 之间仍可能丢事件：再补一次，按序号去重。
+      if (file) {
+        void window.harness.agent
+          .replay(snapshot.runtimeId, eventSeqRef.current.get(file) ?? replaySeq)
+          .then((missed) => {
+            if (seq !== startSeq.current || !live.current || !missed.length) return;
+            const before = eventSeqRef.current.get(file) ?? replaySeq;
+            const fresh = missed.filter(
+              (event) => typeof event.__seq === "number" && event.__seq > before,
+            );
+            if (!fresh.length) return;
+            setMessages((current) =>
+              fresh.reduce((next, event) => applyAgentEvent(next, event), current),
+            );
+            eventSeqRef.current.set(
+              file,
+              fresh.reduce(
+                (top, event) =>
+                  typeof event.__seq === "number" ? Math.max(top, event.__seq) : top,
+                before,
+              ),
+            );
+          })
+          .catch(() => undefined);
+      }
       runtimeProviderRef.current = chat.id;
       runtimeServiceRef.current = `${chat.serviceId ?? ""}:${chat.serviceVersion ?? ""}`;
       agentCwd.current = snapshot.cwd ?? cwd ?? agentCwd.current;
@@ -993,7 +1036,15 @@ export function App() {
   }, [workspace]);
 
   const applyUndo = useCallback(async (files: RestoreFile[]) => {
-    await window.harness.workspace.restore(files, workspace);
+    const result = await window.harness.workspace.restore(files, workspace);
+    if (result.failed?.length) {
+      // 明确告知哪些文件没恢复，避免 UI 已回退、磁盘只恢复一半的假象。
+      setToast(
+        `部分文件未恢复：${result.failed
+          .map((item) => `${item.path}（${item.error}）`)
+          .join("；")}`,
+      );
+    }
     setMessages((current) => dropLastTurn(current));
     const stats = await window.harness.agent.command<{ sessionFile?: string }>("get_session_stats").catch(() => undefined);
     if (typeof stats?.sessionFile === "string") {
@@ -1223,6 +1274,29 @@ export function App() {
     });
   }, []);
 
+  // 启动时提示“配置已损坏并回退默认值”，损坏文件已由主进程备份为 .corrupt。
+  useEffect(() => {
+    void window.harness.app
+      .configNotices()
+      .then((notices) => {
+        if (notices.length) setToast(notices.join(" "));
+      })
+      .catch(() => undefined);
+  }, []);
+
+  // renderer 重载后重新发现仍在后台运行的会话，恢复侧边栏运行徽标。
+  useEffect(() => {
+    void window.harness.agent
+      .runtimes()
+      .then((list) => {
+        for (const runtime of list) {
+          if (runtime.running && runtime.sessionKey)
+            markSessionRunning(runtime.sessionKey, true);
+        }
+      })
+      .catch(() => undefined);
+  }, [markSessionRunning]);
+
   useEffect(() => {
     const chat = activeChatProvider(providers);
     if (chat?.serviceId) {
@@ -1263,6 +1337,13 @@ export function App() {
           setToast(t("toast.backgroundSessionDone", { title: eventSessionTitle(eventSession) }));
         }
         return;
+      }
+      // 按运行句柄内序号去重：snapshot 回放与实时流可能重叠。
+      const eventSeq = (event as { __seq?: number }).__seq;
+      if (typeof eventSeq === "number") {
+        const key = eventSession ?? sessionRef.current ?? "";
+        if (eventSeq <= (eventSeqRef.current.get(key) ?? 0)) return;
+        eventSeqRef.current.set(key, eventSeq);
       }
       if (event.type !== "message_update" && event.type !== "tool_execution_update") queue.flush();
       if (event.type === "agent_start") {
@@ -1337,6 +1418,7 @@ export function App() {
     const offCommand = window.harness.onAppCommand((command) => {
       if (command === "new-thread") void newThread();
       if (command === "open-folder") void openFolder();
+      if (command === "workspace-watch-failed") setToast(t("toast.workspaceWatchFailed"));
       if (command === "fullscreen-on") setFullscreen(true);
       if (command === "fullscreen-off") setFullscreen(false);
     });
