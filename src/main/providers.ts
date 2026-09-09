@@ -1,6 +1,6 @@
 import { app, ipcMain } from "electron";
 import { join } from "node:path";
-import { createTetherCredentialStore } from "tether-agent-core";
+import { createTacodeCredentialStore } from "../runtime/index";
 import { ProviderRepository, serviceCredentialId } from "./provider-store";
 import { listModels } from "../shared/openai-models";
 import { serviceBaseUrl, serviceRuntimeConfig, SUPPORTED_SERVICE_STYLES } from "../shared/provider-config";
@@ -13,11 +13,11 @@ let repository: ProviderRepository;
 export function providerRepository(): ProviderRepository {
   return repository ??= new ProviderRepository(join(app.getPath("userData"), "providers.json"), {
     async read(id) {
-      const stored = await (await createTetherCredentialStore()).read(id);
+      const stored = await (await createTacodeCredentialStore()).read(id);
       return stored?.type === "api_key" ? stored.key ?? "" : "";
     },
-    async write(id, key) { await (await createTetherCredentialStore()).modify(id, async () => ({ type: "api_key", key })); },
-    async delete(id) { await (await createTetherCredentialStore()).delete(id); },
+    async write(id, key) { await (await createTacodeCredentialStore()).modify(id, async () => ({ type: "api_key", key })); },
+    async delete(id) { await (await createTacodeCredentialStore()).delete(id); },
   });
 }
 

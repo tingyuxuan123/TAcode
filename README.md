@@ -11,7 +11,6 @@ Let DeepSeek and OpenAI-compatible models inspect, edit, and verify your reposit
 [English](README.md) · [简体中文](README.zh-CN.md) · [Download latest](https://github.com/tt-11-dd/tether-ai/releases/latest)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Agent Core](https://img.shields.io/npm/v/tether-agent-core?label=tether-agent-core)](https://www.npmjs.com/package/tether-agent-core)
 [![Platform](https://img.shields.io/badge/platform-macOS%20arm64%20%7C%20Windows%20x64-lightgrey)](https://github.com/tt-11-dd/tether-ai/releases/latest)
 
 </div>
@@ -29,7 +28,7 @@ TACode is an Electron desktop agent for real codebases. It brings model calls, w
 
 ## What TACode uses from Pi
 
-TACode does not reimplement the agent foundations. [`tether-agent-core`](https://www.npmjs.com/package/tether-agent-core) wraps the [Pi ecosystem](https://github.com/earendil-works/pi) and extends it:
+TACode does not reimplement the agent foundations. It depends on the [Pi ecosystem](https://github.com/earendil-works/pi) directly and owns its runtime layer in [`src/runtime`](src/runtime):
 
 | Pi package | Used by TACode for |
 | --- | --- |
@@ -59,8 +58,8 @@ Electron Main
   windows, workspace, credentials, agent process host
         │  JSON-RPC over stdio
         ▼
-tether-agent-core
-  TACode permissions, sandbox, tools, checkpoints, MCP, sessions
+TACode Runtime (src/runtime)
+  permissions, sandbox, tools, sessions, credentials, RPC entry
         │
         ▼
 Pi ecosystem
@@ -76,7 +75,7 @@ Add a model provider under **Settings → AI Services**: choose a preset or cust
 - Supported protocols: Chat Completions, Responses, Anthropic Messages, Google Generative AI, and OpenCode Go via Chat Completions. Only runtime-supported styles are offered; Codex OAuth login is not included.
 - Edit, delete, enable/disable services and select the default service/model. Multiple services from the same vendor have independent credentials. The existing DeepSeek configuration remains the fallback when no desktop service is enabled.
 - **Test connection** sends a short generation request to the selected model and may incur a small charge. Successful model discovery alone does not prove generation access.
-- Keys use separate `tether-agent-core` CredentialStore entries, not provider metadata. The credential backend may be an OS credential store or file storage depending on runtime configuration. Metadata is stored in `providers.json` under Electron userData.
+- Keys use separate TACode CredentialStore entries, not provider metadata. The credential backend may be an OS credential store or file storage depending on runtime configuration. Metadata is stored in `providers.json` under Electron userData.
 - After closing settings, service changes apply on the next send. Native PDF configuration and automatic cross-model routing are outside this feature; PDFs continue through the existing OCR workflow.
 
 For pasted images:
@@ -171,11 +170,11 @@ git diff --check
 
 Stability gate before shipping a change: the four commands above, plus `pnpm test:browser` for the Electron browser smoke test. The smoke test drives a real window and native input, so it needs a desktop session and can fail intermittently on headless or heavily loaded machines; re-run it before treating a failure as a regression.
 
-The app consumes `tether-agent-core` from npm. When developing the Runtime itself, temporarily link `../tether-runtime/packages/core`.
+The agent runtime lives in this repository under `src/runtime` (RPC entry, tools, sandbox, credentials, sessions) and depends on `@earendil-works/pi-*` directly. `pnpm build:electron` compiles the worker to `dist-electron/runtime/rpc-entry.js`; `pnpm test` builds it on demand via `scripts/ensure-runtime.mjs`.
 
 ## Acknowledgments
 
-TACode's agent runtime is built on the open-source [Pi ecosystem](https://github.com/earendil-works/pi) (`@earendil-works/pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`). [`tether-agent-core`](https://www.npmjs.com/package/tether-agent-core) wraps Pi with TACode's DeepSeek defaults, permission modes, sandboxing, checkpoints, MCP, Hooks, and local data layout. Pi dependencies retain their own licenses and copyright.
+TACode's agent runtime is built on the open-source [Pi ecosystem](https://github.com/earendil-works/pi) (`@earendil-works/pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`). TACode's own runtime layer (`src/runtime`) adds DeepSeek defaults, permission modes, sandboxing, managed background commands, and the local data layout. Pi dependencies retain their own licenses and copyright.
 
 ## Privacy
 

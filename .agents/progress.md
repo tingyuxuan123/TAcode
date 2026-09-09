@@ -1,5 +1,24 @@
 # 模型供应商管理进度
 
+## 2026-09-09：修复每开一个会话就在 macOS Dock 多一个图标（18:15，Asia/Shanghai）
+
+- 现象（用户报告并附截图）：每打开一个会话，Dock 就多一个深色方块图标，图标上是绿色 `exec` 字样，一个会话一个。
+- 根因：`src/runtime/rpc-entry.ts` 里的 `process.title = "tacode-runtime"`。worker 是 Electron 二进制以 `ELECTRON_RUN_AS_NODE=1` 运行的子进程；在 macOS 上给这种子进程设置 `process.title` 会让 LaunchServices 把它注册成前台应用，Dock 就为每个 worker 生成一个图标。图标本身是 macOS 给无 bundle 进程的通用「Unix 可执行文件」图标（深色方块 + 绿色 exec），因此用户看到的是 `exec` 而不是进程标题。
+- 复现与验证（GUI Electron 宿主 spawn 子进程 + `lsappinfo list`）：仅设置 `process.title` 的脚本会新增一条 `"exec"`/`"tacode-runtime"` 应用记录；不设置标题的同类脚本不产生任何 Dock 图标；去掉标题后重跑完整 worker，Dock 无新图标。
+- 修复：删除该 `process.title` 赋值，并在文件头注释说明原因（ps 里仍可用完整命令行识别 worker）。已重建 `dist-electron/runtime/rpc-entry.js`——worker 文件在每次会话启动时读取，因此新会话立即生效，无需重启应用。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 51 文件 456 测试通过。
+- 附注：17:43 清理时误把用户当时正在运行的 5 个 `tacode-runtime` worker 当作探针残留 SIGTERM 掉（`~/.tether/logs/tether.log` 里 code 143 即此），相关会话已停止，重开即可。
+
+## 2026-09-09：自研 Agent Runtime — 直接依赖 Pi，移除 tether-agent-core（17:30，Asia/Shanghai）
+
+- 结论先行：RPC/adapter 层不需要自研。实测 Pi 原生 `--mode rpc` 与 TACode 协议完全兼容（请求 `{id,type,...}`、应答 `{id,type:"response",command,success,data|error}`、事件流与 `extension_ui_request` 一致），缺口只在 extension 层。
+- 新增 `src/runtime/`：`rpc-entry.ts`（调用 Pi `main()` 并注入扩展；启动前把 `PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR` 指向 `~/.tether`，避免读写用户全局 `~/.pi/agent`；无凭据时快速失败）、`options.ts`（壳层参数消费 + Pi 参数转发 + `--effort`→`--thinking`）、`home.ts`（会话转录日期分区 + 扁平硬链接）、`providers.ts`、`settings.ts`、`credential-store.ts`（file/keyring/auto，钥匙串服务名沿用 `tether-agent-core` 以读回历史凭据）、`auth.ts`、`state.ts`（SQLite 索引）、`rpc-client.ts`（`dist-electron/runtime/rpc-entry.js` 定位）、`extension.ts`。
+- 工具层 `src/runtime/tools/`：read_file/list_files/search_files/write_file/edit_file、exec_command/write_stdin（ManagedProcessRegistry 后台进程）、apply_patch、update_plan、ask_user、沙箱（macOS Seatbelt，Docker 可选）、checkpoint（写 `tether-checkpoint` 条目供 `/undo`）；扩展命令 `/plan`、`/permissions`、`/effort`、`/jobs`、`/stop-job`、`/stop-jobs`。
+- 主进程接线：`agent-host.ts` 启动自研入口；`providers.ts`/`browser/passwords.ts`/`index.ts` 改用 `../runtime` 导出；`tsup.config.ts` 新增 `runtime/rpc-entry` 入口并移除 tether external；新增 `scripts/ensure-runtime.mjs` + `vitest.global-setup.ts` 在测试前按需构建 worker；`package.json` 移除 `tether-agent-core`，新增 `@napi-rs/keyring`、`pi-web-access`、`fast-glob`；README 与 DEVELOPMENT 文档同步。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 51 文件 456 测试通过（新增 patch/workspace/policy/options 共 24 项）；`pnpm build` 通过；真实 RPC worker 以 `~/.tether` 会话目录完成一次 prompt 往返（`~/.tether` 里的 DeepSeek key 已失效，返回 401 并正常透出，属既有凭据问题）。
+- 已知差距（后续）：delegate 子代理、language_diagnostics、MCP 集成、`/checkpoints` 与 `/diff` 命令、personalization/project-trust/hooks/image-input 尚未移植；Windows 无原生沙箱后端时 exec_command 会报错（需 Docker 镜像或 `danger-full-access`）；数据目录仍为 `~/.tether`，迁移 `~/.tacode` 未做。
+- 未提交、未发布、未改 AGENTS.md。
+
 ## 2026-09-09：稳定性加固 阶段 5 — 本地诊断、错误边界与故障回归（13:50，Asia/Shanghai）
 
 - 新增 `src/main/local-logger.ts`：本地 JSONL 诊断日志（默认 `~/.tether/logs/tether.log`，单文件 1 MB、保留 3 个历史文件轮转、内存最近 200 条、同路径串行写入、写入失败绝不抛出），写入前用 `redactSecrets` 脱敏、单条 message/details 截断，导出窄接口 `DiagnosticSink` 供 `AgentHost` 依赖（`local-logger.test.ts` 6 项）。

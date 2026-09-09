@@ -134,7 +134,7 @@ const zh = {
   "toast.modelNextTurn": "已选择 {model}，下一条消息生效",
   "toast.hostAccessAllowed": "本次命令已允许访问本机文件和网络",
   "toast.needJobCommands":
-    "停止后台命令需要 tether-agent-core 0.1.6，请更新后再试",
+    "停止后台命令需要 TACode Runtime 支持，请更新后再试",
   "toast.defaultImagePrompt": "请详细描述这张图片的内容",
   "toast.errorAuth": "API Key 无效或未配置，请在设置中检查连接配置",
   "toast.errorQuota": "请求过于频繁或额度不足，请稍后重试并检查账户额度",
@@ -755,7 +755,7 @@ const en: Record<MessageKey, string> = {
   "toast.hostAccessAllowed":
     "This command may access local files and the network",
   "toast.needJobCommands":
-    "Stopping background jobs needs tether-agent-core 0.1.6",
+    "Stopping background jobs needs TACode Runtime support",
   "toast.defaultImagePrompt": "Describe this image in detail",
   "toast.errorAuth":
     "The API key is missing or invalid. Check the connection settings.",

@@ -1,7 +1,7 @@
 import { safeStorage } from "electron";
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { getTetherHome } from "tether-agent-core";
+import { getTacodeHome } from "../../runtime/index";
 import { join } from "node:path";
 
 /**
@@ -25,7 +25,7 @@ import { join } from "node:path";
  * - 文件权限 0600；写入采用临时文件 + rename 原子替换。
  */
 
-const VAULT_DIR = join(getTetherHome(), "browser-passwords");
+const VAULT_DIR = join(getTacodeHome(), "browser-passwords");
 const KEY_FILE = join(VAULT_DIR, "vault.key");
 const VAULT_FILE = join(VAULT_DIR, "vault.bin");
 const VAULT_VERSION = 1;

@@ -8,7 +8,7 @@ export default defineConfig([
     outDir: "dist-electron",
     sourcemap: true,
     clean: false,
-    external: ["electron", "tether-agent-core"],
+    external: ["electron"],
     outExtension: () => ({ js: ".mjs" }),
   },
   {
@@ -27,6 +27,16 @@ export default defineConfig([
     platform: "node",
     outDir: "dist-electron",
     sourcemap: false,
+    clean: false,
+    outExtension: () => ({ js: ".js" }),
+  },
+  {
+    // Agent Runtime worker：由 agent-host 以 node 子进程启动，依赖从 node_modules 解析。
+    entry: { "runtime/rpc-entry": "src/runtime/rpc-entry.ts" },
+    format: ["esm"],
+    platform: "node",
+    outDir: "dist-electron",
+    sourcemap: true,
     clean: false,
     outExtension: () => ({ js: ".js" }),
   },

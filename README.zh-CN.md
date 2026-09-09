@@ -11,7 +11,6 @@
 [English](README.md) · [简体中文](README.zh-CN.md) · [下载最新版](https://github.com/tt-11-dd/tether-ai/releases/latest)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Agent Core](https://img.shields.io/npm/v/tether-agent-core?label=tether-agent-core)](https://www.npmjs.com/package/tether-agent-core)
 [![Platform](https://img.shields.io/badge/platform-macOS%20arm64%20%7C%20Windows%20x64-lightgrey)](https://github.com/tt-11-dd/tether-ai/releases/latest)
 
 </div>
@@ -29,7 +28,7 @@ TACode 是一个面向真实代码仓库的 Electron 桌面 Agent。它把模型
 
 ## 基于 Pi 的哪些部分
 
-TACode 没有重复实现 Agent 基础设施，而是通过 [`tether-agent-core`](https://www.npmjs.com/package/tether-agent-core) 基于 [Pi 生态](https://github.com/earendil-works/pi) 封装并扩展：
+TACode 没有重复实现 Agent 基础设施，而是直接依赖 [Pi 生态](https://github.com/earendil-works/pi)，并在 [`src/runtime`](src/runtime) 中自持运行时层：
 
 | Pi 包 | TACode 使用的能力 |
 | --- | --- |
@@ -59,8 +58,8 @@ Electron Main
   窗口、工作区、凭据与 Agent 进程托管
         │  JSON-RPC over stdio
         ▼
-tether-agent-core
-  TACode 权限、沙箱、工具、Checkpoint、MCP、会话
+TACode Runtime（src/runtime）
+  权限、沙箱、工具、会话、凭据与 RPC 入口
         │
         ▼
 Pi ecosystem
@@ -76,7 +75,7 @@ Pi ecosystem
 - 支持 Chat Completions、Responses、Anthropic Messages、Google Generative AI，以及按 Chat Completions 接入的 OpenCode Go。只提供当前运行时支持的格式，不包含 Codex OAuth 登录。
 - 可编辑、删除、启用/禁用服务，并选择默认服务与模型；同一厂商可添加多个独立服务。未设置桌面服务时保留原有 DeepSeek 配置。
 - 「测试连接」会向所选模型发送一次短生成请求，可能产生少量费用；模型列表获取成功不代表模型一定可以生成。
-- 每个服务使用独立凭据条目，密钥不写入供应商元数据。凭据由 `tether-agent-core` CredentialStore 管理（具体使用系统凭据库还是文件存储取决于运行时配置）；元数据位于 Electron userData 下的 `providers.json`。
+- 每个服务使用独立凭据条目，密钥不写入供应商元数据。凭据由 TACode CredentialStore 管理（具体使用系统凭据库还是文件存储取决于运行时配置）；元数据位于 Electron userData 下的 `providers.json`。
 - 修改服务后关闭设置，在下一次发送时应用配置。原生 PDF 配置和跨模型自动调度不在本功能范围；PDF 继续使用现有 OCR 流程。
 
 粘贴图片时：
@@ -170,11 +169,11 @@ pnpm test
 pnpm build
 ```
 
-Agent 核心通过 npm 依赖 `tether-agent-core`。开发 Runtime 本身时，可在本地临时 link `../tether-runtime/packages/core`。
+Agent 运行时位于本仓库 `src/runtime`（RPC 入口、工具、沙箱、凭据与会话），直接依赖 `@earendil-works/pi-*`。`pnpm build:electron` 会把 worker 编译到 `dist-electron/runtime/rpc-entry.js`；`pnpm test` 通过 `scripts/ensure-runtime.mjs` 按需构建。
 
 ## 致谢
 
-TACode 的 Agent 运行时基于开源 [Pi 生态](https://github.com/earendil-works/pi)（`@earendil-works/pi-agent-core`、`pi-ai`、`pi-coding-agent`、`pi-tui`）构建。[`tether-agent-core`](https://www.npmjs.com/package/tether-agent-core) 在 Pi 之上封装 DeepSeek 默认体验、权限模式、沙箱、Checkpoint、MCP、Hooks 与本地数据层。Pi 依赖保留各自的许可证与版权。
+TACode 的 Agent 运行时基于开源 [Pi 生态](https://github.com/earendil-works/pi)（`@earendil-works/pi-agent-core`、`pi-ai`、`pi-coding-agent`、`pi-tui`）构建。TACode 自有的运行时层（`src/runtime`）补充 DeepSeek 默认体验、权限模式、沙箱、后台命令托管与本地数据布局。Pi 依赖保留各自的许可证与版权。
 
 ## 隐私说明
 

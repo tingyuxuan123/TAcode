@@ -14,14 +14,14 @@ import {
   shell,
 } from "electron";
 import {
-  createTetherCredentialStore,
+  createTacodeCredentialStore,
   ensureSessionRuntimeLink,
-  getTetherHome,
+  getTacodeHome,
   getStoredDeepSeekBaseUrl,
   getStoredModelSelection,
-  initializeTetherHome,
-  listTetherThreads,
-  TetherStateStore,
+  initializeTacodeHome,
+  listTacodeThreads,
+  TacodeStateStore,
   defaultModelForProvider,
   providerDisplayName,
   providerEnvironmentKey,
@@ -31,7 +31,7 @@ import {
   SUPPORTED_PROVIDER_IDS,
   type ApiKeyProviderId,
   type SupportedProviderId,
-} from "tether-agent-core";
+} from "../runtime/index";
 import { AgentHost } from "./agent-host";
 import { AgentManager, sessionFileOf } from "./agent-manager";
 import { closeAllBrowserPopups } from "./browser/popups";
@@ -151,7 +151,7 @@ const browserAutomation = new BrowserAutomation(() => mainWindow);
 
 /** 本地诊断日志（只写本机、限大小、可轮转，不上传；写入前脱敏已知凭据）。 */
 const diagnostics = new LocalLogger({
-  dir: path.join(getTetherHome(), "logs"),
+  dir: path.join(getTacodeHome(), "logs"),
   secrets: () =>
     SUPPORTED_PROVIDER_IDS.map((id) => {
       const name = providerEnvironmentKey(id);
@@ -218,7 +218,7 @@ const deletedSessionPaths = new Set<string>();
 // 持久化运行中会话注册表，供崩溃/重启后恢复侧边栏条目（配合 Phase 2 受保护消息
 // 实现“首轮未落盘、崩溃后仍能找回”）。文件：~/.tether/loaded-sessions.json。
 function loadedSessionsPath(): string {
-  return path.join(getTetherHome(), "loaded-sessions.json");
+  return path.join(getTacodeHome(), "loaded-sessions.json");
 }
 
 /** 校验并归一化单条运行中会话登记；路径必须绝对，非法条目直接丢弃。 */
@@ -563,7 +563,7 @@ function registerIpc(): void {
   ipcMain.handle("workspace:recent", () => recentWorkspaces.list());
   ipcMain.handle("workspace:forget", async (_event, rawPath: unknown) => {
     const workspacePath = requireString(rawPath, "工作区路径", { maxLength: 4_096 });
-    const store = new TetherStateStore();
+    const store = new TacodeStateStore();
     try {
       await store.refresh();
       for (const thread of store.list({ cwd: workspacePath })) {
@@ -816,7 +816,7 @@ function registerIpc(): void {
     await writeHomeJson("mcp.json", serializeMcpServers(Array.isArray(rows) ? rows : []));
   });
   ipcMain.handle("services:reveal-mcp", async () => {
-    const file = path.join(getTetherHome(), "mcp.json");
+    const file = path.join(getTacodeHome(), "mcp.json");
     try {
       await fsp.access(file);
     } catch {
@@ -844,7 +844,7 @@ function registerIpc(): void {
       rawCwd === undefined
         ? undefined
         : requireString(rawCwd, "cwd", { maxLength: 4_096 });
-    const threads = await listTetherThreads(cwd ? { cwd } : {});
+    const threads = await listTacodeThreads(cwd ? { cwd } : {});
     const mapped = threads.map(
       (thread): SessionSummary => ({
         path: thread.sessionPath,
@@ -866,7 +866,7 @@ function registerIpc(): void {
   });
   ipcMain.handle("sessions:remove", async (_event, rawId: unknown) => {
     const id = requireString(rawId, "会话 id", { maxLength: 256 });
-    const store = new TetherStateStore();
+    const store = new TacodeStateStore();
     try {
       await store.refresh();
       // 用 DB id 找到该会话的真实文件路径（sessionPath / storagePath），据此可靠清理
@@ -906,7 +906,7 @@ function registerIpc(): void {
     async (_event, rawId: unknown, pinned: unknown) => {
       const id = requireString(rawId, "会话 id", { maxLength: 256 });
       if (typeof pinned !== "boolean") throw new Error("无效的 pinned");
-      const store = new TetherStateStore();
+      const store = new TacodeStateStore();
       try {
         await store.refresh();
         if (!store.setPinned(id, pinned))
@@ -924,7 +924,7 @@ function registerIpc(): void {
         .trim()
         .slice(0, 96);
       if (!name) throw new Error("Conversation name cannot be empty");
-      const store = new TetherStateStore();
+      const store = new TacodeStateStore();
       try {
         await store.refresh();
         const thread = store.get(id);
@@ -954,7 +954,7 @@ function registerIpc(): void {
   );
 
   ipcMain.handle("auth:status", async (): Promise<ProviderStatus[]> => {
-    const credentialStore = await createTetherCredentialStore();
+    const credentialStore = await createTacodeCredentialStore();
     const storedProviders = new Set(
       (await credentialStore.list()).map((entry) => entry.providerId),
     );
@@ -991,7 +991,7 @@ function registerIpc(): void {
   ipcMain.handle(
     "auth:read-api-key",
     async (_event, provider: ApiKeyProviderId) => {
-      const stored = await (await createTetherCredentialStore()).read(provider);
+      const stored = await (await createTacodeCredentialStore()).read(provider);
       if (stored && stored.type === "api_key" && typeof stored.key === "string")
         return stored.key;
       const envName = providerEnvironmentKey(provider);
@@ -1207,7 +1207,7 @@ function registerIpc(): void {
 
 async function readHomeJson(name: string): Promise<unknown> {
   const result = await readJsonFile<unknown>(
-    path.join(getTetherHome(), name),
+    path.join(getTacodeHome(), name),
     () => ({}),
     (raw) => (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : undefined),
   );
@@ -1216,7 +1216,7 @@ async function readHomeJson(name: string): Promise<unknown> {
 }
 
 async function writeHomeJson(name: string, value: unknown): Promise<void> {
-  await writeJsonAtomic(path.join(getTetherHome(), name), value);
+  await writeJsonAtomic(path.join(getTacodeHome(), name), value);
 }
 
 async function saveDefaultModel(
@@ -1226,12 +1226,12 @@ async function saveDefaultModel(
   const settings = await readSettingsFile();
   settings.defaultProvider = providerId;
   settings.defaultModel = modelId;
-  await writeJsonAtomic(path.join(getTetherHome(), "settings.json"), settings);
+  await writeJsonAtomic(path.join(getTacodeHome(), "settings.json"), settings);
 }
 
 async function readSettingsFile(): Promise<Record<string, unknown>> {
   const result = await readJsonFile<Record<string, unknown>>(
-    path.join(getTetherHome(), "settings.json"),
+    path.join(getTacodeHome(), "settings.json"),
     () => ({}),
     (raw) => (raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined),
   );
@@ -1253,7 +1253,7 @@ async function loadLocale(): Promise<Locale> {
 async function saveLocale(locale: Locale): Promise<void> {
   const settings = await readSettingsFile();
   settings.locale = locale;
-  await writeJsonAtomic(path.join(getTetherHome(), "settings.json"), settings);
+  await writeJsonAtomic(path.join(getTacodeHome(), "settings.json"), settings);
   appLocale = locale;
   installMenu();
 }
@@ -1359,7 +1359,7 @@ async function loadChatProfiles(): Promise<ChatProfiles> {
   noteConfigRecovered("chat-profiles.json", result);
   if (result.status === "ok") return result.value;
   // 首次运行或迁移自旧的单槽位凭据。
-  const stored = await (await createTetherCredentialStore()).read("deepseek");
+  const stored = await (await createTacodeCredentialStore()).read("deepseek");
   const apiKey =
     stored && stored.type === "api_key" && typeof stored.key === "string"
       ? stored.key
@@ -1418,7 +1418,7 @@ async function loadVisionConfig(): Promise<VisionConfig> {
 async function materializeDeepSeekVision(
   fallbackKey = "",
 ): Promise<VisionConfig> {
-  const store = await createTetherCredentialStore();
+  const store = await createTacodeCredentialStore();
   try {
     const profiles = await loadChatProfiles().catch(() => undefined);
     const stored = await store.read("deepseek");
@@ -1525,7 +1525,7 @@ async function readFilePrefix(file: string, maxBytes: number): Promise<Buffer> {
 // 并在打开会话时把“底层尚未落盘”的受保护消息合并进返回的 messages，实现恢复。
 // 一旦底层 session 文件已在磁盘上生成（即有 assistant、已 flush），即视为接管并清空。
 function protectedDir(): string {
-  return path.join(getTetherHome(), "protected");
+  return path.join(getTacodeHome(), "protected");
 }
 function protectedPath(sessionId: string): string {
   return path.join(protectedDir(), protectedMessageFileName(sessionId));
@@ -1654,7 +1654,7 @@ function fallbackSessionTitle(cwd: string): string {
 /**
  * 把"仍在运行、磁盘暂缺文件"的会话合并进磁盘索引结果。
  *
- * 未落盘的新会话磁盘上没有 JSONL，`listTetherThreads` 不会返回它；此处从
+ * 未落盘的新会话磁盘上没有 JSONL，`listTacodeThreads` 不会返回它；此处从
  * `loadedSessions` 注册表合成一条 `SessionSummary` 前置到列表，保证列表不丢失
  * 运行中会话（PLAN Phase 1）。已存在相同 path/storagePath 的条目不重复插入；
  * 渲染进程后续会用首次消息标题覆写 title。
@@ -1679,7 +1679,7 @@ function mergeLoadedSessions(
     if (deletedSessionPaths.has(file)) continue;
     // 已存在（按 path / storagePath / id 任一命中）则不再重复插入。
     if (present.has(file) || presentIds.has(sessionIdFromPath(file))) continue;
-    // 与 `listTetherThreads(cwd)` 语义一致：只在目标工作区下返回。
+    // 与 `listTacodeThreads(cwd)` 语义一致：只在目标工作区下返回。
     if (resolvedCwd && info.cwd && path.resolve(info.cwd) !== resolvedCwd)
       continue;
     extras.push({
@@ -1878,7 +1878,7 @@ async function addSkillManifests(root: string, files: string[]): Promise<void> {
 }
 
 app.whenReady().then(async () => {
-  await initializeTetherHome();
+  await initializeTacodeHome();
   await loadLoadedSessions();
   await loadLocale();
   protocol.handle(PREVIEW_SCHEME, servePreview);
