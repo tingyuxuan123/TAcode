@@ -5,7 +5,11 @@
  * 本模块提供三种模式：
  * - `file`：只读 `<home>/auth.json`（与 Pi 原有 auth.json 同构）；
  * - `keyring`：系统钥匙串（macOS Keychain / Windows Credential Manager / Secret Service）；
- * - `auto`：优先钥匙串，不可用时回退文件，并把可迁移的文件凭据搬进钥匙串。
+ * - `auto`：优先钥匙串，不可用时回退文件。
+ *
+ * 注意：`auto` 模式**不会**把文件凭据搬到钥匙串并删除文件条目。桌面壳用
+ * `TETHER_CREDENTIALS_STORE=file` 固定走文件存储（避免钥匙串弹窗），一旦自动迁移
+ * 清空 `auth.json`，应用侧就会读到空密钥并报 401。
  *
  * 钥匙串服务名保持 `tether-agent-core`，以便继续读到历史安装写入的凭据。
  */
@@ -156,20 +160,6 @@ class AutoCredentialStore implements CredentialStore {
     this.file = file;
   }
 
-  async migrateFileCredentials(): Promise<void> {
-    for (const { providerId } of await this.file.list()) {
-      const credential = await this.file.read(providerId);
-      if (!credential) continue;
-      try {
-        await this.keyring.modify(providerId, async () => credential);
-        await this.file.delete(providerId);
-      } catch {
-        // 系统钥匙串不可用时，auto 刻意保留可用的文件凭据。
-        return;
-      }
-    }
-  }
-
   async read(providerId: string): Promise<Credential | undefined> {
     try {
       const keyringCredential = await this.keyring.read(providerId);
@@ -248,7 +238,6 @@ export async function createTacodeCredentialStore(
   );
   if (mode === "keyring") return keyring;
   const automatic = new AutoCredentialStore(keyring, file);
-  await automatic.migrateFileCredentials();
   return automatic;
 }
 
