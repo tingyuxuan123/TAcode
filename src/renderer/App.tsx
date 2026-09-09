@@ -873,10 +873,8 @@ export function App() {
   }, [applyThinkingForModel, loading, modelOptions, running, t]);
 
   const bindProject = useCallback(async (cwd: string): Promise<boolean> => {
-    if (running && agentCwd.current && agentCwd.current !== cwd) {
-      setToast(t("toast.agentBusySwitch"));
-      return false;
-    }
+    // Phase 3b：多会话并行下，切换项目不再因“当前 agent 仍在运行”而阻止——每个
+    // 项目/会话有独立 worker，旧项目的会话切走后会继续后台运行，切回即可见。
     if (running && agentCwd.current === cwd) return true;
     live.current = false;
     setWorkspace(cwd);

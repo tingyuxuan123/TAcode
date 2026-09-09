@@ -1,5 +1,26 @@
 # 模型供应商管理进度
 
+## 2026-09-09：修复流式滚动“滚回底部自动恢复跟随”（08:56，Asia/Shanghai）
+
+- 问题（用户报告）：agent 执行中往上回看历史后，就不再自动跟随滚动；希望滚回到底部时自动恢复跟随。
+- 根因：`src/renderer/use-follow-scroll.ts` 的 `scroll` 处理里，用户滚回底部虽然把 `following` 置回 `true`、`atBottom` 置 true，但**没有启动贴合动画**（`followLatest`），也没吸附到最底，导致“看似没自动恢复”。
+- 改动：在 `scroll` 里检测到“非跟随 → 回到底部（距离 ≤16px 恢复阈值）”时，立即调用 `followLatest()`，把视图吸附到最底并进入后续自动跟随；仅在“从历史回到底部”时触发（避免跟随中重复）。恢复跟随之上的上下行滞回（离开 >32 / 恢复 ≤16）保持不变。
+- 验证：`pnpm typecheck` 通过；`use-follow-scroll` 4 测试通过；渲染层 HMR 生效。
+
+## 2026-09-09：修复“删除会话后残留 cwd 名占位，需删两次”（08:53，Asia/Shanghai）
+
+- 问题（用户报告）：创建一个会话，点删除后它还在且变成项目名“TAcode”，需再删一次才消失。
+- 根因：`sessions:remove` 清理运行中注册表时用 `sessionIdFromPath(path) === id` 匹配，但磁盘会话的 `id` 是 TetherStateStore 的 DB 主键（非路径 basename）。删除“已落盘且运行中”的会话时匹配失败，`loadedSessions` 条目残留，`mergeLoadedSessions` 继续把它合成回侧边栏（title 退化为 cwd 名“TAcode”，因 `sessionTitlesRef` 已删），所以第一次删除只“改名”不消失，第二次才真正删掉。
+- 修复（`src/main/index.ts`）：① `sessions:remove` 用 `store.get(id)` 取该会话真实 `sessionPath`/`storagePath`，综合“真实路径 / basename / cwd”多重匹配，可靠删除 `loadedSessions` 并同步清理 `agentHosts` 对应 host；② 新增 `deletedSessionPaths` 黑名单（本会话内），`mergeLoadedSessions` 跳过已删除路径（双重保险）；③ 重开同路径会话时从黑名单移除（避免误拦）。
+- 验证：`pnpm typecheck` 通过；`src/main`+`src/shared` 23 文件 173 测试通过；重启 dev server（主进程改动不热更）。
+
+## 2026-09-09：解除“agent 运行中禁止切换项目”限制（08:41，Asia/Shanghai）
+
+- 问题（用户报告）：切换项目时提示“当前 agent 仍在运行，停止后再切换项目”。
+- 根因：`src/renderer/App.tsx` `bindProject` 中旧逻辑 `if (running && agentCwd.current && agentCwd.current !== cwd)` 直接拒绝并 toast；这是“单 worker 单会话”时代的限制——切换项目本就需杀现 worker，故先拦。
+- 改动：多会话并行（Phase 3a）下每项目/会话独立 worker，删除该阻止段；切项目不再被挡，旧项目会话切走后继续后台运行（`running` 为真时不执行 `agent.stop()`），切回即可见。保留“运行中切同一项目”直接返回不变。
+- 验证：`pnpm typecheck` 通过；`src/renderer` 14 文件 153 测试通过；dev server HMR 已应用无报错。
+
 ## 2026-09-08：PLAN Phase 3b — 多会话并发可感知：运行中徽标 + 后台完成提示 + 切回准确运行态（23:42，Asia/Shanghai）
 
 - 目标：在 Phase 3a（多会话并行为基础）之上，让并行执行可被用户感知——侧边栏对所有运行中的会话显示“执行中”徽标；后台会话完成时提示；切回后台会话时运行态准确。

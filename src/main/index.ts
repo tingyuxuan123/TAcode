@@ -187,6 +187,11 @@ const loadedSessions = new Map<
   { cwd: string; provider?: string; model?: string; title?: string }
 >();
 
+// 本会话内已删除会话的路径黑名单。双重保险：即使 loadedSessions 因清理失败残留了
+// 某条目，mergeLoadedSessions 也不会再把它合成回侧边栏（避免删除后 title 退化为 cwd 名）。
+// 仅用作当前会话内防呆，不持久化（删除时已同步清理 loadedSessions 与持久化文件）。
+const deletedSessionPaths = new Set<string>();
+
 // 持久化运行中会话注册表，供崩溃/重启后恢复侧边栏条目（配合 Phase 2 受保护消息
 // 实现“首轮未落盘、崩溃后仍能找回”）。文件：~/.tether/loaded-sessions.json。
 function loadedSessionsPath(): string {
@@ -706,10 +711,33 @@ function registerIpc(): void {
     const store = new TetherStateStore();
     try {
       await store.refresh();
-      // 归档即把会话移出活跃列表：同步注销运行中注册表，避免归档后残留占位。
+      // 用 DB id 找到该会话的真实文件路径（sessionPath / storagePath），据此可靠清理
+      // 运行中注册表与 host。磁盘会话的 id 是 DB 主键（非路径 basename），此前仅用
+      // sessionIdFromPath 匹配会漏删，导致删除后残留合成占位（title 退化为 cwd 名，
+      // 需再删一次）。这里按真实路径 + basename + cwd 多重匹配，确保一次删净。
+      const thread = store.get(id);
+      const targets = new Set<string>();
+      if (thread) {
+        if (thread.sessionPath) targets.add(thread.sessionPath);
+        if (thread.storagePath) targets.add(thread.storagePath);
+      }
       for (const [path, info] of loadedSessions) {
-        if (sessionIdFromPath(path) === id || info.cwd === id) {
+        if (
+          targets.has(path) ||
+          targets.has(info.cwd) ||
+          sessionIdFromPath(path) === id ||
+          info.cwd === id
+        ) {
           loadedSessions.delete(path);
+          deletedSessionPaths.add(path);
+        }
+      }
+      // 同步清理该会话对应的 host（停止并移出注册表），避免删除后残留后台进程。
+      for (const path of targets) {
+        const host = agentHosts.get(path);
+        if (host) {
+          agentHosts.delete(path);
+          void host.stop();
         }
       }
       persistLoadedSessions();
@@ -911,6 +939,8 @@ function registerIpc(): void {
     host.sessionKey = file ?? sessionPath;
     if (file) agentHosts.set(file, host);
     activeSessionPath = host.sessionKey;
+    // 该会话重新建立/打开：从已删除黑名单移除（曾删除后重开同名路径的会话要能再次出现）。
+    if (activeSessionPath) deletedSessionPaths.delete(activeSessionPath);
     // Phase 2：兜底首轮未落盘的 user 消息。
     // - 底层 session 文件已在磁盘生成（有 assistant、已 flush）：视为接管，从运行中
     //   注册表移除（磁盘索引接管），并清空受保护消息。
@@ -1454,6 +1484,8 @@ function mergeLoadedSessions(
   }
   const extras: SessionSummary[] = [];
   for (const [file, info] of loadedSessions) {
+    // 已删除会话不合成（双重保险，防 loadedSessions 清理残留）。
+    if (deletedSessionPaths.has(file)) continue;
     // 已存在（按 path / storagePath / id 任一命中）则不再重复插入。
     if (present.has(file) || presentIds.has(sessionIdFromPath(file))) continue;
     // 与 `listTetherThreads(cwd)` 语义一致：只在目标工作区下返回。

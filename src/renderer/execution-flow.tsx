@@ -112,7 +112,7 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
   const unknown = view.tools.some((tool) => tool.resultRecorded === false && tool.status !== "running");
   const [open, setOpen] = useState(() => live || awaiting || failed || interrupted || unknown || !view.reply.length);
   const [mounted, setMounted] = useState(open);
-  const [bounded, setBounded] = useState(live);
+  const [bounded, setBounded] = useState(live && view.reply.length > 0);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [collapseCountdown, setCollapseCountdown] = useState<number | null>(null);
   const collapseTimers = useRef<number[]>([]);
@@ -176,6 +176,12 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
     startCountdown();
     return () => { clearCountdown(); };
   }, [live, failed, interrupted, awaiting, unknown, view.reply.length, pendingText, scroll.atBottom, canAutoCollapse]);
+
+  // 第一次思考期间（live 但还没有回复文本）不 bounded，让过程自然展开填满空间；
+  // 一旦 agent 开始输出回复文本，恢复 max-height 截断，避免过程吃掉整个视口。
+  useEffect(() => {
+    if (live && view.reply.length > 0) setBounded(true);
+  }, [live, view.reply.length]);
 
   const toggleItem = useCallback((key: string, defaultOpen = false) => {
     interacted.current = true;

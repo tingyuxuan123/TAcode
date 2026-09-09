@@ -108,9 +108,13 @@ export function useFollowScroll(scope: string, enabled = true) {
         // 已离开跟随：回到足够接近底部（较小阈值）才恢复跟随，形成滞回。
         bottom = distance <= 16;
       }
+      const wasFollowing = following.current;
       following.current = bottom;
       setAtBottom(bottom);
       capture();
+      // 用户从历史滚回底部即自动恢复跟随：立即吸附到最底并进入后续自动跟随，
+      // 无需手动点“到最新”。只在“非跟随 → 回到底部”时触发，避免跟随中的重复调用。
+      if (bottom && !wasFollowing) followLatest();
     };
     const resize = (entries: ResizeObserverEntry[] = []) => {
       if (following.current && entries.some((entry) => entry.target === viewport)) {
