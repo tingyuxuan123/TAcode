@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { NO_ACTIVE_SESSION_MESSAGE } from "../shared/agent-protocol";
 import type {
   AgentEvent,
   AgentRuntimeInfo,
@@ -140,7 +141,7 @@ export class AgentManager {
     data?: Record<string, unknown>,
   ): Promise<T> {
     const host = this.activeHost(runtimeId);
-    if (!host) return Promise.reject(new Error("No active agent session"));
+    if (!host) return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
     return this.enqueue(host.runtimeId, async () => {
       const result = await host.request<T>(type, data);
       if (
@@ -165,7 +166,10 @@ export class AgentManager {
   ): Promise<void> {
     const host = this.activeHost(runtimeId);
     if (!host) return Promise.resolve();
-    return this.enqueue(host.runtimeId, () => host.respondToUi(id, response));
+    // UI 应答是宿主正在等待的“带外”回复，必须绕过按 runtime 串行化的命令队列：
+    // 触发这次询问的 prompt 命令可能仍挂在队列里（例如斜杠命令内部 await
+    // ctx.ui.confirm），若把应答排在它后面就会互相等待死锁。
+    return host.respondToUi(id, response);
   }
 
   /** 退出/关窗时回收全部宿主，每个 host 只 stop 一次。 */

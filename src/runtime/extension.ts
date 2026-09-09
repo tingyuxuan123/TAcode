@@ -351,13 +351,9 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
             return;
           }
           const next = value as PermissionMode;
-          if (next === "full" && permission !== "full" && ctx.hasUI) {
-            const approved = await ctx.ui.confirm(
-              "Enable full access?",
-              "Commands will run on the host with unrestricted filesystem and network access. Use only in a trusted workspace.",
-            );
-            if (!approved) return;
-          }
+          // 不再为 full 额外弹一次确认：选择器里的“完全访问”本身就是显式、带风险提示的
+          // 用户动作（perm.fullDesc），再问一次只是重复确认；而且该确认在斜杠命令内部
+          // 等待 UI 应答时容易把命令队列堵死。
           if (next === "plan" && permission !== "plan") permissionBeforePlan = permission;
           permission = next;
           applyPermissionTools();

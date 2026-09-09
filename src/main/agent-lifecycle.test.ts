@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager, type AgentHostStartOptions } from "./agent-manager";
+import { NO_ACTIVE_SESSION_MESSAGE } from "../shared/agent-protocol";
 import type { AgentEvent, AgentSnapshot } from "../shared/types";
 import type { AgentHost } from "./agent-host";
 
@@ -71,9 +72,28 @@ class FakeHost {
 
   async request<T>(type: string, data?: Record<string, unknown>): Promise<T> {
     this.requests.push({ type, ...(data ? { data } : {}) });
+    if (this.blocker) {
+      const blocker = this.blocker;
+      await new Promise<void>((resolve) => {
+        blocker.resolve = resolve;
+      });
+      this.blocker = undefined;
+    }
     if (type === "get_session_stats") return { sessionFile: this.sessionKey } as T;
     return {} as T;
   }
+
+  /** 测试用：让下一次 request 挂起，直到 releaseRequest()。 */
+  blockNextRequest(): void {
+    this.blocker = { resolve: () => undefined };
+  }
+
+  releaseRequest(): void {
+    this.blocker?.resolve();
+    this.blocker = undefined;
+  }
+
+  private blocker?: { resolve: () => void };
 
   async respondToUi(id: string, response: Record<string, unknown>): Promise<void> {
     this.uiResponses.push({ id, response });
@@ -129,7 +149,7 @@ describe("AgentManager", () => {
   it("rejects commands for an unknown handle instead of falling back to the active session", async () => {
     await manager.start(options("/a.jsonl"));
     await expect(manager.command("runtime-missing", "get_state")).rejects.toThrow(
-      "No active agent session",
+      NO_ACTIVE_SESSION_MESSAGE,
     );
   });
 
@@ -211,6 +231,24 @@ describe("AgentManager", () => {
     expect(hosts[0].uiResponses).toEqual([{ id: "req-1", response: { value: "ok" } }]);
     expect(hosts[1].uiResponses).toEqual([]);
     expect(manager.active).toBe(b.runtimeId);
+  });
+
+  it("delivers ui responses while a command on the same runtime is still pending", async () => {
+    // 回归：斜杠命令内部的 ctx.ui.confirm 会挂在 prompt 请求上，应答若排在命令队列
+    // 后面就会与宿主互相等待。UI 应答必须绕过队列直接下发。
+    const started = await manager.start(options("/a.jsonl"));
+    hosts[0].blockNextRequest();
+    const pending = manager.command(started.runtimeId, "get_state");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(hosts[0].requests.map((item) => item.type)).toEqual(["get_state"]);
+
+    await manager.respondToUi(started.runtimeId, "req-blocked", { confirmed: true });
+    expect(hosts[0].uiResponses).toEqual([
+      { id: "req-blocked", response: { confirmed: true } },
+    ]);
+
+    hosts[0].releaseRequest();
+    await pending;
   });
 
   it("does not spawn a duplicate host when start races with an existing running host", async () => {

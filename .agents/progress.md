@@ -1,5 +1,32 @@
 # 模型供应商管理进度
 
+## 2026-09-09：修复「任务规划」列表重复（20:42，Asia/Shanghai）
+
+- 现象（用户报告）：底部进度浮层展开的「任务规划」里同一份计划重复出现（计数也被抬高，如 3/6）。
+- 根因：`collectProgressTasks` 遍历会话里**所有** `update_plan` 工具调用并逐条累积。运行时/模型每推进一步就再调一次 `update_plan`（同一份计划的不同快照），于是 N 次调用就在浮层里出现 N 份计划。已用单测复现：两次 `update_plan`（2 步）得到 4 条。
+- 修复：`src/renderer/conversation.ts` 的 `collectProgressTasks` 只取**最后一次有步骤的规划工具**（与 `collectTodos` 的“最新计划”语义一致），delegate 任务聚合不变。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 54 文件 465 测试通过（新增 `conversation.test.ts` 回归用例：两次 update_plan 只保留最新一份及其最新状态，已确认修复前失败）；`pnpm build` 通过。
+- 未提交、未发布、未改 AGENTS.md。
+
+## 2026-09-09：选择「完全访问」不再二次确认；修复 UI 应答与命令队列互等死锁（20:28，Asia/Shanghai）
+
+- 现象（用户报告）：在权限选择器里选「完全访问」后仍弹一个确认框，点「允许」没有任何反应。期望：选完直接生效。
+- 根因（两个叠加）：
+  1. `src/runtime/extension.ts` 的 `/permissions full` 在斜杠命令里 `await ctx.ui.confirm("Enable full access?", …)`——选择器里的 full 已经是显式、带风险说明的动作，这次确认是重复的。
+  2. `AgentManager.respondToUi` 走的是按 runtime 串行化的命令队列（`enqueue`）。斜杠命令在 `session.prompt` 的 preflight 阶段执行，`prompt` 请求要等命令处理器返回才回响应；而命令处理器又在等 UI 应答——应答被排在同一条队列里，形成互等死锁，所以点「允许」后对话框既关不掉、模式也不切。
+- 修复：① 删除 `/permissions full` 里的 `ctx.ui.confirm` 分支（保留 `plan` 的 `permissionBeforePlan` 逻辑）；② `AgentManager.respondToUi` 绕过命令队列直接下发（UI 应答是宿主正在等待的带外回复，写 stdin 与其它请求天然串行）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 54 文件 464 测试通过（新增 `agent-permissions.test.ts`：真实 RPC worker 跑 `/permissions full`，断言无 `confirm` 请求且有 `Permission mode: full` 与 `full · host access` 状态；新增 `agent-lifecycle.test.ts` 用例：同一 runtime 有命令挂起时 UI 应答仍能立即下发，旧实现会超时失败）；`pnpm build` 通过。两个新测试都已在修复前确认会失败。
+- 未提交、未发布、未改 AGENTS.md。
+
+## 2026-09-09：消除无活动会话时的 `agent:command` 终端刷错（20:11，Asia/Shanghai）
+
+- 现象（用户贴日志）：启动/切换会话后主进程终端出现成对 `Error occurred in handler for 'agent:command': Error: No active agent session`（栈落在 `agent:command` 的 `throw`）。渲染层本身已 `catch`（abort / set_thinking_level / get_* 等 fire-and-forget），这些行只是 Electron 对每次 `ipcMain.handle` 拒绝的打印。
+- 排查：在 preload 临时记录所有 `agent:command` 调用（类型 + 栈）到 `~/.tether/logs/tether.log` 并跑 `pnpm dev`。干净启动下渲染层 **0 次** command 调用，说明不是启动路径，而是「宿主已停/正在重启」的竞态窗口里仍有命令发出（最像 `syncAgentThinking` 的 `get_available_thinking_levels` + `get_state` 一对）。
+- 修复（哨兵协议）：新增 `src/shared/agent-protocol.ts`（`NO_ACTIVE_SESSION_MESSAGE`、`AGENT_NO_SESSION_KEY`、`agentNoSessionResult` / `isAgentNoSessionResult`）。主进程 `agent:command` 无活动会话时不再 `throw`，改为写一条 `diagnostics.warn("agent", …)` 本地日志并返回哨兵；`AgentManager.command` 的同类拒绝也被 handler 捕获成哨兵。preload 见到哨兵即还原为 `new Error(NO_ACTIVE_SESSION_MESSAGE)`——渲染层 catch 语义完全不变，主进程终端不再刷错误。
+- 修复（陈旧会话）：`App.tsx` 新增 `dropAgentSession()`（清 `live`/`agentCwd`/`runtimeIdRef`/`runtimeServiceRef`）；`ensureModelReady` 两条停-重启分支在停止前先置 `live=false`，重启失败时调用它，避免把陈旧 `agentCwd` 留给后续命令；`Login.onSaved` 重启失败同样清理；`removeProject` 仅在确有会话时发 `abort`。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 53 文件 462 测试通过（新增 `agent-protocol.test.ts` 3 项，`agent-lifecycle.test.ts` 改用共享消息常量）；`pnpm build` 通过；用一次性 Electron 脚本（真实 `dist-electron/preload/index.cjs` + 假 `agent:command` 处理器返回哨兵）确认 preload 端 `command()` 以 `No active agent session` 拒绝；重跑 `pnpm dev` 启动无该错误行。
+- 未提交、未发布、未改 AGENTS.md。
+
 ## 2026-09-09：修复每开一个会话就在 macOS Dock 多一个图标（18:15，Asia/Shanghai）
 
 - 现象（用户报告并附截图）：每打开一个会话，Dock 就多一个深色方块图标，图标上是绿色 `exec` 字样，一个会话一个。

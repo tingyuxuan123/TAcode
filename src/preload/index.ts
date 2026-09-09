@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { Locale } from "../shared/i18n";
 import type { AgentErrorPayload, AgentEvent, DesktopApi } from "../shared/types";
+import {
+  NO_ACTIVE_SESSION_MESSAGE,
+  isAgentNoSessionResult,
+} from "../shared/agent-protocol";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: Electron.IpcRendererEvent, payload: T) => listener(payload);
@@ -85,8 +89,13 @@ const api: DesktopApi = {
       if (target === activeRuntimeId) activeRuntimeId = undefined;
       return ipcRenderer.invoke("agent:stop", target);
     },
-    command: (type, data, runtimeId) =>
-      ipcRenderer.invoke("agent:command", type, data, runtimeId ?? activeRuntimeId),
+    command: async (type, data, runtimeId) => {
+      const result = await ipcRenderer.invoke("agent:command", type, data, runtimeId ?? activeRuntimeId);
+      // 主进程用哨兵表示“无活动会话”（避免终端刷错误），这里还原成 rejection，
+      // 渲染层沿用原有 catch 语义。
+      if (isAgentNoSessionResult(result)) throw new Error(NO_ACTIVE_SESSION_MESSAGE);
+      return result;
+    },
     respondToUi: (id, response, runtimeId) =>
       ipcRenderer.invoke("agent:ui-response", id, response, runtimeId ?? activeRuntimeId),
     runtimes: () => ipcRenderer.invoke("agent:runtimes"),

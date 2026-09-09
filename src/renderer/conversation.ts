@@ -1666,7 +1666,15 @@ export interface ProgressTask {
  */
 export function collectProgressTasks(messages: ChatMessage[]): ProgressTask[] {
   const tasks = new Map<string, ProgressTask>();
-  for (const tool of sessionTools(messages)) {
+  const tools = sessionTools(messages);
+  // update_plan 每推进一步都会被再调一次（同一份计划的不同快照）。只取最后一次有
+  // 步骤的规划工具，否则同一份计划会按调用次数在「任务规划」列表里重复出现。
+  let latestPlan: { id: string; steps: SessionTodo[] } | undefined;
+  for (const tool of tools) {
+    const steps = todosFromPlanTool(tool);
+    if (steps) latestPlan = { id: tool.id, steps };
+  }
+  for (const tool of tools) {
     if (tool.name === "delegate") {
       const progress = delegateProgress(tool);
       progress.tasks.forEach((item, index) => {
@@ -1683,20 +1691,17 @@ export function collectProgressTasks(messages: ChatMessage[]): ProgressTask[] {
       });
       continue;
     }
-    if (/plan|todo/i.test(tool.name)) {
-      const planned = todosFromPlanTool(tool);
-      if (!planned) continue;
-      planned.forEach((todo, index) => {
-        const id = `${tool.id}-${todo.id ?? index}`;
-        if (tasks.has(id)) return;
-        tasks.set(id, {
-          id,
-          subject: todo.text.trim() || "任务",
-          status: todo.done ? "completed" : todo.active ? "running" : "pending",
-          activeForm: todo.active ? todo.text.trim() : undefined,
-        });
+    if (!latestPlan || tool.id !== latestPlan.id) continue;
+    latestPlan.steps.forEach((todo, index) => {
+      const id = `${tool.id}-${todo.id ?? index}`;
+      if (tasks.has(id)) return;
+      tasks.set(id, {
+        id,
+        subject: todo.text.trim() || "任务",
+        status: todo.done ? "completed" : todo.active ? "running" : "pending",
+        activeForm: todo.active ? todo.text.trim() : undefined,
       });
-    }
+    });
   }
   return [...tasks.values()];
 }

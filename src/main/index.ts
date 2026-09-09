@@ -109,6 +109,10 @@ import {
   type WorkspaceItem,
 } from "../shared/types";
 import { PROJECT_SKILL_ROOTS } from "../shared/skills";
+import {
+  NO_ACTIVE_SESSION_MESSAGE,
+  agentNoSessionResult,
+} from "../shared/agent-protocol";
 
 const ALLOWED_AGENT_COMMANDS = new Set([
   "prompt",
@@ -1174,7 +1178,15 @@ function registerIpc(): void {
       if (payload.message !== undefined) validatePromptMessage(payload.message);
       const handle = runtimeId === undefined ? undefined : requireString(runtimeId, "runtimeId", { maxLength: 128 });
       const host = agentManager.activeHost(handle);
-      if (!host) throw new Error("No active agent session");
+      // 无活动会话是预期内竞态（会话刚停/刚切走），不是异常：返回哨兵而不是抛错，
+      // 避免 Electron 把每次拒绝打印到终端；preload 会把它还原成同样的 rejection。
+      if (!host) {
+        diagnostics.warn("agent", "command without active session", {
+          command,
+          handle: handle ?? null,
+        });
+        return agentNoSessionResult();
+      }
       // Phase 2：用户消息发出即同步落盘到受保护文件，兜底底层延迟写盘。
       // 必须先写完再发给 worker，否则最脆弱的窗口仍可能丢消息。
       if (command === "prompt" && typeof payload.message === "string") {
@@ -1191,7 +1203,16 @@ function registerIpc(): void {
           });
         }
       }
-      return agentManager.command(handle, command, payload);
+      try {
+        return await agentManager.command(handle, command, payload);
+      } catch (error) {
+        // 句柄在派发前一刻失效（同一 runtime 正在 stop）也会命中同一语义。
+        if (error instanceof Error && error.message === NO_ACTIVE_SESSION_MESSAGE) {
+          diagnostics.warn("agent", "command lost its session before dispatch", { command });
+          return agentNoSessionResult();
+        }
+        throw error;
+      }
     },
   );
   ipcMain.handle(

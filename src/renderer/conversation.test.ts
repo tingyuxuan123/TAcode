@@ -1298,4 +1298,33 @@ describe("upsertSessionSummary", () => {
       ["tool-p-plan-2", "pending", "补测试"],
     ]);
   });
+
+  it("keeps only the latest update_plan in the bottom overlay", () => {
+    // 回归：每推进一步都会再调一次 update_plan；按调用次数累加会让同一份计划重复出现。
+    const plan = (id: string, steps: Array<{ step: string; status: string }>): ChatMessage => ({
+      id: `msg-${id}`,
+      role: "assistant",
+      text: "",
+      images: [],
+      tools: [{ id: `tool-${id}`, name: "update_plan", title: "Update plan", status: "complete", args: { plan: steps } }],
+      work: [],
+    });
+    const tasks = collectProgressTasks([
+      plan("p1", [
+        { step: "读代码", status: "completed" },
+        { step: "改 UI", status: "in_progress" },
+        { step: "补测试", status: "pending" },
+      ]),
+      plan("p2", [
+        { step: "读代码", status: "completed" },
+        { step: "改 UI", status: "completed" },
+        { step: "补测试", status: "in_progress" },
+      ]),
+    ]);
+    expect(tasks.map((item) => [item.status, item.subject])).toEqual([
+      ["completed", "读代码"],
+      ["completed", "改 UI"],
+      ["running", "补测试"],
+    ]);
+  });
 });

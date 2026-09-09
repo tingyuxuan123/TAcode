@@ -494,6 +494,13 @@ export function App() {
   const runtimeIdRef = useRef<string | undefined>(undefined);
   /** 每个会话已应用到的最高事件序号，用于丢弃 snapshot 回放与实时流的重复事件。 */
   const eventSeqRef = useRef<Map<string, number>>(new Map());
+  /** 宿主已停止或重启失败：清掉陈旧的会话引用，避免后续命令打到已不存在的会话。 */
+  const dropAgentSession = useCallback(() => {
+    live.current = false;
+    agentCwd.current = undefined;
+    runtimeIdRef.current = undefined;
+    runtimeServiceRef.current = "";
+  }, []);
 
   const applyThinkingForModel = useCallback((modelId: string, accounts = providers) => {
     const chat = activeChatProvider(accounts);
@@ -863,8 +870,13 @@ export function App() {
     if (!agentCwd.current) return true;
     const current = activeChatProvider(await window.harness.auth.status());
     if (`${current?.serviceId ?? ""}:${current?.serviceVersion ?? ""}` !== runtimeServiceRef.current) {
+      // 停掉旧宿主后重启：先把渲染层标记为不可用，避免停止与重启之间的在途事件
+      // 触发对已停止会话的命令；重启失败时清掉会话引用，别把陈旧 agentCwd 留给后续命令。
+      live.current = false;
       await window.harness.agent.stop();
-      return startAgent(workspace, sessionRef.current, Boolean(workspace), true);
+      const started = await startAgent(workspace, sessionRef.current, Boolean(workspace), true);
+      if (!started) dropAgentSession();
+      return started;
     }
     const next = modelRef.current.trim();
     if (!next) return true;
@@ -878,9 +890,12 @@ export function App() {
         return false;
       }
     }
+    live.current = false;
     await window.harness.agent.stop().catch(() => undefined);
-    return startAgent(workspace, sessionRef.current, Boolean(workspace), true);
-  }, [startAgent, syncAgentThinking, workspace]);
+    const restarted = await startAgent(workspace, sessionRef.current, Boolean(workspace), true);
+    if (!restarted) dropAgentSession();
+    return restarted;
+  }, [dropAgentSession, startAgent, syncAgentThinking, workspace]);
 
   const switchModel = useCallback(async (key: string) => {
     const option = modelOptions.find((item) => item.value === key);
@@ -1030,8 +1045,10 @@ export function App() {
     setRunning(false);
     setUiRequest(undefined);
     sessionRef.current = undefined;
+    // abort 只在确有会话时发；否则主进程会回一条“无活动会话”诊断（哨兵已不刷屏，但没必要发）。
+    const hadSession = Boolean(agentCwd.current);
     agentCwd.current = undefined;
-    await window.harness.agent.command("abort").catch(() => undefined);
+    if (hadSession) await window.harness.agent.command("abort").catch(() => undefined);
     await window.harness.agent.stop().catch(() => undefined);
   }, [workspace]);
 
@@ -1861,7 +1878,9 @@ export function App() {
               setLoginOpen(false);
               await window.harness.agent.stop().catch(() => undefined);
               if (workspace || agentCwd.current) {
-                void startAgent(workspace, sessionRef.current, Boolean(workspace), false, permission);
+                void startAgent(workspace, sessionRef.current, Boolean(workspace), false, permission).then((started) => {
+                  if (!started) dropAgentSession();
+                });
               }
             }
           }}
