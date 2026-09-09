@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { Locale } from "../shared/i18n";
-import type { AgentEvent, DesktopApi } from "../shared/types";
+import type { AgentErrorPayload, AgentEvent, DesktopApi } from "../shared/types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: Electron.IpcRendererEvent, payload: T) => listener(payload);
@@ -69,7 +69,7 @@ const api: DesktopApi = {
     command: (type, data) => ipcRenderer.invoke("agent:command", type, data),
     respondToUi: (id, response) => ipcRenderer.invoke("agent:ui-response", id, response),
     onEvent: (listener) => subscribe<AgentEvent>("agent:event", listener),
-    onError: (listener) => subscribe<string>("agent:error", listener),
+    onError: (listener) => subscribe<AgentErrorPayload>("agent:error", listener),
   },
   onAppCommand: (listener) => subscribe<string>("app:command", listener),
   providers: {

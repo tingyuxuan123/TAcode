@@ -128,9 +128,100 @@ process.env.TETHER_CREDENTIALS_STORE = "file";
 
 let mainWindow: BrowserWindow | undefined;
 const browserAutomation = new BrowserAutomation(() => mainWindow);
-let agentHost: AgentHost | undefined;
+/** Phase 3a：每个会话一个独立 AgentHost（各自 spawn 一个 RPC worker）。
+ * 切换会话不再杀其它会话的 host，后台会话继续运行。key = 会话文件路径。 */
+const agentHosts = new Map<string, AgentHost>();
 let activeAgentCwd: string | undefined;
 let activeSessionPath: string | undefined;
+
+function createAgentHost(): AgentHost {
+  return new AgentHost(
+    (event) => mainWindow?.webContents.send("agent:event", event),
+    (message, sessionKey) =>
+      mainWindow?.webContents.send("agent:error", { message, __sessionId: sessionKey }),
+    (tool, params, signal) => browserAutomation.execute(tool, params, signal),
+    () => browserAutomation.resetAgent(),
+  );
+}
+
+/** 按请求的 sessionPath 定位已有 host（key 或 requestedSessionPath 命中）。 */
+function findAgentHost(sessionPath?: string): AgentHost | undefined {
+  if (!sessionPath) return undefined;
+  const byKey = agentHosts.get(sessionPath);
+  if (byKey) return byKey;
+  for (const host of agentHosts.values()) {
+    if (host.sessionKey === sessionPath || host.requestedSessionPath === sessionPath)
+      return host;
+  }
+  return undefined;
+}
+
+/** 当前活动会话的 host（`agent:command` / `agent:stop` / `agent:ui-response` 路由）。 */
+function activeAgentHost(): AgentHost | undefined {
+  return activeSessionPath ? agentHosts.get(activeSessionPath) : undefined;
+}
+
+/** 应用退出 / 窗口关闭时回收全部 host 的 RPC worker 树。 */
+function stopAllAgentHosts(): void {
+  for (const host of agentHosts.values()) void host.stop();
+}
+
+
+/**
+ * 应用侧"运行中会话"注册表。
+ *
+ * 底层 pi-coding-agent 在首条 assistant 消息出现前不写 JSONL，因此一个刚刚
+ * 创建、且尚未产出 assistant 的新会话磁盘上不存在文件。`sessions:list` 若只从
+ * 磁盘扫描推导，就会因为"缺文件"把这个会话从列表删除（对应 PLAN 根因 2）。
+ *
+ * 该注册表在 `agent:start` 创建/打开会话时登记，`sessions:list` 时把仍在运行的
+ * 会话合并回磁盘索引结果，从而保证：新会话从出生起就出现在侧边栏，切走/刷新
+ * 都不会因磁盘暂缺文件而消失。仅注销于显式归档（`sessions:remove`），切走不注销——
+ * 这正是"列表不再丢运行中会话"的语义。
+ *
+ * 说明：这是壳层对 Phase 1 的实现；后续可下沉为持久化的应用自管索引
+ * （参考 Proma `agent-sessions.json` 创建即写），此处先以进程内注册表止血。
+ */
+const loadedSessions = new Map<
+  string,
+  { cwd: string; provider?: string; model?: string; title?: string }
+>();
+
+// 持久化运行中会话注册表，供崩溃/重启后恢复侧边栏条目（配合 Phase 2 受保护消息
+// 实现“首轮未落盘、崩溃后仍能找回”）。文件：~/.tether/loaded-sessions.json。
+function loadedSessionsPath(): string {
+  return path.join(getTetherHome(), "loaded-sessions.json");
+}
+function persistLoadedSessions(): void {
+  try {
+    const data = Object.fromEntries(loadedSessions);
+    void fsp
+      .mkdir(path.dirname(loadedSessionsPath()), { recursive: true, mode: 0o700 })
+      .then(() =>
+        fsp.writeFile(loadedSessionsPath(), JSON.stringify(data, null, 2), {
+          mode: 0o600,
+        }),
+      )
+      .catch(() => undefined);
+  } catch {
+    // 尽力而为。
+  }
+}
+function loadLoadedSessions(): void {
+  try {
+    const raw = fs.readFileSync(loadedSessionsPath(), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (value && typeof value === "object") {
+          loadedSessions.set(key, value as { cwd: string });
+        }
+      }
+    }
+  } catch {
+    // 首次运行或文件损坏：忽略。
+  }
+}
 let workspaceWatcher: fs.FSWatcher | undefined;
 let watchedWorkspace = "";
 let watchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -257,13 +348,6 @@ function createWindow(): void {
     },
   });
 
-  agentHost = new AgentHost(
-    (event) => mainWindow?.webContents.send("agent:event", event),
-    (message) => mainWindow?.webContents.send("agent:error", message),
-    (tool, params, signal) => browserAutomation.execute(tool, params, signal),
-    () => browserAutomation.resetAgent(),
-  );
-
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
     void checkForUpdates();
@@ -284,7 +368,7 @@ function createWindow(): void {
     closeAllDetachedBrowserWindows();
     // macOS keeps the app alive after the window closes; still reap the RPC tree
     // so sandbox shells don't keep burning RAM in the background.
-    void agentHost?.stop();
+    stopAllAgentHosts();
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
@@ -599,7 +683,7 @@ function registerIpc(): void {
 
   ipcMain.handle("sessions:list", async (_event, cwd?: string) => {
     const threads = await listTetherThreads(cwd ? { cwd } : {});
-    return threads.map(
+    const mapped = threads.map(
       (thread): SessionSummary => ({
         path: thread.sessionPath,
         storagePath: thread.storagePath,
@@ -616,11 +700,19 @@ function registerIpc(): void {
         archived: thread.archived,
       }),
     );
+    return mergeLoadedSessions(mapped, cwd);
   });
   ipcMain.handle("sessions:remove", async (_event, id: string) => {
     const store = new TetherStateStore();
     try {
       await store.refresh();
+      // 归档即把会话移出活跃列表：同步注销运行中注册表，避免归档后残留占位。
+      for (const [path, info] of loadedSessions) {
+        if (sessionIdFromPath(path) === id || info.cwd === id) {
+          loadedSessions.delete(path);
+        }
+      }
+      persistLoadedSessions();
       await store.archive(id);
     } finally {
       store.close();
@@ -749,15 +841,6 @@ function registerIpc(): void {
     const tasksDir = path.resolve(path.join(userDataPath, "tasks"));
     const cwd = options.cwd ? path.resolve(options.cwd) : tasksDir;
     await fsp.mkdir(cwd, { recursive: true });
-    if (
-      options.resume &&
-      agentHost!.isRunning() &&
-      (!options.sessionPath || options.sessionPath === activeSessionPath)
-    ) {
-      return { ...(await agentHost!.snapshot()), cwd: activeAgentCwd ?? cwd };
-    }
-    activeAgentCwd = cwd;
-    if (options.project || cwd !== tasksDir) await recentWorkspaces.touch(cwd);
     const {
       resume: _resume,
       sandbox: requestedSandbox,
@@ -771,6 +854,19 @@ function registerIpc(): void {
         storagePath || sessionPath,
       );
     }
+
+    // 命中已在运行的同一会话（切回后台会话，含 openSession 的 resume=false）：
+    // 直接复用，不杀不重开。不依赖 resume 标志——只要该会话已有存活 host 就复用。
+    const existing = findAgentHost(sessionPath);
+    if (existing?.isRunning()) {
+      activeAgentCwd = cwd;
+      if (options.project || cwd !== tasksDir) await recentWorkspaces.touch(cwd);
+      activeSessionPath = existing.sessionKey ?? existing.requestedSessionPath ?? sessionPath;
+      return { ...(await existing.snapshot()), cwd: activeAgentCwd ?? cwd };
+    }
+
+    activeAgentCwd = cwd;
+    if (options.project || cwd !== tasksDir) await recentWorkspaces.touch(cwd);
     const sandbox =
       cwd === tasksDir
         ? "read-only"
@@ -789,7 +885,9 @@ function registerIpc(): void {
     const baseUrl = rawUrl ? apiBaseUrl(rawUrl) : undefined;
     const desktopProvider = startOptions.serviceId
       ? await resolveDesktopProvider(startOptions.serviceId, startOptions.model) : undefined;
-    const snapshot = await agentHost!.start({
+    // 每个会话独立 host：已有实例（同会话重启）则复用，否则新建，绝不停止其它会话。
+    const host = existing ?? createAgentHost();
+    const snapshot = await host.start({
       ...startOptions,
       ...(sessionPath ? { sessionPath } : {}),
       cwd,
@@ -809,26 +907,79 @@ function registerIpc(): void {
         desktopProvider,
       } : {}),
     });
-    activeSessionPath = sessionFileOf(snapshot);
+    const file = sessionFileOf(snapshot) ?? sessionPath;
+    host.sessionKey = file ?? sessionPath;
+    if (file) agentHosts.set(file, host);
+    activeSessionPath = host.sessionKey;
+    // Phase 2：兜底首轮未落盘的 user 消息。
+    // - 底层 session 文件已在磁盘生成（有 assistant、已 flush）：视为接管，从运行中
+    //   注册表移除（磁盘索引接管），并清空受保护消息。
+    // - 尚未落盘：登记到运行中注册表（保证列表可见、崩溃后可恢复），并把缺失的 user
+    //   消息合并进返回的 messages，供切回/重启后显示。
+    if (activeSessionPath) {
+      const persisted = file ? fs.existsSync(file) : false;
+      if (persisted) {
+        if (loadedSessions.delete(activeSessionPath)) persistLoadedSessions();
+      } else {
+        loadedSessions.set(activeSessionPath, {
+          cwd,
+          provider: startOptions.provider,
+          ...(startOptions.model ? { model: startOptions.model } : {}),
+        });
+        persistLoadedSessions();
+      }
+      const protectedMsgs = await readProtectedUserMessages(activeSessionPath);
+      if (protectedMsgs.length) {
+        if (persisted) {
+          await clearProtectedUserMessages(activeSessionPath);
+        } else {
+          const existing = collectUserTexts(snapshot.messages);
+          const missing = protectedMsgs.filter(
+            (msg) => !existing.has(msg.message),
+          );
+          if (missing.length) {
+            snapshot.messages = [
+              ...missing.map((msg) => ({
+                role: "user",
+                content: msg.message,
+                timestamp: new Date(msg.ts).toISOString(),
+              })),
+              ...(snapshot.messages ?? []),
+            ];
+          }
+        }
+      }
+    }
     return { ...snapshot, cwd };
   });
   ipcMain.handle("agent:stop", () => {
+    const host = activeAgentHost();
     activeSessionPath = undefined;
-    return agentHost!.stop();
+    return host?.stop();
   });
   ipcMain.handle(
     "agent:command",
     async (_event, type: string, data?: Record<string, unknown>) => {
       if (!ALLOWED_AGENT_COMMANDS.has(type))
         throw new Error(`Unsupported agent command: ${type}`);
-      const result = await agentHost!.request(type, data);
+      const host = activeAgentHost();
+      if (!host) throw new Error("No active agent session");
+      // Phase 2：用户消息发出即落盘到受保护文件，兜底底层延迟写盘。
+      if (type === "prompt" && typeof data?.message === "string") {
+        void appendProtectedUserMessage(host.sessionKey, data.message);
+      }
+      const result = await host.request(type, data);
       if (
         type === "new_session" ||
         type === "get_state" ||
         type === "get_session_stats"
       ) {
         const file = sessionFileFromUnknown(result);
-        if (file) activeSessionPath = file;
+        if (file) {
+          activeSessionPath = file;
+          host.sessionKey = file;
+          if (!agentHosts.has(file)) agentHosts.set(file, host);
+        }
       }
       return result;
     },
@@ -836,7 +987,8 @@ function registerIpc(): void {
   ipcMain.handle(
     "agent:ui-response",
     (_event, id: string, response: Record<string, unknown>) => {
-      return agentHost!.respondToUi(id, response);
+      const host = activeAgentHost();
+      return host ? host.respondToUi(id, response) : undefined;
     },
   );
 }
@@ -1173,6 +1325,158 @@ function sessionFileFromUnknown(value: unknown): string | undefined {
   return typeof value.sessionFile === "string" ? value.sessionFile : undefined;
 }
 
+// ---------- Phase 2：应用侧受保护 user 消息（兜底底层延迟写盘） ----------
+// 底层 pi-coding-agent 在首条 assistant 出现前不写 JSONL；若应用在该窗口内崩溃/
+// 退出或用户显式停止该会话，已发送的 user 消息会丢失。这里由主进程在
+// `agent:command("prompt")` 时把 user 消息即刻落盘到应用自有文件（受保护消息），
+// 并在打开会话时把“底层尚未落盘”的受保护消息合并进返回的 messages，实现恢复。
+// 一旦底层 session 文件已在磁盘上生成（即有 assistant、已 flush），即视为接管并清空。
+function protectedDir(): string {
+  return path.join(getTetherHome(), "protected");
+}
+function protectedPath(sessionId: string): string {
+  const safe = sessionId.split(/[\\/]/).pop() || sessionId;
+  return path.join(protectedDir(), `${safe}.jsonl`);
+}
+async function appendProtectedUserMessage(
+  sessionId: string | undefined,
+  message: string | undefined,
+): Promise<void> {
+  if (!sessionId || !message || !message.trim()) return;
+  try {
+    await fsp.mkdir(protectedDir(), { recursive: true, mode: 0o700 });
+    await fsp.appendFile(
+      protectedPath(sessionId),
+      `${JSON.stringify({ message, ts: Date.now() })}\n`,
+      { encoding: "utf8" },
+    );
+  } catch {
+    // 尽力而为；落盘失败不阻断消息发送。
+  }
+}
+async function readProtectedUserMessages(
+  sessionId: string | undefined,
+): Promise<Array<{ message: string; ts: number }>> {
+  if (!sessionId) return [];
+  try {
+    const raw = await fsp.readFile(protectedPath(sessionId), "utf8");
+    return raw
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => {
+        try {
+          const parsed = JSON.parse(line);
+          return typeof parsed?.message === "string"
+            ? { message: parsed.message, ts: parsed.ts ?? Date.now() }
+            : null;
+        } catch {
+          return null;
+        }
+      })
+      .filter((x): x is { message: string; ts: number } => x !== null);
+  } catch {
+    return [];
+  }
+}
+async function clearProtectedUserMessages(
+  sessionId: string | undefined,
+): Promise<void> {
+  if (!sessionId) return;
+  try {
+    await fsp.rm(protectedPath(sessionId), { force: true });
+  } catch {
+    // 忽略清理失败。
+  }
+}
+
+/** 从底层消息里抽取 user 消息文本，用于和受保护消息去重（避免重复插入）。 */
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(
+        (part) =>
+          part &&
+          typeof part === "object" &&
+          (part as { type?: string }).type === "text" &&
+          typeof (part as { text?: unknown }).text === "string",
+      )
+      .map((part) => (part as { text: string }).text)
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+function collectUserTexts(messages: unknown[]): Set<string> {
+  const texts = new Set<string>();
+  for (const value of messages) {
+    if (!value || typeof value !== "object") continue;
+    const record = value as Record<string, unknown>;
+    if (record.role !== "user") continue;
+    const text = messageText(record.content);
+    if (text) texts.add(text);
+  }
+  return texts;
+}
+
+/** 会话文件路径 → 展示用的 id（与 `upsertSessionSummary` 的推导一致）。 */
+function sessionIdFromPath(file: string): string {
+  return file.split(/[\\/]/).pop()?.replace(/\.jsonl$/, "") || file;
+}
+
+/** cwd → 兜底标题（首条消息标题未落盘前的占位显示）。 */
+function fallbackSessionTitle(cwd: string): string {
+  const leaf = cwd.split(/[\\/]/).filter(Boolean).pop();
+  return leaf || "新会话";
+}
+
+/**
+ * 把"仍在运行、磁盘暂缺文件"的会话合并进磁盘索引结果。
+ *
+ * 未落盘的新会话磁盘上没有 JSONL，`listTetherThreads` 不会返回它；此处从
+ * `loadedSessions` 注册表合成一条 `SessionSummary` 前置到列表，保证列表不丢失
+ * 运行中会话（PLAN Phase 1）。已存在相同 path/storagePath 的条目不重复插入；
+ * 渲染进程后续会用首次消息标题覆写 title。
+ */
+function mergeLoadedSessions(
+  list: SessionSummary[],
+  cwd?: string,
+): SessionSummary[] {
+  if (loadedSessions.size === 0) return list;
+  const resolvedCwd = cwd ? path.resolve(cwd) : undefined;
+  const present = new Set<string>();
+  const presentIds = new Set<string>();
+  for (const row of list) {
+    present.add(row.path);
+    present.add(row.storagePath);
+    presentIds.add(sessionIdFromPath(row.path));
+    presentIds.add(sessionIdFromPath(row.storagePath));
+  }
+  const extras: SessionSummary[] = [];
+  for (const [file, info] of loadedSessions) {
+    // 已存在（按 path / storagePath / id 任一命中）则不再重复插入。
+    if (present.has(file) || presentIds.has(sessionIdFromPath(file))) continue;
+    // 与 `listTetherThreads(cwd)` 语义一致：只在目标工作区下返回。
+    if (resolvedCwd && info.cwd && path.resolve(info.cwd) !== resolvedCwd)
+      continue;
+    extras.push({
+      path: file,
+      storagePath: file,
+      id: sessionIdFromPath(file),
+      cwd: info.cwd,
+      title: info.title || fallbackSessionTitle(info.cwd),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...(info.provider ? { provider: info.provider } : {}),
+      ...(info.model ? { model: info.model } : {}),
+      messageCount: 1,
+      pinned: false,
+      archived: false,
+    });
+  }
+  return extras.length > 0 ? [...extras, ...list] : list;
+}
+
 function isWorkspaceItem(value: unknown): value is WorkspaceItem {
   return Boolean(
     value &&
@@ -1330,6 +1634,7 @@ async function addSkillManifests(root: string, files: string[]): Promise<void> {
 
 app.whenReady().then(async () => {
   await initializeTetherHome();
+  loadLoadedSessions();
   await loadLocale();
   protocol.handle(PREVIEW_SCHEME, servePreview);
   registerIpc();
@@ -1356,7 +1661,7 @@ app.on("before-quit", (event) => {
   workspaceWatcher?.close();
   closeAllBrowserPopups();
   closeAllDetachedBrowserWindows();
-  void Promise.resolve(agentHost?.stop())
+  Promise.all(Array.from(agentHosts.values(), (host) => host.stop()))
     .catch(() => undefined)
     .finally(() => app.exit(0));
 });

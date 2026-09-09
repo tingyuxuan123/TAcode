@@ -116,7 +116,15 @@ export interface AgentSnapshot {
   skills?: AgentSkillCommand[];
 }
 
-export type AgentEvent = Record<string, unknown> & { type: string };
+export type AgentEvent = Record<string, unknown> & { type: string } & {
+  /** Phase 3a：事件所属会话 id，渲染层据此按活动会话路由，避免后台会话污染当前视图。 */
+  __sessionId?: string;
+};
+
+export interface AgentErrorPayload {
+  message: string;
+  __sessionId?: string;
+}
 
 export type ExtensionUiRequest = {
   type: "extension_ui_request";
@@ -204,7 +212,7 @@ export interface DesktopApi {
     command<T = unknown>(type: string, data?: Record<string, unknown>): Promise<T>;
     respondToUi(id: string, response: Record<string, unknown>): Promise<void>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
-    onError(listener: (message: string) => void): () => void;
+    onError(listener: (payload: AgentErrorPayload) => void): () => void;
   };
   onAppCommand(listener: (command: string) => void): () => void;
   providers: {

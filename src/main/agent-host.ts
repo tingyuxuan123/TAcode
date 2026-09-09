@@ -36,12 +36,25 @@ export class AgentHost {
   private pending = new Map<string, PendingRequest>();
   private static readonly STDERR_CAP = 200_000;
 
+  /** 会话标识（Phase 3a）：事件据此路由回对应会话视图。
+   * 新建会话在 `start` 拿到 sessionFile 后由 index.ts 设置；复用会话已存在。 */
+  public sessionKey?: string;
+  /** 请求启动时传入的 sessionPath，用于 resume 时定位已有 host。 */
+  public requestedSessionPath?: string;
+
   constructor(
     private readonly emitEvent: (event: AgentEvent) => void,
-    private readonly emitError: (message: string) => void,
+    private readonly emitError: (message: string, sessionKey?: string) => void,
     private readonly executeBrowser?: (tool: string, params: BrowserParams, signal: AbortSignal) => Promise<BrowserToolResult>,
     private readonly resetBrowser?: () => void,
   ) {}
+
+  /** 给事件附上所属会话 id，供渲染层按活动会话路由，避免后台会话污染当前视图。 */
+  private tagged(event: AgentEvent): AgentEvent {
+    return this.sessionKey
+      ? { ...event, __sessionId: this.sessionKey }
+      : event;
+  }
 
   isRunning(): boolean {
     return Boolean(this.child && this.child.exitCode === null);
@@ -78,13 +91,13 @@ export class AgentHost {
           }>;
         }>("get_commands").catch(() => ({ commands: [] })),
       ]);
-      this.emitEvent({
+      this.emitEvent(this.tagged({
         type: "desktop_snapshot_meta",
         models: models.models,
         thinkingLevels: thinkingLevels.levels,
         skills: parseSkillCommands(commands.commands),
         ...(stats ? { stats } : {}),
-      });
+      }));
     } catch {
       // First paint already succeeded; meta is best-effort.
     }
@@ -99,6 +112,7 @@ export class AgentHost {
     providerExtension?: string;
     desktopProvider?: { config: unknown; apiKey: string };
   }): Promise<AgentSnapshot> {
+    this.requestedSessionPath = options.sessionPath;
     await this.stop();
     this.resetBrowser?.();
     const args = [
@@ -177,7 +191,7 @@ export class AgentHost {
       // EPIPE when the RPC worker exits mid-write must not crash the Electron main process.
       if (this.child !== child) return;
       const detail = error instanceof Error ? error.message : String(error);
-      if (!/EPIPE|ECONNRESET|broken pipe/i.test(detail)) this.emitError(detail);
+      if (!/EPIPE|ECONNRESET|broken pipe/i.test(detail)) this.emitError(detail, this.sessionKey);
     });
     child.once("error", (error) => {
       if (this.child !== child) return;
@@ -283,7 +297,7 @@ export class AgentHost {
       else pending.resolve(data.data);
       return;
     }
-    if (typeof data.type === "string") this.emitEvent(data as AgentEvent);
+    if (typeof data.type === "string") this.emitEvent(this.tagged(data as AgentEvent));
   }
 
   private cancelBrowserRequests(): void {
@@ -300,7 +314,7 @@ export class AgentHost {
       pending.reject(new Error(message));
     }
     this.pending.clear();
-    this.emitError(message);
+    this.emitError(message, this.sessionKey);
   }
 }
 

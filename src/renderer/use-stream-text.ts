@@ -1,43 +1,43 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import { nextStreamText } from "./stream-text";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createStreamTextAnimator, type StreamTextAnimator } from "./stream-text";
 
 export function useStreamText(text: string, streaming: boolean, identity: string) {
   const [shown, setShown] = useState({ identity, text });
-  const current = useRef(shown);
-  const queuedAt = useRef<number | undefined>(undefined);
-  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const reduced = useMemo(() => window.matchMedia("(prefers-reduced-motion: reduce)"), []);
+  const animator = useRef<StreamTextAnimator | undefined>(undefined);
+  if (!animator.current) {
+    animator.current = createStreamTextAnimator({
+      initial: { identity, text },
+      onChange: setShown,
+      requestFrame: (callback) => requestAnimationFrame(callback),
+      cancelFrame: (id) => cancelAnimationFrame(id),
+      reducedMotion: reduced.matches,
+    });
+  }
 
   useLayoutEffect(() => {
-    let frame: number | undefined;
-    const sync = () => {
-      current.current = { identity, text };
-      queuedAt.current = undefined;
-      setShown(current.current);
-    };
-    if (!streaming || reduced.matches || current.current.identity !== identity || !text.startsWith(current.current.text)) {
-      sync();
-      return;
-    }
-    if (current.current.text === text) return;
-    queuedAt.current ??= performance.now();
-    const advance = (now: number) => {
-      const next = nextStreamText(current.current.text, text, now - queuedAt.current!);
-      current.current = { identity, text: next };
-      setShown(current.current);
-      if (next !== text) frame = requestAnimationFrame(advance);
-      else queuedAt.current = undefined;
-    };
-    frame = requestAnimationFrame(advance);
-    const visibility = () => { if (document.hidden) { if (frame !== undefined) cancelAnimationFrame(frame); sync(); } };
-    const preference = () => { if (reduced.matches) { if (frame !== undefined) cancelAnimationFrame(frame); sync(); } };
+    const controller = animator.current!;
+    controller.setTarget({ identity, text }, streaming);
+  }, [identity, streaming, text]);
+
+  useEffect(() => {
+    const controller = animator.current!;
+    const visibility = () => controller.setPaused(document.hidden);
+    const preference = () => controller.setReducedMotion(reduced.matches);
+
+    visibility();
+    preference();
     document.addEventListener("visibilitychange", visibility);
     reduced.addEventListener("change", preference);
     return () => {
-      if (frame !== undefined) cancelAnimationFrame(frame);
       document.removeEventListener("visibilitychange", visibility);
       reduced.removeEventListener("change", preference);
     };
-  }, [text, streaming, identity]);
+  }, [reduced]);
+
+  useEffect(() => () => {
+    animator.current?.dispose();
+  }, []);
 
   // Reparented blocks and historical messages never replay an old animation.
   return !streaming || reduced.matches || shown.identity !== identity || !text.startsWith(shown.text) ? text : shown.text;

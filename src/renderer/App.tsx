@@ -391,6 +391,28 @@ export function App() {
   const { t, locale } = useI18n();
   const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  // Phase 1：保留"运行中/未落盘"会话的展示标题。底层在首条 assistant 落盘前不写
+  // JSONL，主进程 `sessions:list` 会合成一条占位（标题为 cwd 兜底）；这里用首次消息
+  // 标题覆写，使新会话在切走/刷新后仍显示用户真正输入的标题，而非 cwd 名。
+  const sessionTitlesRef = useRef<Map<string, string>>(new Map());
+  const sessionsRefMirror = useRef<SessionSummary[]>([]);
+  sessionsRefMirror.current = sessions;
+  const eventSessionTitle = (sessionId: string | undefined): string => {
+    if (!sessionId) return "";
+    const row = sessionsRefMirror.current.find(
+      (item) => item.path === sessionId || item.storagePath === sessionId,
+    );
+    return row?.title ?? sessionTitlesRef.current.get(sessionId) ?? "";
+  };
+  const setSessionList = useCallback((threads: SessionSummary[]) => {
+    const titles = sessionTitlesRef.current;
+    setSessions(
+      threads.map((row) => {
+        const title = titles.get(row.path);
+        return title && title !== row.title ? { ...row, title } : row;
+      }),
+    );
+  }, []);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const providersRef = useRef(providers);
   providersRef.current = providers;
@@ -413,6 +435,19 @@ export function App() {
   }, []);
   const [steering, setSteering] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
+  // Phase 3b：每个会话的运行状态（含后台会话），供侧边栏徽标与后台完成提示。
+  const runningSessionIdsRef = useRef<Set<string>>(new Set());
+  const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(new Set());
+  const markSessionRunning = useCallback((sessionId: string | undefined, isRunning: boolean) => {
+    if (!sessionId) return;
+    setRunningSessionIds((current) => {
+      const next = new Set(current);
+      if (isRunning) next.add(sessionId);
+      else next.delete(sessionId);
+      runningSessionIdsRef.current = next;
+      return next;
+    });
+  }, []);
   const [stopping, setStopping] = useState(false);
   const [transcriptKey, setTranscriptKey] = useState("empty");
   const eventQueue = useRef<ReturnType<typeof createStreamScheduler> | undefined>(undefined);
@@ -595,7 +630,7 @@ export function App() {
     ]);
     setWorkspaces(recent);
     setProviders(status);
-    setSessions(threads);
+    setSessionList(threads);
     return status;
   }, []);
 
@@ -692,6 +727,7 @@ export function App() {
         ...(extraModels.length ? { extraModels } : {}),
       });
       if (seq !== startSeq.current) return false;
+      const file = sessionFileOf(snapshot) ?? sessionPath;
       if (seedMessage) {
         setMessages([...normalizeMessages(snapshot.messages), seedMessage]);
         setStats(snapshot.stats);
@@ -703,7 +739,11 @@ export function App() {
         const next = resume ? finalizeInterruptedTurn(raw) : raw;
         setMessages(next);
         setStats(snapshot.stats);
-        setRunning(Boolean(snapshot.state.isStreaming) && !hadRunning);
+        // Phase 3b：切回正在后台运行的会话时，以运行集合为准（比 isStreaming 启发式准）。
+        const inBackgroundSet = file
+          ? runningSessionIdsRef.current.has(file)
+          : false;
+        setRunning(inBackgroundSet || (Boolean(snapshot.state.isStreaming) && !hadRunning));
         setAgentSkills(snapshot.skills ?? []);
         if (resume && hadRunning) setToast(t("toast.sessionInterrupted"));
         if (sessionPath && next.length === 0) {
@@ -727,7 +767,6 @@ export function App() {
       await syncAgentThinking();
       await window.harness.agent.command("set_auto_compaction", { enabled: true }).catch(() => undefined);
       if (seq !== startSeq.current) return false;
-      const file = sessionFileOf(snapshot) ?? sessionPath;
       if (file) {
         sessionRef.current = file;
         setActiveSession(file);
@@ -738,15 +777,19 @@ export function App() {
         // row visible during the first turn so the sidebar updates immediately.
         if (seedMessage && file) {
           const cwdForSeed = snapshot.cwd ?? cwd ?? workspace;
+          const seedTitle = seedMessage.text || t("common.unnamed");
+          // Phase 1：缓存首次消息标题，切走/刷新后 `setSessionList` 会用它覆写主进程
+          // 合成的占位标题（否则占位只能显示 cwd 兜底名）。
+          sessionTitlesRef.current.set(file, seedTitle);
           setSessions(upsertSessionSummary(threads, {
             path: file,
             cwd: cwdForSeed ?? "",
-            title: seedMessage.text || t("common.unnamed"),
+            title: seedTitle,
             provider: chat.id,
             model: modelId,
           }));
         } else {
-          setSessions(threads);
+          setSessionList(threads);
         }
       });
       void refreshAgentSkills();
@@ -902,7 +945,8 @@ export function App() {
     }
     try {
       await window.harness.sessions.remove(session.id);
-      setSessions(await window.harness.sessions.list());
+      sessionTitlesRef.current.delete(session.path);
+      setSessionList(await window.harness.sessions.list());
     } catch (error) {
       setToast(error instanceof Error ? error.message : String(error));
     }
@@ -911,7 +955,7 @@ export function App() {
   const pinSession = useCallback(async (session: SessionSummary) => {
     try {
       await window.harness.sessions.pin(session.id, !session.pinned);
-      setSessions(await window.harness.sessions.list());
+      setSessionList(await window.harness.sessions.list());
     } catch (error) {
       setToast(error instanceof Error ? error.message : String(error));
     }
@@ -920,7 +964,8 @@ export function App() {
   const renameSession = useCallback(async (session: SessionSummary, title: string) => {
     try {
       await window.harness.sessions.rename(session.id, title);
-      setSessions(await window.harness.sessions.list());
+      sessionTitlesRef.current.set(session.path, title);
+      setSessionList(await window.harness.sessions.list());
     } catch (error) {
       setToast(error instanceof Error ? error.message : String(error));
     }
@@ -929,7 +974,7 @@ export function App() {
   const removeProject = useCallback(async (path: string) => {
     try {
       setWorkspaces(await window.harness.workspace.forget(path));
-      setSessions(await window.harness.sessions.list());
+      setSessionList(await window.harness.sessions.list());
     } catch (error) {
       setToast(error instanceof Error ? error.message : String(error));
       return;
@@ -957,7 +1002,7 @@ export function App() {
       sessionRef.current = stats.sessionFile;
       setActiveSession(stats.sessionFile);
     }
-    void window.harness.sessions.list().then(setSessions);
+    void window.harness.sessions.list().then(setSessionList);
   }, [workspace]);
 
   const stopJobs = useCallback(async (message: string) => {
@@ -1026,7 +1071,7 @@ export function App() {
           ? t("toast.compactDoneTokens", { tokens: result.tokensBefore.toLocaleString(locale === "en" ? "en-US" : "zh-CN") })
           : t("toast.compactDone"),
       );
-      void window.harness.sessions.list().then(setSessions);
+      void window.harness.sessions.list().then(setSessionList);
     } catch (error) {
       const raw = error instanceof Error ? error.message : String(error);
       if (/nothing to compact|session too small/i.test(raw)) {
@@ -1208,8 +1253,26 @@ export function App() {
     eventQueue.current = queue;
     const offEvent = window.harness.agent.onEvent((event) => {
       if (!live.current) { queue.clear(); return; }
+      // Phase 3a：按活动会话路由。后台会话（__sessionId ≠ 当前视图）的事件不套到
+      // 当前 messages/stats，避免污染；但维护运行中徽标，并在其结束时提示完成。
+      const eventSession = (event as { __sessionId?: string }).__sessionId;
+      if (eventSession && eventSession !== sessionRef.current) {
+        if (event.type === "agent_start") {
+          markSessionRunning(eventSession, true);
+        } else if (event.type === "agent_settled") {
+          markSessionRunning(eventSession, false);
+          void window.harness.sessions.list().then(setSessionList);
+          setToast(t("toast.backgroundSessionDone", { title: eventSessionTitle(eventSession) }));
+        }
+        return;
+      }
       if (event.type !== "message_update" && event.type !== "tool_execution_update") queue.flush();
-      if (event.type === "agent_start") { runEpoch.current += 1; setRunning(true); setStopping(false); }
+      if (event.type === "agent_start") {
+        runEpoch.current += 1;
+        setRunning(true);
+        setStopping(false);
+        markSessionRunning(eventSession ?? sessionRef.current, true);
+      }
       if (event.type === "desktop_snapshot_meta") {
         if (Array.isArray(event.models)) {
           agentModelsRef.current = event.models as typeof agentModelsRef.current;
@@ -1223,6 +1286,7 @@ export function App() {
         setRunning(false);
         setStopping(false);
         setUiRequest(undefined);
+        markSessionRunning(eventSession ?? sessionRef.current, false);
         const seq = startSeq.current;
         const epoch = runEpoch.current;
         void window.harness.agent.command<AgentSessionStats>("get_session_stats").then((nextStats) => {
@@ -1232,7 +1296,7 @@ export function App() {
           sessionRef.current = nextStats.sessionFile;
           setActiveSession(nextStats.sessionFile);
         }).catch(() => undefined);
-        void window.harness.sessions.list().then(setSessions);
+        void window.harness.sessions.list().then(setSessionList);
       }
       if (event.type === "queue_update") {
         const nextSteering = Array.isArray(event.steering)
@@ -1257,12 +1321,17 @@ export function App() {
       }
       queue.push(event);
     });
-    const offError = window.harness.agent.onError((message) => {
+    const offError = window.harness.agent.onError((payload) => {
+      const message = payload?.message ?? String(payload);
+      // Phase 3a：后台会话的错误不 fail 当前视图。
+      const errorSession = payload?.__sessionId;
+      if (errorSession && errorSession !== sessionRef.current) return;
       if (!live.current) return;
       if (/Agent session closed/.test(message) || isTransientStreamError(message)) return;
       queue.flush();
       setStopping(false);
       setRunning(false);
+      markSessionRunning(errorSession ?? sessionRef.current, false);
       const text = friendlyAgentError(message);
       setMessages((current) => failActiveTurn(current, text || message));
       if (text) setToast(text);
@@ -1467,7 +1536,7 @@ export function App() {
                       key={session.id}
                       session={session}
                       active={isSameSession(session, activeSession)}
-                      running={running && isSameSession(session, activeSession)}
+                      running={runningSessionIds.has(session.path)}
                       onOpen={() => openSession(session)}
                       onPin={() => void pinSession(session)}
                       onRename={(title) => void renameSession(session, title)}

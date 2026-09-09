@@ -1,5 +1,49 @@
 # 模型供应商管理进度
 
+## 2026-09-08：PLAN Phase 3b — 多会话并发可感知：运行中徽标 + 后台完成提示 + 切回准确运行态（23:42，Asia/Shanghai）
+
+- 目标：在 Phase 3a（多会话并行为基础）之上，让并行执行可被用户感知——侧边栏对所有运行中的会话显示“执行中”徽标；后台会话完成时提示；切回后台会话时运行态准确。
+- 渲染层 `src/renderer/App.tsx`：
+  - 新增 `runningSessionIdsRef` + `runningSessionIds` 状态 + `markSessionRunning`（按 `__sessionId` 增删），在 `agent_start`/`agent_settled` 更新。
+  - 事件处理：后台会话（`__sessionId ≠ 当前视图`）的 `agent_start` 标记运行、`agent_settled` 清除徽标 + 刷新列表 + toast 提示“后台会话完成”；活动会话同样维护徽标。
+  - 侧边栏 `SessionRow` 的 `running` 从“仅活动会话”改为 `runningSessionIds.has(session.path)`（所有会话的徽标）。
+  - 切回后台运行会话时，`setRunning` 用 `runningSessionIdsRef` 判断（比 isStreaming 启发式准确）。
+  - `agent:error` 处理时清除活动会话徽标（覆盖崩溃/停止浮出的错误）。
+  - `eventSessionTitle`（从会话列表/种子标题解析）用于后台完成 toast 的标题。
+- 共享 `src/shared/i18n.ts`：新增 `toast.backgroundSessionDone`（中/英）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 全量 362/362 通过；dev server HMR 已应用，无报错。
+- 边界：仍是一次一个活跃视图（非真分屏）；后台会话实时滚动内容需切过去查看，但运行/完成状态已可见。
+
+## 2026-09-08：PLAN Phase 2 — 应用侧消息即落盘，兜底首轮未落盘 user 消息（23:28，Asia/Shanghai）
+
+- 背景：Phase 3a 后“切走”已不再丢（后台继续跑、assistant 产出时底层 flush）。Phase 2 兜剩余缺口：app 崩溃/退出、用户显式停止一个“首条 assistant 未产出”的会话时，已发送 user 消息可能未落盘。
+- 主进程 `src/main/index.ts`：
+  - 受保护消息存储：`~/.tether/protected/<sessionId>.jsonl`；`agent:command("prompt")` 时把 user 消息**即刻落盘**（`appendProtectedUserMessage`，向主机进程写入，不依赖底层）。
+  - 打开会话时兜底：`agent:start` 若底层 session 文件**磁盘上不存在**（`fs.existsSync(file)`），把受保护中缺失的 user 消息合并进返回的 `snapshot.messages`（按文本去重），供切回/重启后显示；若文件已在磁盘（有 assistant、已 flush），清空受保护消息。
+  - `loadedSessions` 注册表持久化：`~/.tether/loaded-sessions.json`（启动 `loadLoadedSessions`，set/delete 时 `persistLoadedSessions`），使崩溃后侧边栏仍能恢复“未落盘”会话条目，从而可点击打开找回。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 全量 362/362 通过。
+- 说明：受保护文件真正只兜“首个 user 消息”（一旦有 assistant，底层即 flush，之后逐条立即写盘）。实际崩溃恢复路径涉及底层对未落盘 session 文件路径的处理，属 best-effort，建议在运行中的 App 手动验证：发首条消息后强杀进程 → 重启 → 侧边栏仍见该会话 → 打开可见已发消息。
+
+## 2026-09-08：PLAN Phase 3a — 多会话并行：切换不杀、后台继续跑（23:16，Asia/Shanghai）
+
+- 目标：开会话 A 后再开会话 B，两者可同时执行；在 A/B 间切换时上一会话不被打断、继续在后台跑，切回后看到完整结果。
+- 主进程 `src/main/agent-host.ts`：`AgentHost` 增加 `sessionKey` / `requestedSessionPath`；事件（`emitEvent`）带 `__sessionId`，`emitError` 改为带 sessionKey，供渲染层路由。
+- 主进程 `src/main/index.ts`：`agentHost` 单例 → `agentHosts = Map<sessionPath, AgentHost>`；`createAgentHost` / `findAgentHost` / `activeAgentHost` / `stopAllAgentHosts` 辅助；`agent:start` 命中"该会话已有存活 host"时**直接复用（不杀不重开）**，否则每会话新建/重启 host（绝不停止其它会话）；`agent:command`/`agent:stop`/`agent:ui-response` 按当前活动会话路由；窗口关闭/退出回收全部 host。
+- 共享类型 `src/shared/types.ts` / `src/preload/index.ts`：`AgentEvent` 增加 `__sessionId`；新增 `AgentErrorPayload`，`onError` 改收带会话信息对象。
+- 渲染层 `src/renderer/App.tsx`：`agent:event`/`agent:error` 按活动会话过滤——后台会话（`__sessionId ≠ sessionRef.current`）的事件/错误不套到当前 messages/stats，避免污染；后台会话完成时刷新列表。
+- 已知限制（3a 阶段）：① 一次只显示一个活跃视图，无法同时"盯"两条流（Phase 3b 增强）；② 后台会话遇到需要用户确认的检查点（工具授权 / askUserQuestion）会等待，切回才可应答；③ 切回仍在流式的会话时，若末条工具仍在跑，running 指示可能偏保守（消息仍会正常流入）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 全量 362/362 通过。
+- 说明：与 Phase 1（列表不丢）共同生效；Phase 2（应用侧消息即落盘）补"首轮未落盘就切走"的内容丢失。
+
+## 2026-09-08：PLAN Phase 1 — 会话列表不再丢“运行中/未落盘”会话（22:58，Asia/Shanghai）
+
+- 依据重写后的 `PLAN.md`（参考 Proma 方案），落地最小可交付 Phase 1：列表不再因磁盘暂缺文件删掉运行中/未落盘的新会话。
+- 主进程 `src/main/index.ts`：新增 `loadedSessions` 进程内注册表（应用侧“运行中会话”集合），`agent:start` 创建/打开会话时登记；`sessions:list` 用 `mergeLoadedSessions` 把仍运行、磁盘暂缺文件的新会话合成前置到列表；`sessions:remove` 归档时注销以清除占位。
+- 渲染进程 `src/renderer/App.tsx`：新增 `sessionTitlesRef` + `setSessionList`，把首次消息标题缓存并覆写主进程合成的占位（否则切走后只显示 cwd 兜底名）；所有已磁盘列表的调用点改走 `setSessionList`，避免整表替换丢占位。
+- 未改任何 npm 依赖（tether-agent-core / pi-coding-agent），纯壳层实现。底层 `_persist` 延迟写盘的“内容丢失”层面（首轮生成中切走/崩溃仍可能空），属 Phase 2（应用侧消息即落盘）范围。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 全量 362/362 通过。
+- 目录：`PLAN.md.bak-promaref`（原 PLAN 备份）。
+
 ## 2026-09-08：复用 codeg-main 思路优化流式滚动（21:04，Asia/Shanghai）
 
 - `src/renderer/stream-scheduler.ts` 增加 256 条流式事件批次上限；达到上限立即 flush，仍保留完整 snapshot 顺序，避免 RAF/后台节流时 pending 无界增长。
