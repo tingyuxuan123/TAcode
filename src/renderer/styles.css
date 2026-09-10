@@ -6319,10 +6319,7 @@ kbd {
   flex-direction: column;
   width: min(880px, 94vw);
   max-height: 85vh;
-  /* Let the settings page remain perceptible without letting it compete with the form. */
-  background: color-mix(in srgb, var(--surface) 84%, transparent);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  background: var(--surface);
   border-radius: 14px;
   box-shadow: var(--shadow-overlay);
   overflow: hidden;
@@ -6332,7 +6329,7 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 18px;
+  padding: 8px 20px;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
@@ -6340,6 +6337,7 @@ kbd {
 .provider-dialog-head h2 {
   font-size: calc(15px * var(--ui-font-scale));
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .provider-dialog-head-actions {
@@ -6377,20 +6375,21 @@ kbd {
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
-  padding: 16px 18px;
+  padding: 18px 24px 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  background: var(--page);
 }
 
 .provider-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 
 .provider-field > span {
-  font-size: calc(12px * var(--ui-font-scale));
+  font-size: calc(11.5px * var(--ui-font-scale));
   font-weight: 500;
   color: var(--ink-2);
 }
@@ -6404,12 +6403,46 @@ kbd {
   background: var(--surface);
   color: var(--ink);
   font-size: calc(13px * var(--ui-font-scale));
+  transition: border-color 120ms ease;
 }
 
 .provider-field input:focus-visible,
 .provider-field select:focus-visible {
   outline: none;
   border-color: var(--accent-ink);
+}
+
+.provider-key-field {
+  position: relative;
+  display: flex;
+}
+
+.provider-key-field input {
+  width: 100%;
+  padding-right: 36px;
+}
+
+.provider-key-toggle {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--ink-3);
+}
+
+.provider-key-toggle:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.provider-key-toggle:focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 1px;
 }
 
 .provider-field input:disabled {
@@ -6420,7 +6453,7 @@ kbd {
 .provider-form-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 14px;
+  gap: 10px 16px;
   flex-shrink: 0;
 }
 
@@ -6434,15 +6467,16 @@ kbd {
 .provider-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-height: 0;
   flex: 1 1 auto;
 }
 
 .provider-section h3 {
-  font-size: calc(13px * var(--ui-font-scale));
+  font-size: calc(12.5px * var(--ui-font-scale));
   font-weight: 600;
-  margin: 4px 0 0;
+  letter-spacing: -0.01em;
+  margin: 2px 0 0;
 }
 
 .provider-hint {
@@ -6455,10 +6489,12 @@ kbd {
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  padding: 8px 18px;
+  padding: 8px 12px;
+  border-radius: 8px;
   font-size: calc(12px * var(--ui-font-scale));
   color: var(--red);
   background: var(--red-tint);
+  flex: none;
 }
 
 .provider-dialog-actions {
@@ -6598,7 +6634,7 @@ kbd {
 .provider-model-selection {
   display: flex;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 12px;
   overflow: hidden;
   min-height: 0;
   flex: 1 1 auto;
@@ -6617,33 +6653,20 @@ kbd {
   border-right: 1px solid var(--line);
 }
 
-.provider-model-pane-head {
-  min-height: 40px;
-  padding: 8px 10px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  border-bottom: 1px solid var(--line);
-  background: var(--inset);
-  color: var(--ink-3);
-  font-size: calc(11px * var(--ui-font-scale));
-}
-
-.provider-model-pane-head h4 {
-  margin: 0;
-  color: var(--ink-2);
-  font-size: calc(12px * var(--ui-font-scale));
-  font-weight: 600;
-}
-
 .provider-model-search {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
+}
+
+.provider-model-count {
+  flex: none;
+  color: var(--ink-3);
+  font-size: calc(11px * var(--ui-font-scale));
+  white-space: nowrap;
 }
 
 .provider-model-search svg {
@@ -6703,7 +6726,7 @@ kbd {
 .provider-model-list {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 4px;
+  padding: 6px;
   min-height: 120px;
 }
 
@@ -6711,9 +6734,10 @@ kbd {
   display: flex;
   flex-direction: row;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 5px 8px;
-  border-radius: 5px;
+  padding: 6px 10px;
+  border-radius: 7px;
   cursor: pointer;
   font-size: calc(12px * var(--ui-font-scale));
   color: var(--ink);
@@ -6722,6 +6746,33 @@ kbd {
 
 .provider-model-row:hover {
   background: var(--hover);
+}
+
+.provider-model-row:focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: -2px;
+}
+
+.provider-model-row .provider-toggle {
+  flex: none;
+  margin-left: 8px;
+}
+
+.provider-model-row.selected code {
+  font-weight: 600;
+}
+
+/* 抵消 .provider-dialog input[type="checkbox"] 对开关内部隐藏 input 的尺寸覆盖 */
+.provider-dialog .provider-toggle input {
+  width: 0;
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .provider-dialog input[type="checkbox"] {
@@ -6756,58 +6807,87 @@ kbd {
   font-size: calc(12px * var(--ui-font-scale));
 }
 
-.provider-model-panels {
+.provider-model-detail {
   flex: 1 1 auto;
-  min-height: 120px;
+  min-height: 0;
   overflow: auto;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px;
+  gap: 12px;
 }
 
-.provider-model-panel {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.provider-model-panel-head {
+.provider-model-detail-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
 }
 
-.provider-model-panel-head code {
+.provider-model-detail-head code {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: calc(12px * var(--ui-font-scale))/1.4 var(--mono);
+  font: calc(14px * var(--ui-font-scale))/1.4 var(--mono);
+  font-weight: 600;
+}
+
+.provider-model-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.provider-model-detail-actions .ghost {
+  min-height: 26px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: calc(11.5px * var(--ui-font-scale));
+  border-radius: 7px;
+}
+
+.provider-model-limits input:disabled,
+.provider-dialog .provider-capability input:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.provider-model-detail-empty {
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-size: calc(12px * var(--ui-font-scale));
+  text-align: center;
+}
+
+.provider-model-detail-empty p {
+  margin: 0;
+  max-width: 32ch;
+  line-height: 1.5;
 }
 
 .provider-model-badge {
-  color: var(--ink-3);
-  font-size: calc(10.5px * var(--ui-font-scale));
-  white-space: nowrap;
-}
-
-.provider-model-subsection {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.provider-model-subhead {
-  font-size: calc(11px * var(--ui-font-scale));
-  font-weight: 500;
   color: var(--ink-2);
+  font-size: calc(10.5px * var(--ui-font-scale));
+  font-family: var(--mono);
+  background: var(--inset);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  flex: none;
+}
+
+.provider-model-flags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
 }
 
 .provider-model-icon-button {
@@ -6829,28 +6909,6 @@ kbd {
   background: var(--red-tint);
 }
 
-.provider-dialog .provider-model-edit-button {
-  margin-left: auto;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  border-radius: 5px;
-  color: var(--ink-3);
-  flex: none;
-}
-
-.provider-dialog .provider-model-edit-button:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
-
-.provider-model-panel.focus {
-  border-color: var(--accent-ink);
-  box-shadow: 0 0 0 1px var(--accent-ink);
-}
-
 .provider-model-limits {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -6866,15 +6924,26 @@ kbd {
   min-width: 0;
 }
 .provider-dialog .provider-capability input { width: auto; }
-.provider-model-limits .provider-capability {
-  display: flex;
-  flex-direction: row;
+.provider-thinking-levels {
+  display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
-.provider-model-limits .provider-capability input { width: auto; }
-.provider-thinking-levels { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; display: flex; flex-wrap: wrap; gap: 12px; }
-.provider-test-success { color: var(--green); padding: 0 24px; font-size: calc(13px * var(--ui-font-scale)); }
+.provider-thinking-levels .provider-capability {
+  border: 1px solid var(--line);
+  background: var(--inset);
+  border-radius: 999px;
+  padding: 2px 9px 2px 6px;
+  font-size: calc(11px * var(--ui-font-scale));
+  color: var(--ink-2);
+  gap: 4px;
+  cursor: pointer;
+}
+.provider-thinking-levels .provider-capability:hover {
+  border-color: var(--ink-3);
+}
+.provider-test-success { color: var(--green); background: var(--green-tint); padding: 8px 12px; border-radius: 8px; font-size: calc(12px * var(--ui-font-scale)); flex: none; }
 .provider-test-hint { padding: 0 24px 16px; }
 .provider-row-model { margin-top: 12px; }
 
@@ -6893,9 +6962,9 @@ kbd {
   height: 30px;
   min-width: 0;
   padding: 0 8px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 7px;
-  background: var(--surface);
+  background: var(--inset);
   color: var(--ink);
   font-size: calc(12px * var(--ui-font-scale));
 }
@@ -6904,6 +6973,7 @@ kbd {
 .provider-custom-model input:focus-visible {
   outline: none;
   border-color: var(--accent-ink);
+  background: var(--surface);
 }
 
 .provider-custom-model {
@@ -6911,10 +6981,11 @@ kbd {
   gap: 6px;
   padding: 10px;
   border-top: 1px solid var(--line);
-  background: var(--inset);
+  background: var(--surface);
 }
 
 .provider-custom-model .ghost {
+  min-height: 30px;
   height: 30px;
   flex: none;
   display: inline-flex;
