@@ -8,6 +8,7 @@ import { skillUserDisplay } from "../shared/skills";
 import { visibleUserText, visionResultSections, visionToolChips } from "../shared/vision-api";
 import { defaultCustomProfile, type CustomApiProfile } from "../shared/chat-profiles";
 import { ProviderListPage, ProviderSetupDialog } from "./provider-dialog";
+import { useBackdropClose } from "./use-backdrop-close";
 import type { ProviderRecord } from "../shared/types";
 import { AppearanceSettings } from "./appearance-settings";
 import { effortLabelKey, reasoningLevelsAvailable } from "../shared/thinking";
@@ -3303,10 +3304,12 @@ export function Login({
     onRefreshSkills?.();
   }, [pane, onRefreshSkills]);
 
+  const backdropClose = useBackdropClose(onClose);
+
   return (
     <div
       className="modal"
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      {...backdropClose}
       onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
     >
       <form

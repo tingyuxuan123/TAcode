@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./ui";
 import { useI18n } from "./i18n";
+import { useBackdropClose } from "./use-backdrop-close";
 import {
   NAMED_ENDPOINT_PRESETS,
   CUSTOM_SERVICE_ID,
@@ -510,6 +511,7 @@ export function ProviderSetupDialog({
     provider?.defaultModelId ?? provider?.models[0]?.id ?? readDiscoveryCache(discoveryCacheKey(baseUrl, apiStyle, provider?.id))?.bindings?.[0]?.id ?? "",
   );
   const [testing, setTesting] = useState(false);
+  const backdropClose = useBackdropClose(() => { if (!saving && !testing) onClose(); });
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const namedPreset = NAMED_ENDPOINT_PRESETS.find((p) => p.id === service);
@@ -591,7 +593,7 @@ export function ProviderSetupDialog({
       e.stopPropagation();
       if (e.key === "Escape" && !saving && !testing) onClose();
       if (e.key === "Enter" && e.target instanceof HTMLInputElement) e.preventDefault();
-    }} onClick={(e) => { if (e.target === e.currentTarget && !saving && !testing) onClose(); }}>
+    }} {...backdropClose}>
       <div className="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title">
         <div className="provider-dialog-head">
           <h2 id="provider-dialog-title">{editing ? t("settings.editProviderTitle") : t("settings.addProviderTitle")}</h2>

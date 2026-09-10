@@ -5,6 +5,7 @@ import {
   type SubagentInfo,
 } from "../shared/subagents";
 import { useI18n } from "./i18n";
+import { useBackdropClose } from "./use-backdrop-close";
 
 const TEMPLATE = `---
 name: my-helper
@@ -30,6 +31,7 @@ export function SubagentsSettings() {
   const [draft, setDraft] = useState<{ name?: string; text: string }>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const backdropClose = useBackdropClose(() => setDraft(undefined));
 
   const refresh = useCallback(async () => {
     const result = await window.harness.subagents.list();
@@ -167,7 +169,7 @@ export function SubagentsSettings() {
       </div>
 
       {draft && (
-        <div className="modal" onClick={(event) => event.target === event.currentTarget && setDraft(undefined)}>
+        <div className="modal" {...backdropClose}>
           <div className="panel subagent-editor" role="dialog" aria-label={t("subagents.editorTitle")}>
             <h2>{draft.name ? t("subagents.editTitle", { name: draft.name }) : t("subagents.newTitle")}</h2>
             <p className="settings-hint">{t("subagents.editorHint")}</p>
