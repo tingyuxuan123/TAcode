@@ -32,7 +32,12 @@ export function subagentDocumentPath(name: string): string {
   return path.join(getSubagentsDir(), `${normalizeSubagentName(name)}.md`);
 }
 
-/** 内置子代理：只读探索为主，只有 fixer 可写。 */
+/**
+ * 内置子代理：只读探索为主。
+ * explorer / code-reviewer 只读；test-runner 只能跑命令（声明的
+ * `exec_command`/`write_stdin` 让它算「可写子代理」，但提示词与职责都禁止改文件）；
+ * 只有 fixer 能改文件。
+ */
 export const BUILTIN_SUBAGENTS: SubagentDefinition[] = [
   {
     name: "explorer",

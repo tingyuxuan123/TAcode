@@ -1,5 +1,36 @@
 # 模型供应商管理进度
 
+## 2026-09-10：子代理 B1 —— `maxTurns` 全链生效，到上限算 truncated
+
+- 背景：A 批之后用户拍定语义「到轮数上限算 `truncated`（保留已产出报告），不算失败」，据此落地 B1。
+- 链路：角色定义 `maxTurns` → 新增纯函数 `src/main/delegation-run-options.ts`（`delegationTurnLimit` / `delegationRunOptions`，由 `delegation-options.ts` 改名扩展）→ `AgentStartOptions.maxTurns`（`shared/types.ts`）→ 子 worker 环境变量 `TACODE_MAX_TURNS`（`main/agent-host.ts`）→ runtime `turn_end` 计数到上限 `ctx.abort()` → 协调器按同一上限判定。
+- runtime 侧：新增 `src/runtime/turn-limit.ts`（`parseTurnLimit` + `createTurnLimiter`，可单测）；`extension.ts` 在 `before_agent_start` 调用 `startRun()` 重置计数——`delegate_continue` 会复用同一个 worker，进程级计数会让续跑只拿到 `limit - N` 轮（审查发现的中高缺陷）。
+- 协调器（`src/main/delegation-coordinator.ts`）：① `collectReport` 里「本次运行新增轮次 ≥ 上限」落 `truncated` 并保留报告，且**先于** 原来的 `no_report → failed` 分支；② 新增轮数看门狗（每 500ms 轮询 `get_messages`），子代理没自己收口时停掉它并落 `truncated`，不再只能等 30 分钟兜底超时；③ 轮次按「本次运行新增」计（`turns - baselineTurns`），避免 `continue` 复用 worker 时立刻撞上限。上限取值 `definition.maxTurns`（非法值回落 `MAX_SUBAGENT_MAX_TURNS`=60 并 Math.min 收敛），与进程内路径同一默认值。
+- 新增/调整测试：`main/delegation-run-options.test.ts` 7 条（含 `delegationTurnLimit` 边界）；`runtime/turn-limit.test.ts` 4 条（解析 + 每次运行重置/重复 abort 抑制）；`delegation-coordinator.test.ts` 新增 `describe("delegation turn limit")` 4 条（恰好到上限→truncated 且保留报告、`neverSettle` 时看门狗收口、上限内仍 completed、`continue` 后按新预算判定）；FakeHost 扩展 `assistantTurns` / `neverSettle` / `runtimeId` / `startOptions` 测试开关；把一个既有用例（mid-turn crash）的 `reportDelayMs` 固定为 5s，去掉它与 0ms 假报告定时器的竞速依赖。
+- 自审修正（详见文档 8.5）：① runtime 计数改为「每次运行重置」（`before_agent_start` → `startRun()`），修掉续跑只拿 `limit - N` 轮、且被误记 completed 的缺陷；② 基线读取移入 try/catch，读不到就本轮跳过上限（`limit = Infinity` + warn），避免 `continue` 路径未处理拒绝 + 记录卡 `running`；③ `ipc-validation.ts` 的 `validateAgentStartOptions` 补 `maxTurns` 白名单。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 66 文件 574 用例全部通过。
+- 已知边界：runtime 的 `turn_end` 钩子本身无自动化测试（需真实 worker 跑满上限才可观测），协调器侧同名判定有单测覆盖；看门狗 500ms 轮询意味着实际超限轮次可能略高于上限。
+- 未做：B2 委派事件不丢（父 host 缺失时兜底送渲染层 + 修复「父 host 被停后报告进不了父上下文」）；水合缺权限时从子会话恢复真实权限。4 条未复现项保持原状。
+- 未提交、未发布、未改 AGENTS.md。
+
+## 2026-09-10：子代理委派 A 批修复（核实 + 落地 6 项）
+
+- 背景：用户贴出上一轮「子代理使用问题」清单（P1×2 / P2×3 / P3×2 + 未验证项），要求逐条核实并落地低风险批次。
+- 核实（三个只读 explorer 子代理并行 + 父代理复跑测试）得出四处更正：① `agent-subagents.test.ts` **不是回归**——非沙箱环境复跑 `1 passed (3.3s)`，原红灯是 Seatbelt 沙箱禁止 spawn；② `thinkingLevel` 只差一行（桥接 payload 已带，主进程不读）；③ `maxTurns` 比说法更重：pi 打包物无轮数参数，桥接链路**没有任何接收方**，要新开通道；④ P3-1 的「UI 不一致」不成立，真实后果是 test-runner 的 system prompt 被告知 "You may change files"（与自己的 "Never edit files" 打架）+ plan 模式剔除 `exec_command` 导致跑不了测试。另：P2-3 的后果比「UI stale」重——父 host 被停过后，后台子代理报告永远进不了父会话上下文。
+- 修复（A 批，对应 `docs/subagent-delegation-round2-2026-09-10.md` 第 6 节）：
+  - A1 `src/main/index.ts` 的 `createAgentHost` 补 `host.runtimeId = runtimeId`（委派 host 不走 AgentManager，之前恒为 `""`）；`delegation-coordinator.ts` 新增 `createDelegationHost()` 做同规则兜底 + warn，诊断字段不再为空。
+  - A2 新增 `src/main/delegation-options.ts`（`delegationModelOptions`），`buildStartOptions` 透传 `thinkingLevel` → `effort` → `--effort` → `--thinking`；payload 缺字段时回落角色定义（覆盖 `continue()` 重建 payload 丢字段的场景）。
+  - A3 报告上限收敛为单一来源：`DELEGATION_MAX_REPORT_CHARS` 由 50 000 改为 12 000，`MAX_SUBAGENT_REPORT_CHARS` 改为再导出；本地回灌、桥接落库、`remoteReportBlock` 同一预算。
+  - A4 权限兜底保守化：`effectivePermission` 回退值 `auto` → `plan` 并导出；水合回退（`hydratePersistedEntries`）与 `index.ts` 的 `buildStartOptions` 同步改；父权限缺失/非法时写 warn 日志。
+  - A5 常量单一来源：`MAX_SUBAGENT_CONCURRENCY = DELEGATION_MAX_CONCURRENCY`；本地 wait 600s 抽成 `DELEGATION_LOCAL_WAIT_TIMEOUT_SECONDS`，桥接 3600/7200 改用 `DELEGATION_DEFAULT_/MAX_TIMEOUT_SECONDS`（不再硬编码）。
+  - A6 拆出 `SUBAGENT_FILE_WRITE_TOOLS` + `subagentEditsFiles()`：`composeSubagentSystemPrompt` 改三分支（可改文件 / 只跑命令不可改文件 / 完全只读），test-runner 不再收到写权限文案；`runtime/subagents.ts` 注释同步。
+- 新增回归用例 13 条：`main/delegation-options.test.ts`（4，含值域校验）、`delegation-coordinator.test.ts`（runtimeId 兜底、父权限缺失以 plan 起步、超长报告截断可观测、`effectivePermission` 2）、`shared/subagents.test.ts`（可写性 + 常量来源/数值钉住 2）、`runtime/tools/delegate.test.ts`（提示词分支 2）。
+- 自审调整（详见文档第 7 节）：① 水合兜底**不改** `auto`（那是我们自己此前授予的权限，猜成 plan 会让 fixer 续跑被剥光写工具而提示词仍承诺可改文件），改为写 warn 留痕；`effectivePermission`(新委派) 保持 plan。② `delegationModelOptions` 只接受已知档位，畸形值回落。③ `settle` 日志加 `reportCharsRaw`/`reportTruncated`。④ 两条路径的提示词都加「≤1500 字符、结论优先」预算，桥接报告被截断时附子会话路径供模型读回全文。⑤ 常量测试钉住数值而非只断言相等。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 65 文件 563 用例全部通过；真实 RPC worker 冒烟（`main/agent-subagents.test.ts`）green。
+- 未做（B 批，需语义决策或改动面较大）：B1 `maxTurns` 全链透传（含「到上限算 truncated 不算 failed」）；B2 委派事件不丢（父 host 缺失时兜底送渲染层 + 修复「父 host 被停后报告进不了父上下文」）；水合缺权限时从子会话恢复真实权限。4 条未复现项保持原状。
+- 已知测试缺口：`index.ts` 的两处接线（写 `runtimeId`、展开 `delegationModelOptions`）依赖 Electron，删掉仍全绿，只能靠协调器兜底用例与纯函数用例间接覆盖。
+- 未提交、未发布、未改 AGENTS.md。
+
 ## 2026-09-09：子代理（delegate）P0–P3 全量落地（22:06，Asia/Shanghai）
 
 - 背景：用户看到 PI-Desktop 的「智能体模式 + 子代理卡片」，要求把之前分析的 P0–P3 一次做完再统一测试。

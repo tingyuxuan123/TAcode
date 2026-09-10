@@ -126,6 +126,24 @@ describe("composeSubagentSystemPrompt", () => {
     expect(prompt).toContain("Working directory: /tmp/ws");
     expect(prompt).toContain("never report an edit");
   });
+
+  it("只跑命令的角色不会被允许改文件", () => {
+    // test-runner 声明 exec_command：曾经被判为「可写」，提示词直接说 "You may change files"。
+    const prompt = composeSubagentSystemPrompt(
+      definition({ name: "test-runner", tools: ["read_file", "exec_command", "write_stdin"] }),
+      "/tmp/ws",
+    );
+    expect(prompt).toContain("You may run commands, but you must not change files");
+    expect(prompt).not.toContain("You may change files");
+  });
+
+  it("真正能改文件的角色才拿到写权限文案", () => {
+    const prompt = composeSubagentSystemPrompt(
+      definition({ name: "fixer", tools: ["read_file", "edit_file", "apply_patch"] }),
+      "/tmp/ws",
+    );
+    expect(prompt).toContain("You may change files");
+  });
 });
 
 describe("delegate tool", () => {

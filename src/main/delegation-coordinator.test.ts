@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSnapshot } from "../shared/types";
 import type { DelegationBridgeRequest, DelegationRecordSnapshot, DelegationStartPayload } from "../shared/delegation";
+import { DELEGATION_MAX_REPORT_CHARS } from "../shared/delegation";
 import type { DiagnosticSink } from "./local-logger";
 import { TacodeStateStore } from "../runtime/state";
 import type { AgentHostStartOptions } from "./agent-manager";
 import {
   DelegationCoordinator,
+  effectivePermission,
   type DelegationHost,
 } from "./delegation-coordinator";
 
@@ -26,6 +28,8 @@ vi.mock("../runtime/subagents.js", () => ({
     description: "Explore",
     tools: ["read_file", "list_files", "search_files"],
     prompt: "Inspect and report.",
+    thinkingLevel: "medium",
+    maxTurns: 40,
     source: "builtin",
   }],
 }));
@@ -46,6 +50,12 @@ interface FakeHostOptions {
   reportDelayMs?: number;
   /** prompt 请求本身抛错（模拟 worker 启动即失败）。 */
   promptError?: Error;
+  /** 让假 host 忽略 createHost 传入的 runtimeId，复现「注入点漏写 runtimeId」。 */
+  runtimeId?: string;
+  /** 本次 prompt 产出的 assistant 轮次（默认 1；最后一条带 reportText）。 */
+  assistantTurns?: number;
+  /** 产出消息后不进入空闲，模拟「子代理没按上限自己收口」。 */
+  neverSettle?: boolean;
 }
 
 /** 可编程的假 host：完整模拟 pi RPC worker 的“接收即返回 + 迟到报告”语义。 */
@@ -59,20 +69,26 @@ class FakeHost implements DelegationHost {
   /** stop() 完成的时间戳；断言“先停完再落终态”。 */
   stoppedAt?: number;
   exitInfo?: { code?: number; signal?: string; stderrExcerpt: string };
+  /** 最近一次 start 收到的启动选项；用来断言权限/思考等级这类透传字段。 */
+  startOptions?: AgentHostStartOptions;
 
   private readonly reportText: string;
   private readonly reportDelayMs: number;
   private readonly promptError?: Error;
+  private readonly assistantTurns: number;
+  private readonly neverSettle: boolean;
   private settled = false;
   private idleWaiters: Array<() => void> = [];
 
   constructor(runtimeId: string, sessionKey?: string, options: FakeHostOptions = {}) {
-    this.runtimeId = runtimeId;
+    this.runtimeId = options.runtimeId ?? runtimeId;
     this.sessionKey = sessionKey;
     this.requestedSessionPath = sessionKey;
     this.reportText = options.reportText ?? "Found src/main/index.ts:1";
     this.reportDelayMs = options.reportDelayMs ?? 0;
     this.promptError = options.promptError;
+    this.assistantTurns = options.assistantTurns ?? 1;
+    this.neverSettle = options.neverSettle === true;
   }
 
   isRunning(): boolean {
@@ -82,6 +98,7 @@ class FakeHost implements DelegationHost {
   async start(options: AgentHostStartOptions): Promise<AgentSnapshot> {
     this.sessionKey = options.sessionPath;
     this.requestedSessionPath = options.sessionPath;
+    this.startOptions = options;
     return { state: {}, messages: [], models: [], thinkingLevels: [] };
   }
 
@@ -91,15 +108,18 @@ class FakeHost implements DelegationHost {
     if (type === "prompt") {
       if (this.promptError) throw this.promptError;
       this.messages.push({ role: "user", content: data.message });
-      if (this.reportText) {
-        setTimeout(() => {
-          if (!this.running && !this.settled) return;
-          this.messages.push({ role: "assistant", content: [{ type: "text", text: this.reportText }] });
-          this.settleTurn();
-        }, this.reportDelayMs);
-      } else {
-        setTimeout(() => this.settleTurn(), this.reportDelayMs);
-      }
+      setTimeout(() => {
+        if (!this.running && !this.settled) return;
+        const turns = Math.max(1, this.assistantTurns);
+        const single = turns === 1;
+        for (let index = 0; index < turns; index += 1) {
+          const text = index === turns - 1 ? this.reportText : `turn-${index + 1}`;
+          // 单轮且没有报告文本时保持原语义：不产出 assistant 消息（no_report 场景）。
+          if (single && !text) continue;
+          this.messages.push({ role: "assistant", content: text ? [{ type: "text", text }] : [] });
+        }
+        if (!this.neverSettle) this.settleTurn();
+      }, this.reportDelayMs);
       return {} as T;
     }
     if (type === "get_messages") return { messages: this.messages } as T;
@@ -296,7 +316,8 @@ describe("DelegationCoordinator", () => {
   }, 20_000);
 
   it("classifies a mid-turn worker crash as worker_exit with exit details", async () => {
-    const { coordinator, logs, parent, state } = await fixture();
+    // 报告延迟写长：确保 kill 发生在生成中（否则 0ms 的假报告会先落地，变成竞速用例）。
+    const { coordinator, logs, parent, state } = await fixture({ hostOptions: () => ({ reportDelayMs: 5_000 }) });
     try {
       const snapshot = await coordinator.handleRequest(startRequest(), parent) as DelegationRecordSnapshot;
       // prompt 已应答、生成进行中时 kill worker。
@@ -607,5 +628,138 @@ describe("DelegationCoordinator", () => {
         state.close();
       }
     });
+  });
+});
+
+describe("delegation turn limit", () => {
+  it("子代理跑到定义上限时收口为 truncated，并保留已产出的报告", async () => {
+    // explorer 定义 maxTurns: 40；正好跑到 40 轮（边界用 >=），随后自行空闲。
+    const { coordinator, logs, state } = await fixture({
+      hostOptions: () => ({ assistantTurns: 40, reportText: "partial report" }),
+    });
+    try {
+      const started = await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: "Too long" });
+      await coordinator.wait("/tmp/parent.jsonl", { delegationIds: [started.delegationId], timeoutSeconds: 5 });
+      expect(logs.some((entry) => entry.message === "delegation turn limit reached")).toBe(true);
+      const snapshot = coordinator.get("/tmp/parent.jsonl", { delegationIds: [started.delegationId] })[0];
+      expect(snapshot?.status).toBe("truncated");
+      // truncated 是收口不是失败：报告仍然回灌，且不当作错误。
+      expect(snapshot?.report).toContain("partial report");
+      expect(snapshot?.error).toBeUndefined();
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("子代理没按上限自己收口时，看门狗停掉它并落 truncated", async () => {
+    // neverSettle：waitForIdle 永远不返回，只能靠轮数看门狗收口（否则要等 30 分钟兜底超时）。
+    const { coordinator, hosts, logs, state } = await fixture({
+      hostOptions: () => ({ assistantTurns: 41, neverSettle: true }),
+    });
+    try {
+      const started = await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: "Runaway" });
+      await coordinator.wait("/tmp/parent.jsonl", { delegationIds: [started.delegationId], timeoutSeconds: 15 });
+      expect(logs.some((entry) => entry.message === "delegation turn limit enforced")).toBe(true);
+      expect(hosts[0]?.isRunning()).toBe(false);
+      expect(coordinator.list("/tmp/parent.jsonl")[0]?.status).toBe("truncated");
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  }, 20_000);
+
+  it("上限内的正常完成不受影响", async () => {
+    const { coordinator, logs, state } = await fixture({ hostOptions: () => ({ assistantTurns: 3 }) });
+    try {
+      const started = await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: "Short" });
+      await coordinator.wait("/tmp/parent.jsonl", { delegationIds: [started.delegationId], timeoutSeconds: 5 });
+      expect(coordinator.list("/tmp/parent.jsonl")[0]?.status).toBe("completed");
+      expect(logs.some((entry) => entry.message === "delegation turn limit reached")).toBe(false);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("continue 复用同一 worker 时按「本次运行」重新计预算", async () => {
+    // 复现审查发现的缺陷：runtime 侧曾是进程级计数，续跑只能拿到 limit-N 轮，
+    // 父侧却按本次新增轮次判定，于是把被提前掐断的续跑记成 completed。
+    const { coordinator, state } = await fixture({ hostOptions: () => ({ assistantTurns: 3 }) });
+    try {
+      const started = await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: "First" });
+      await coordinator.wait("/tmp/parent.jsonl", { delegationIds: [started.delegationId], timeoutSeconds: 5 });
+      expect(coordinator.get("/tmp/parent.jsonl", { delegationIds: [started.delegationId] })[0]?.status).toBe("completed");
+
+      // 第二次运行同样产出 3 轮（累计 6 轮）：基准是本次运行前的轮次，不应触发上限。
+      const resumed = await coordinator.continue("/tmp/parent.jsonl", { delegationId: started.delegationId, message: "More" });
+      await coordinator.wait("/tmp/parent.jsonl", { delegationIds: [resumed.delegationId], timeoutSeconds: 5 });
+      expect(coordinator.get("/tmp/parent.jsonl", { delegationIds: [resumed.delegationId] })[0]?.status).toBe("completed");
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+});
+
+describe("delegation host diagnostics", () => {
+  it("host 漏注入 runtimeId 时按命名规则兜底并告警", async () => {
+    const { coordinator, hosts, logs, state } = await fixture({ hostOptions: () => ({ runtimeId: "" }) });
+    try {
+      const record = await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: "Diagnose" });
+      // 诊断字段不允许为空：否则日志与 describeFailure 里的 childRuntimeId 永远是空串。
+      expect(hosts[0]?.runtimeId).toBe(`delegation-runtime-${record.delegationId}`);
+      expect(logs.some((entry) => entry.level === "warn" && entry.message === "delegation host created without runtimeId")).toBe(true);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("父权限缺失时按最保守的 plan 起步并告警", async () => {
+    const { coordinator, hosts, logs, state } = await fixture();
+    try {
+      await coordinator.start("/tmp/parent.jsonl", { ...startPayload, permission: undefined });
+      // 曾经的兜底是 auto：父会话可能是 plan，子代理反而更宽松（相对越权）。
+      expect(hosts[0]?.startOptions?.permission).toBe("plan");
+      expect(logs.some((entry) => entry.message === "delegation start without usable parent permission")).toBe(true);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("超长报告按统一上限截断，日志留下截断前后字符数", async () => {
+    const reportText = "y".repeat(DELEGATION_MAX_REPORT_CHARS + 2_000);
+    const { coordinator, logs, state } = await fixture({ hostOptions: () => ({ reportText }) });
+    try {
+      await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: "Long report" });
+      const waited = await coordinator.wait("/tmp/parent.jsonl", { timeoutSeconds: 5 });
+      const report = waited.delegations[0]?.report ?? "";
+      expect(report.length).toBeLessThanOrEqual(DELEGATION_MAX_REPORT_CHARS);
+      expect(report).toContain("delegation text truncated");
+      const settled = logs.find((entry) => entry.message === "delegation settled" && (entry.details as { reportTruncated?: boolean } | undefined)?.reportTruncated === true);
+      expect((settled?.details as { reportCharsRaw?: number } | undefined)?.reportCharsRaw).toBe(reportText.length);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+});
+
+describe("effectivePermission", () => {
+  it("父权限缺失或非法时取最保守的 plan", () => {
+    // 曾经的兜底是 auto：父会话为 plan 时子代理反而更宽松，属于相对越权。
+    expect(effectivePermission(undefined, "inherit")).toBe("plan");
+    expect(effectivePermission(undefined, "auto")).toBe("plan");
+    expect(effectivePermission("inherited" as never, undefined)).toBe("plan");
+  });
+
+  it("永不比父会话更宽松", () => {
+    expect(effectivePermission("plan", "auto")).toBe("plan");
+    expect(effectivePermission("auto", "full")).toBe("auto");
+    expect(effectivePermission("full", "plan")).toBe("plan");
+    expect(effectivePermission("auto", "inherit")).toBe("auto");
+    expect(effectivePermission("full", undefined)).toBe("full");
   });
 });

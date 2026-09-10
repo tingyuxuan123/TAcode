@@ -16,12 +16,15 @@ import {
   MAX_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_REPORT_CHARS,
   subagentCanMutate,
+  subagentEditsFiles,
   type SubagentDefinition,
   type SubagentModelPin,
   type SubagentThinkingLevel,
 } from "../../shared/subagents.js";
 import {
   boundedDelegationText,
+  DELEGATION_LOCAL_WAIT_TIMEOUT_SECONDS,
+  DELEGATION_MAX_TIMEOUT_SECONDS,
   isDelegationTerminal,
   type DelegationAction,
   type DelegationBridgePayload,
@@ -131,7 +134,7 @@ const delegateParameters = Type.Object({
 
 const waitParameters = Type.Object({
   delegationIds: Type.Optional(Type.Array(Type.String(), { maxItems: MAX_SUBAGENT_CONCURRENCY })),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 7_200 })),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: DELEGATION_MAX_TIMEOUT_SECONDS })),
 });
 
 const stopParameters = Type.Object({
@@ -163,11 +166,16 @@ export function composeSubagentSystemPrompt(definition: SubagentDefinition, cwd:
   return [
     `You are the "${definition.name}" subagent inside TACode, working on one task delegated by the main agent.`,
     `You cannot see the user, ask questions, or delegate further. Finish the task with the tools you have: ${toolList}.`,
-    subagentCanMutate(definition)
+    subagentEditsFiles(definition)
       ? "You may change files, but only the ones the task is about; leave everything else untouched."
-      : "You have no tools that change files or run commands, so never report an edit you could not have made.",
+      : subagentCanMutate(definition)
+        ? "You may run commands, but you must not change files: report what should change instead of editing it."
+        : "You have no tools that change files or run commands, so never report an edit you could not have made.",
     "Your final message is the report the main agent receives when you finish. Make it self-contained: what you did, what you found with exact paths and line numbers, and anything you could not finish.",
     "Keep the report tight. Report findings, not narration, and never pad it with a summary of your own process.",
+    // 上游只回灌有限字符（delegation 报告上限），超长报告会被首尾截断：明确给预算，
+    // 让子代理把关键结论放在开头，而不是写到一半被砍。
+    "Aim for at most about 1500 characters; if the task is larger, lead with the conclusion and list the rest as short bullets.",
     `Working directory: ${cwd}`,
     definition.prompt,
   ].filter((block) => block.trim()).join("\n\n");
@@ -443,7 +451,7 @@ export class DelegationRegistry {
   async wait(ids: string[] | undefined, timeoutSeconds: number | undefined, onTick?: (records: DelegationRecord[]) => void): Promise<{ status: "completed" | "timeout"; records: DelegationRecord[] }> {
     const targets = ids?.length ? this.list().filter((record) => ids.includes(record.id)) : this.active();
     if (!targets.length) return { status: "completed", records: [] };
-    const timeoutMs = Math.max(1, timeoutSeconds ?? 600) * 1_000;
+    const timeoutMs = Math.max(1, timeoutSeconds ?? DELEGATION_LOCAL_WAIT_TIMEOUT_SECONDS) * 1_000;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), timeoutMs); timer.unref?.(); });
     // 等待期间定期回报快照，驱动 UI 显示"等待子代理 x/y"进度。
@@ -623,7 +631,7 @@ export function registerRemoteDelegateTools(pi: ExtensionAPI, deps: RemoteDelega
         }
         const onAbort = () => { void deps.client.request("stop", { delegationIds: started.map((item) => item.delegationId) }); };
         signal?.addEventListener("abort", onAbort, { once: true });
-        const waited = await deps.client.request("wait", { delegationIds: started.map((item) => item.delegationId), mode: "all", timeoutSeconds: 7_200 }) as { delegations?: DelegationRecordSnapshot[]; status?: string };
+        const waited = await deps.client.request("wait", { delegationIds: started.map((item) => item.delegationId), mode: "all", timeoutSeconds: DELEGATION_MAX_TIMEOUT_SECONDS }) as { delegations?: DelegationRecordSnapshot[]; status?: string };
         signal?.removeEventListener("abort", onAbort);
         const results = waited.delegations ?? started;
         return { content: [{ type: "text", text: remoteReportBlock(results) }], details: remoteDelegateDetails(results) };
@@ -716,5 +724,14 @@ function remoteDelegateDetails(records: DelegationRecordSnapshot[]): Record<stri
 }
 
 function remoteReportBlock(records: DelegationRecordSnapshot[]): string {
-  return records.map((record) => `## ${record.role} (${record.delegationId}) — ${record.status}\n\n${record.report || record.error || "(no report)"}`).join("\n\n");
+  return records.map((record) => {
+    const body = record.report || record.error || "(no report)";
+    // 报告可能已被上限截断（首尾保留、中段省略）：把子会话文件路径交给模型，
+    // 它可以用 read_file 读回完整报告，而不是只能看被削过的版本。
+    const truncated = body.includes("delegation text truncated");
+    const hint = truncated && record.childSessionPath
+      ? `\n\n[report truncated; full text: ${record.childSessionPath}]`
+      : "";
+    return `## ${record.role} (${record.delegationId}) — ${record.status}\n\n${body}${hint}`;
+  }).join("\n\n");
 }

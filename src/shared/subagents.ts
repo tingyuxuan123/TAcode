@@ -8,6 +8,11 @@
  * - 解析失败只降级为告警，不拖垮会话。
  */
 
+import {
+  DELEGATION_MAX_CONCURRENCY,
+  DELEGATION_MAX_REPORT_CHARS,
+} from "./delegation.js";
+
 /** 子代理可以调用的 TACode 工具名。 */
 export const SUBAGENT_ASSIGNABLE_TOOLS = [
   "read_file",
@@ -22,11 +27,20 @@ export const SUBAGENT_ASSIGNABLE_TOOLS = [
 
 export type SubagentToolName = (typeof SUBAGENT_ASSIGNABLE_TOOLS)[number];
 
-/** 会改动工作区/进程的工具；声明了任意一个即视为可写子代理。 */
-export const SUBAGENT_MUTATING_TOOLS: readonly SubagentToolName[] = [
+/** 会直接改写工作区文件的工具。 */
+export const SUBAGENT_FILE_WRITE_TOOLS: readonly SubagentToolName[] = [
   "write_file",
   "edit_file",
   "apply_patch",
+];
+
+/**
+ * 会改动工作区或进程的工具：声明了任意一个即视为「可写子代理」。
+ * 注意它比 FILE_WRITE 更宽——`test-runner` 声明 `exec_command` 也在内，
+ * 但它的提示词要求只跑命令、不改文件（见 `subagentEditsFiles`）。
+ */
+export const SUBAGENT_MUTATING_TOOLS: readonly SubagentToolName[] = [
+  ...SUBAGENT_FILE_WRITE_TOOLS,
   "exec_command",
   "write_stdin",
 ];
@@ -51,11 +65,11 @@ export const SUBAGENT_THINKING_LEVELS = [
 export type SubagentThinkingLevel = (typeof SUBAGENT_THINKING_LEVELS)[number];
 
 export const MAX_SUBAGENT_DEFINITIONS = 16;
-/** 同一会话同时运行的子代理上限。 */
-export const MAX_SUBAGENT_CONCURRENCY = 8;
+/** 同一会话同时运行的子代理上限；与桥接路径共用同一常量。 */
+export const MAX_SUBAGENT_CONCURRENCY = DELEGATION_MAX_CONCURRENCY;
 export const MAX_SUBAGENT_MAX_TURNS = 60;
-/** 回灌给父模型的报告上限（首尾各半截断）。 */
-export const MAX_SUBAGENT_REPORT_CHARS = 12_000;
+/** 回灌给父模型的报告上限（首尾各半截断）；与桥接落库共用同一常量。 */
+export const MAX_SUBAGENT_REPORT_CHARS = DELEGATION_MAX_REPORT_CHARS;
 /** 单个定义文档上限。 */
 export const MAX_SUBAGENT_DOCUMENT_BYTES = 32 * 1024;
 export const MAX_SUBAGENT_NAME_LENGTH = 40;
@@ -102,6 +116,13 @@ export interface SubagentParseResult {
 export function subagentCanMutate(definition: Pick<SubagentDefinition, "tools">): boolean {
   return definition.tools.some((tool) =>
     (SUBAGENT_MUTATING_TOOLS as readonly string[]).includes(tool),
+  );
+}
+
+/** 声明了文件写入工具才算「能改文件」；只会跑命令的角色（test-runner）不算。 */
+export function subagentEditsFiles(definition: Pick<SubagentDefinition, "tools">): boolean {
+  return definition.tools.some((tool) =>
+    (SUBAGENT_FILE_WRITE_TOOLS as readonly string[]).includes(tool),
   );
 }
 

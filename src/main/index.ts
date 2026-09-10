@@ -41,6 +41,7 @@ import {
 } from "../runtime/index";
 import { AgentHost } from "./agent-host";
 import { DelegationCoordinator } from "./delegation-coordinator";
+import { delegationRunOptions } from "./delegation-run-options";
 import { AgentManager, sessionFileOf } from "./agent-manager";
 import { closeAllBrowserPopups } from "./browser/popups";
 import { closeAllDetachedBrowserWindows } from "./browser/windows";
@@ -178,7 +179,7 @@ const diagnostics = new LocalLogger({
 let delegationCoordinator: DelegationCoordinator | undefined;
 
 function createAgentHost(runtimeId: string, delegationId?: string): AgentHost {
-  return new AgentHost(
+  const host = new AgentHost(
     (event) => {
       if (!delegationId) mainWindow?.webContents.send("agent:event", event);
     },
@@ -199,6 +200,10 @@ function createAgentHost(runtimeId: string, delegationId?: string): AgentHost {
       return delegationCoordinator.handleRequest(request, host);
     },
   );
+  // 委派子会话的 host 不经过 AgentManager，runtimeId 必须在这里补上：
+  // 否则日志/失败详情里的 childRuntimeId 恒为空，委派故障无法按 runtimeId 对账。
+  host.runtimeId = runtimeId;
+  return host;
 }
 
 /** Phase 3a：每个会话一个独立 AgentHost（各自 spawn 一个 RPC worker）。
@@ -2011,11 +2016,13 @@ app.whenReady().then(async () => {
         : undefined;
       return {
         provider,
-        permission: payload.permission ?? "auto",
+        // 父权限缺失时按最保守值处理；上游 effectivePermission 已保证有值。
+        permission: payload.permission ?? "plan",
         sandbox: sandbox as SandboxMode,
         network: payload.network,
         cwd,
         sessionPath,
+        ...delegationRunOptions(payload, definition),
         ...(definition.model?.modelId || payload.model
           ? { model: definition.model?.modelId ?? payload.model }
           : {}),

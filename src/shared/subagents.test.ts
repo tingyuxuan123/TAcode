@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { DELEGATION_MAX_CONCURRENCY, DELEGATION_MAX_REPORT_CHARS, boundedDelegationText } from "./delegation";
 import {
   DEFAULT_SUBAGENT_TOOLS,
+  MAX_SUBAGENT_CONCURRENCY,
   MAX_SUBAGENT_MAX_TURNS,
+  MAX_SUBAGENT_REPORT_CHARS,
   SUBAGENT_ASSIGNABLE_TOOLS,
   mergeSubagentDefinitions,
   normalizeSubagentName,
   parseSubagentDocument,
   renderSubagentDocument,
   subagentCanMutate,
+  subagentEditsFiles,
   type SubagentDefinition,
 } from "./subagents";
 
@@ -174,5 +178,37 @@ describe("normalizeSubagentName", () => {
   it("归一化为 slug", () => {
     expect(normalizeSubagentName("  Code Reviewer!  ")).toBe("code-reviewer");
     expect(normalizeSubagentName("---")).toBe("");
+  });
+});
+
+describe("可写性与常量来源", () => {
+  const withTools = (tools: string[]): Pick<SubagentDefinition, "tools"> =>
+    ({ tools }) as Pick<SubagentDefinition, "tools">;
+
+  it("只跑命令的角色算「可写子代理」，但不算「会改文件」", () => {
+    // test-runner 声明 exec_command/write_stdin：不能被提示词告知「可以改文件」。
+    const runner = withTools(["read_file", "exec_command", "write_stdin"]);
+    expect(subagentCanMutate(runner)).toBe(true);
+    expect(subagentEditsFiles(runner)).toBe(false);
+
+    const fixer = withTools(["read_file", "edit_file", "apply_patch"]);
+    expect(subagentCanMutate(fixer)).toBe(true);
+    expect(subagentEditsFiles(fixer)).toBe(true);
+
+    const explorer = withTools([...DEFAULT_SUBAGENT_TOOLS]);
+    expect(subagentCanMutate(explorer)).toBe(false);
+    expect(subagentEditsFiles(explorer)).toBe(false);
+  });
+
+  it("并发与报告上限只有一份来源（本地与桥接不会漂移）", () => {
+    expect(MAX_SUBAGENT_CONCURRENCY).toBe(DELEGATION_MAX_CONCURRENCY);
+    expect(MAX_SUBAGENT_REPORT_CHARS).toBe(DELEGATION_MAX_REPORT_CHARS);
+    // 钉住数值本身：只断言「两者相等」的话，把来源常量一起改回 50 000 也照样绿。
+    expect(DELEGATION_MAX_REPORT_CHARS).toBe(12_000);
+    expect(DELEGATION_MAX_CONCURRENCY).toBe(8);
+    const long = "x".repeat(DELEGATION_MAX_REPORT_CHARS + 5_000);
+    const bounded = boundedDelegationText(long);
+    expect(bounded.length).toBeLessThanOrEqual(DELEGATION_MAX_REPORT_CHARS);
+    expect(bounded).toContain("delegation text truncated");
   });
 });

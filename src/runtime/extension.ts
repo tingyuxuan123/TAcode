@@ -24,6 +24,8 @@ import {
   type SubagentPermission,
 } from "../shared/subagents.js";
 import { loadEnabledSubagents } from "./subagents.js";
+import { tacodeEnv } from "./env.js";
+import { createTurnLimiter, parseTurnLimit } from "./turn-limit.js";
 import type { PermissionMode, TacodeRuntimeOptions } from "./options.js";
 import { registerAskUserTool, ASK_USER_TOOL } from "./tools/ask-user.js";
 import { capturePatchCheckpoint, type Checkpoint } from "./tools/checkpoint.js";
@@ -258,6 +260,24 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
       pi.on("tool_call", (event: ToolCallEvent, ctx): Promise<ToolCallEventResult | undefined> =>
         approveToolCallSerialized(event.toolName, event.input, permission, ctx),
       );
+
+      // 子代理的轮数预算：桥接路径由角色定义经 agent-host 的 TACODE_MAX_TURNS 下发。
+      // 到上限主动 abort，让父侧拿到「已产出的那部分」而不是被强杀；父侧协调器还会按
+      // 同一上限兜底收口（转 truncated，不算失败）。仅对下发过该变量的 worker 生效。
+      const turnLimiter = createTurnLimiter(parseTurnLimit(tacodeEnv("MAX_TURNS")));
+      if (turnLimiter) {
+        // 每次运行（含 delegate_continue 复用同一 worker）都重新计预算，与父侧
+        // 「本次运行新增轮次」的判定口径一致。
+        pi.on("before_agent_start", () => {
+          turnLimiter.startRun();
+        });
+        pi.on("turn_end", (_event, ctx) => {
+          if (turnLimiter.countTurn()) {
+            console.error("[subagent] turn limit reached; aborting the run");
+            ctx.abort();
+          }
+        });
+      }
 
       pi.on("session_shutdown", () => {
         delegateRegistry?.dispose();

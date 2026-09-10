@@ -90,6 +90,8 @@ export interface AgentStartOptions {
   writableRoots?: string[];
   /** Restrict a worker to this exact tool set; omitted keeps the runtime defaults. */
   activeTools?: string[];
+  /** 子代理的轮数预算：到上限即主动收口（桥接路径由角色定义下发）。 */
+  maxTurns?: number;
   /** Child workers use depth 1 to disable recursive delegation. */
   delegationDepth?: number;
 }

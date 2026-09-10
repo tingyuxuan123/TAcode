@@ -300,6 +300,8 @@ export class AgentHost {
         ...(options.delegationDepth !== undefined
           ? { SUBAGENT_DEPTH: String(options.delegationDepth) }
           : {}),
+        // 子代理轮数预算：runtime 侧到上限主动 abort（见 runtime/extension.ts 的 turn_end 钩子）。
+        ...(options.maxTurns ? { TACODE_MAX_TURNS: String(options.maxTurns) } : {}),
         ...(options.serviceId ? { TACODE_SERVICE_ID: options.serviceId } : {}),
         ...(this.handleDelegation ? { TACODE_DELEGATION_BRIDGE: "1" } : {}),
       },

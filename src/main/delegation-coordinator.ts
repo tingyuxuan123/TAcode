@@ -7,7 +7,9 @@ import {
   describeAssistantEvidence,
   extractAssistantReport,
   DELEGATION_BRIDGE_EVENT,
+  DELEGATION_DEFAULT_TIMEOUT_SECONDS,
   DELEGATION_MAX_CONCURRENCY,
+  DELEGATION_MAX_TIMEOUT_SECONDS,
   isDelegationTerminal,
   isDelegationAction,
   type DelegationAction,
@@ -28,6 +30,7 @@ import {
   type DelegatedThreadInput,
 } from "../runtime/state.js";
 import type { SubagentDefinition } from "../shared/subagents.js";
+import { delegationTurnLimit } from "./delegation-run-options.js";
 import type { AgentHostStartOptions } from "./agent-manager.js";
 import type { DiagnosticSink } from "./local-logger.js";
 
@@ -86,6 +89,8 @@ const MAX_RECENT_ACTIVITIES = 60;
 const MAX_ACTIVITY_TEXT_CHARS = 200;
 /** 单次委派完成的兜底超时：超时归类 timeout，不再无限等待。 */
 const DEFAULT_COMPLETION_TIMEOUT_MS = 30 * 60_000;
+/** 轮数看门狗的轮询间隔；比它更细的意义不大，子代理自己也会按同一上限收口。 */
+const TURN_LIMIT_POLL_MS = 500;
 
 export class DelegationCoordinator {
   private readonly entries = new Map<string, DelegationEntry>();
@@ -192,6 +197,14 @@ export class DelegationCoordinator {
 
     const delegationId = `delegation-${randomUUID()}`;
     const childSessionPath = path.join(getTacodeSessionsDir(), `${delegationId}.jsonl`);
+    if (!normalized.permission || !permissions.has(normalized.permission)) {
+      // 父权限缺失/非法：按最保守值处理并留痕（相对越权比误拦难排查得多）。
+      this.log("warn", "delegation start without usable parent permission", {
+        delegationId,
+        role: normalized.role,
+        parentPermission: normalized.permission,
+      });
+    }
     const permission = effectivePermission(normalized.permission, definition.permission);
     const childProvider = definition.model?.providerId ?? normalized.provider;
     const childModel = definition.model?.modelId ?? normalized.model;
@@ -255,9 +268,9 @@ export class DelegationCoordinator {
     const target = payload.mode === "any"
       ? Math.max(1, Math.min(payload.minCompleted ?? 1, entries.length))
       : entries.length;
-    const timeoutSeconds = payload.timeoutSeconds ?? 3_600;
-    if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 7_200) {
-      throw new Error("Delegation timeout must be an integer between 1 and 7200 seconds.");
+    const timeoutSeconds = payload.timeoutSeconds ?? DELEGATION_DEFAULT_TIMEOUT_SECONDS;
+    if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > DELEGATION_MAX_TIMEOUT_SECONDS) {
+      throw new Error(`Delegation timeout must be an integer between 1 and ${DELEGATION_MAX_TIMEOUT_SECONDS} seconds.`);
     }
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
@@ -316,7 +329,7 @@ export class DelegationCoordinator {
     entry.definition = definition;
     // worker 不在（应用重启/已被回收/真失败后停止）时原位重启，而不是死代码。
     if (!entry.host || !entry.host.isRunning()) {
-      const host = this.options.createHost(`delegation-runtime-${entry.record.delegationId}`, entry.record.delegationId);
+      const host = this.createDelegationHost(entry.record.delegationId);
       entry.host = host;
       const startPayload: DelegationStartPayload = {
         role: definition.name,
@@ -386,7 +399,7 @@ export class DelegationCoordinator {
         model: entry.record.model,
         permission: entry.record.permission,
       });
-      const host = this.options.createHost(`delegation-runtime-${entry.record.delegationId}`, entry.record.delegationId);
+      const host = this.createDelegationHost(entry.record.delegationId);
       entry.host = host;
       const startOptions = await this.options.buildStartOptions(
         payload,
@@ -420,17 +433,61 @@ export class DelegationCoordinator {
   private async runPrompt(entry: DelegationEntry, message: string): Promise<void> {
     const startedAt = Date.now();
     const timeoutMs = this.options.completionTimeoutMs ?? DEFAULT_COMPLETION_TIMEOUT_MS;
+    // 轮数预算：角色定义里的 maxTurns（缺省 MAX_SUBAGENT_MAX_TURNS）。
+    // 基准按「本次新增的 assistant 轮次」算——`continue` 会在同一 host 上再跑一轮，
+    // 用绝对轮次会让续跑立刻撞上限。
+    let limit = delegationTurnLimit(entry.definition ?? {});
+    let baselineTurns = 0;
+    try {
+      baselineTurns = await this.assistantTurns(entry);
+    } catch {
+      // 读不到基准就不启用本轮上限（而不是当作 0 误判）：宁可等兜底超时，也不误杀健康运行。
+      this.log("warn", "delegation turn baseline unavailable; turn limit skipped for this run", {
+        delegationId: entry.record.delegationId,
+      });
+      limit = Number.POSITIVE_INFINITY;
+    }
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let limitTimer: ReturnType<typeof setInterval> | undefined;
     const timeout = new Promise<"timeout">((resolve) => {
       timeoutTimer = setTimeout(() => resolve("timeout"), timeoutMs);
       timeoutTimer.unref?.();
     });
+    // 看门狗：子代理自己也会按同一个上限收口（runtime 的 turn_end 钩子），这里兜底
+    // 「子代理没停」的情况，避免只能等 30 分钟兜底超时。
+    const turnLimit = new Promise<"turn_limit">((resolve) => {
+      limitTimer = setInterval(() => {
+        void this.assistantTurns(entry)
+          .then((turns) => {
+            if (turns - baselineTurns >= limit) resolve("turn_limit");
+          })
+          .catch(() => undefined);
+      }, TURN_LIMIT_POLL_MS);
+      limitTimer.unref?.();
+    });
     try {
       const outcome = await Promise.race([
-        this.collectReport(entry, message, startedAt).then(() => "done" as const),
+        this.collectReport(entry, message, startedAt, { baselineTurns, limit }).then(() => "done" as const),
+        turnLimit,
         timeout,
       ]);
       clearTimeout(timeoutTimer);
+      clearInterval(limitTimer);
+      if (outcome === "turn_limit") {
+        const detail = `The delegated worker exceeded its turn limit (${limit} turns) and was stopped; the report below is what it had produced.`;
+        this.pushActivity(entry, { at: Date.now(), kind: "notice", text: detail });
+        this.log("warn", "delegation turn limit enforced", {
+          delegationId: entry.record.delegationId,
+          childSessionPath: entry.record.childSessionPath,
+          childRuntimeId: entry.host?.runtimeId,
+          limit,
+        });
+        // 收口而非失败：保留已产出的报告，状态落 truncated（渲染层按完成态展示）。
+        const report = await this.bestEffortReport(entry);
+        await entry.host?.stop().catch(() => undefined);
+        this.settle(entry, "truncated", report);
+        return;
+      }
       if (outcome === "timeout") {
         const detail = this.describeFailure("timeout", undefined, entry, startedAt);
         this.pushActivity(entry, { at: Date.now(), kind: "notice", text: detail, isError: true });
@@ -445,6 +502,7 @@ export class DelegationCoordinator {
       }
     } catch (error) {
       clearTimeout(timeoutTimer);
+      clearInterval(limitTimer);
       const host = entry.host;
       const exit = host?.describeExit?.();
       const workerGone = Boolean(exit) || (host !== undefined && !host.isRunning());
@@ -468,7 +526,12 @@ export class DelegationCoordinator {
   }
 
   /** 等待空闲并收集最终报告；失败（RPC 错误/worker 消亡）时抛出，由 runPrompt 分类。 */
-  private async collectReport(entry: DelegationEntry, message: string, startedAt: number): Promise<void> {
+  private async collectReport(
+    entry: DelegationEntry,
+    message: string,
+    startedAt: number,
+    run: { baselineTurns: number; limit: number },
+  ): Promise<void> {
     const host = entry.host;
     if (!host) throw new Error("Delegated worker host is missing.");
     await host.request("prompt", { message });
@@ -478,14 +541,33 @@ export class DelegationCoordinator {
     const messages = Array.isArray(result?.messages) ? result.messages : [];
     const evidence = describeAssistantEvidence(messages);
     const report = extractAssistantReport(messages);
+    const turns = Math.max(0, evidence.turns - run.baselineTurns);
     this.log("info", "delegation completion judged", {
       delegationId: entry.record.delegationId,
       childSessionPath: entry.record.childSessionPath,
       childRuntimeId: host.runtimeId,
       elapsedMs: Date.now() - startedAt,
       ...evidence,
+      turns,
+      turnLimit: run.limit,
       hasReport: Boolean(report),
     });
+    if (turns >= run.limit) {
+      // 轮数上限是「收口」而不是失败：子代理自己按同一上限停过（runtime 的 turn_end 钩子），
+      // 也可能只留下工具调用没有最终文本——两种都算 truncated 并保留已产出的报告。
+      const detail = `The delegated worker reached its turn limit (${run.limit} turns); the report below is what it had produced.`;
+      this.pushActivity(entry, { at: Date.now(), kind: "notice", text: detail });
+      this.log("warn", "delegation turn limit reached", {
+        delegationId: entry.record.delegationId,
+        childSessionPath: entry.record.childSessionPath,
+        childRuntimeId: host.runtimeId,
+        limit: run.limit,
+        turns,
+      });
+      this.settle(entry, "truncated", report);
+      await this.state.indexSession(entry.record.childSessionPath!).catch(() => undefined);
+      return;
+    }
     if (!report) {
       const detail = this.describeFailure("no_report", undefined, entry, startedAt, evidence);
       this.pushActivity(entry, { at: Date.now(), kind: "notice", text: detail, isError: true });
@@ -583,6 +665,43 @@ export class DelegationCoordinator {
     this.publish(entry);
   }
 
+  /**
+   * 创建子会话 host，并保证诊断字段可对账：`createHost` 由主进程注入，
+   * 漏注入 `runtimeId` 时按同一命名规则兜底并告警——否则日志与失败详情里的
+   * `childRuntimeId` 恒为空，委派故障无法按 runtimeId 对账。
+   * 注意：委派 host 由协调器自己托管，本来就不进 `AgentManager` 的 runtime 表
+   * （`agent-manager.ts`），所以诊断只能靠日志字段，不靠运行时查表。
+   */
+  private createDelegationHost(delegationId: string): DelegationHost {
+    const runtimeId = `delegation-runtime-${delegationId}`;
+    const host = this.options.createHost(runtimeId, delegationId);
+    if (!host.runtimeId) {
+      host.runtimeId = runtimeId;
+      this.log("warn", "delegation host created without runtimeId", { delegationId, runtimeId });
+    }
+    return host;
+  }
+
+  /** 子会话累计的 assistant 轮次（读不到或 worker 已停时返回 0，交给兜底超时处理）。 */
+  private async assistantTurns(entry: DelegationEntry): Promise<number> {
+    const host = entry.host;
+    if (!host || !host.isRunning()) return 0;
+    const result = await host.request<{ messages?: unknown[] }>("get_messages");
+    const messages = Array.isArray(result?.messages) ? result.messages : [];
+    return describeAssistantEvidence(messages).turns;
+  }
+
+  /** 收口用：尽力取出子会话当前的报告文本（失败返回空串，不影响落终态）。 */
+  private async bestEffortReport(entry: DelegationEntry): Promise<string> {
+    try {
+      const result = await entry.host?.request<{ messages?: unknown[] }>("get_messages");
+      const messages = Array.isArray(result?.messages) ? result.messages : [];
+      return extractAssistantReport(messages);
+    } catch {
+      return "";
+    }
+  }
+
   private settle(entry: DelegationEntry, status: DelegationStatus, report: string, error?: string): void {
     if (isDelegationTerminal(entry.record.status)) return;
     this.transition(entry, status);
@@ -594,7 +713,10 @@ export class DelegationCoordinator {
       delegationId: entry.record.delegationId,
       status,
       elapsedMs: entry.record.completedAt - entry.record.startedAt,
+      // 截断前后都记：上限改动（50k → 12k）后要能从日志看出报告是否被削过。
       reportChars: entry.record.report.length,
+      reportCharsRaw: report.length,
+      reportTruncated: entry.record.report.length !== report.length,
       error: entry.record.error,
       childSessionPath: entry.record.childSessionPath,
     });
@@ -681,10 +803,21 @@ export class DelegationCoordinator {
       if (!thread.sourceDelegationId || !thread.parentSessionPath || !thread.delegationStatus) continue;
       let status = thread.delegationStatus;
       if (status === "pending" || status === "running") status = "interrupted";
-      // 恢复持久化的 permission（旧数据可能缺失，才回退默认值），避免续跑时越权。
-      const permission: PermissionMode = thread.delegationPermission && permissions.has(thread.delegationPermission)
+      // 恢复持久化的 permission。旧数据缺失该字段时**不能**猜最保守值：这条记录是
+      // 我们自己此前授予的权限（不是父会话的），猜成 plan 会让 fixer 之类的续跑被剥掉
+      // 全部写工具、而提示词仍承诺可改文件，直接失败。保留原行为并留痕，正确修法是把
+      // 子会话的真实权限取回来（见 docs/subagent-delegation-round2-2026-09-10.md 第 7 节）。
+      const restored = thread.delegationPermission && permissions.has(thread.delegationPermission)
         ? thread.delegationPermission
-        : "auto";
+        : undefined;
+      if (!restored) {
+        this.log("warn", "delegation hydrated without persisted permission", {
+          delegationId: thread.sourceDelegationId,
+          childSessionPath: thread.sessionPath,
+          fallback: "auto",
+        });
+      }
+      const permission: PermissionMode = restored ?? "auto";
       const record: DelegationRecordSnapshot = {
         delegationId: thread.sourceDelegationId,
         parentSessionPath: thread.parentSessionPath,
@@ -738,8 +871,10 @@ export class DelegationCoordinator {
   }
 }
 
-function effectivePermission(parent: PermissionMode | undefined, requested: SubagentDefinition["permission"]): PermissionMode {
-  const parentMode = parent && permissions.has(parent) ? parent : "auto";
+export function effectivePermission(parent: PermissionMode | undefined, requested: SubagentDefinition["permission"]): PermissionMode {
+  // 兜底取最保守值：父权限缺失/非法时回退 `auto` 会让子代理比父会话（可能是 plan）更宽松，
+  // 属于相对越权；宁可误拦也不放宽。
+  const parentMode = parent && permissions.has(parent) ? parent : "plan";
   if (!requested || requested === "inherit") return parentMode;
   const requestedMode = requested as PermissionMode;
   return permissionRank[requestedMode] <= permissionRank[parentMode] ? requestedMode : parentMode;
@@ -752,6 +887,8 @@ function composeChildTask(definition: SubagentDefinition, task: string, cwd: str
     definition.prompt,
     `Working directory: ${cwd}`,
     "Return a concise, self-contained final report with exact paths and line numbers where relevant.",
+    // 报告有字符上限（`DELEGATION_MAX_REPORT_CHARS`），超长会被首尾截断后再回灌父上下文。
+    "Keep the report under about 1500 characters: lead with the conclusion, then short bullets.",
     "Delegated task:",
     task,
   ].filter((part) => part.trim()).join("\n\n");

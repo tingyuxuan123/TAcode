@@ -7,6 +7,7 @@
  */
 
 import type { AgentStartOptions } from "../shared/types";
+import { MAX_SUBAGENT_MAX_TURNS } from "../shared/subagents";
 
 /** 各 IPC 入口的统一上限（字节数按 UTF-8 计算）。 */
 export const IPC_LIMITS = {
@@ -172,6 +173,10 @@ export function validateAgentStartOptions(value: unknown): AgentStartOptions {
   const delegationDepth = optionalNumber(record.delegationDepth, "delegationDepth");
   if (delegationDepth !== undefined && (!Number.isInteger(delegationDepth) || delegationDepth < 0 || delegationDepth > 1))
     throw invalid("delegationDepth");
+  // 子代理轮数预算：仅由委派链路下发，这里保持一致以免经 IPC 打开子会话时被丢掉。
+  const maxTurns = optionalNumber(record.maxTurns, "maxTurns");
+  if (maxTurns !== undefined && (!Number.isInteger(maxTurns) || maxTurns <= 0 || maxTurns > MAX_SUBAGENT_MAX_TURNS))
+    throw invalid("maxTurns");
 
   return {
     provider: provider as AgentStartOptions["provider"],
@@ -192,6 +197,7 @@ export function validateAgentStartOptions(value: unknown): AgentStartOptions {
     ...(optionalStringArray(record.writableRoots, "writableRoots", { maxItems: 64, maxItemLength: 4_096 }) ? { writableRoots: record.writableRoots as string[] } : {}),
     ...(optionalStringArray(record.activeTools, "activeTools", { maxItems: 128, maxItemLength: 128 }) ? { activeTools: record.activeTools as string[] } : {}),
     ...(delegationDepth !== undefined ? { delegationDepth } : {}),
+    ...(maxTurns !== undefined ? { maxTurns } : {}),
   };
 }
 

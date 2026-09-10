@@ -29,9 +29,16 @@ export const DELEGATION_ACTIONS = [
 export type DelegationAction = (typeof DELEGATION_ACTIONS)[number];
 
 export const DELEGATION_MAX_TASK_CHARS = 10_000;
-export const DELEGATION_MAX_REPORT_CHARS = 50_000;
+/**
+ * 子代理报告的唯一上限（单一来源）：本地 `delegate` 工具、桥接协调器落库、
+ * 回灌父上下文的 `remoteReportBlock` 全部用它，避免两条路径预算漂移。
+ * 12 000 字符 ≈ 父上下文可接受的单次回灌预算。
+ */
+export const DELEGATION_MAX_REPORT_CHARS = 12_000;
 export const DELEGATION_MAX_TIMEOUT_SECONDS = 2 * 60 * 60;
 export const DELEGATION_DEFAULT_TIMEOUT_SECONDS = 60 * 60;
+/** 本地（进程内）`delegate_wait` 的默认等待秒数；桥接路径用 DEFAULT_TIMEOUT_SECONDS。 */
+export const DELEGATION_LOCAL_WAIT_TIMEOUT_SECONDS = 10 * 60;
 export const DELEGATION_MAX_CONCURRENCY = 8;
 
 export interface DelegationUsage {
