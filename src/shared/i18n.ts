@@ -263,6 +263,7 @@ const zh = {
   "terminal.expandAll": "展开全部 ({n} 行)",
 
   "inspect.progress": "任务规划",
+  "inspect.delegates": "子代理 {done}/{total}",
   "inspect.changes": "本轮改动",
   "inspect.changed": "改",
   "inspect.undo": "撤回上一轮改动",
@@ -932,6 +933,7 @@ const en: Record<MessageKey, string> = {
   "terminal.expandAll": "Expand all ({n} lines)",
 
   "inspect.progress": "Task plan",
+  "inspect.delegates": "Subagents {done}/{total}",
   "inspect.changes": "This turn's edits",
   "inspect.changed": "edit",
   "inspect.undo": "Undo last turn",

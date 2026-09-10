@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { visionAgentPrompt } from "../shared/vision-api";
-import { applyAgentEvent, approvalTitle, assistantErrorRecovered, assistantGroupSucceeded, assistantReplyText, baseName, cacheHitRate, collectFileChanges, collectProgressTasks, collectTodos, collectWorkingFiles, delegateProgress, dropLastTurn, filterMentionPaths, formatCommand, formatThinking, friendlyAgentError, groupConversation, hasNewCheckpointUndo, isRecoverableRequestError, isTransientStreamError, lastTurnRestoreFiles, liveStatus, mentionedFiles, normalizeFilePath, normalizeMessages, omitFinalReply, optimisticUserMessage, parseFeaturesJson, planAwaitingApproval, recoverableFailStreaks, repairMarkdownTables, sessionTerminals, sessionTools, splitHttpUrls, splitPromptChips, splitPatch, stripEmptyMarkdown, terminalLabel, thoughtSteps, toolErrorText, toolSummary, toolWritePreview, takeTrailingUrl, isHttpUrl, urlChipLabel, spliceFileMention, traceRows, turnAnchorId, turnAnchors, turnWork, undoDialogTitle, upsertSessionSummary, workspaceRelative, type ChatMessage } from "./conversation";
+import { applyAgentEvent, approvalTitle, assistantErrorRecovered, assistantGroupSucceeded, assistantReplyText, baseName, cacheHitRate, collectFileChanges, collectProgressTasks, collectTodos, collectWorkingFiles, delegateProgress, delegateTaskLabel, dropLastTurn, filterMentionPaths, formatCommand, formatThinking, friendlyAgentError, groupConversation, hasNewCheckpointUndo, isRecoverableRequestError, isTransientStreamError, lastTurnRestoreFiles, liveStatus, mentionedFiles, normalizeFilePath, normalizeMessages, omitFinalReply, optimisticUserMessage, parseFeaturesJson, planAwaitingApproval, recoverableFailStreaks, repairMarkdownTables, sessionTerminals, sessionTools, splitHttpUrls, splitPromptChips, splitPatch, stripEmptyMarkdown, terminalLabel, thoughtSteps, toolErrorText, toolSummary, toolWritePreview, takeTrailingUrl, isHttpUrl, urlChipLabel, spliceFileMention, traceRows, turnAnchorId, turnAnchors, turnWork, undoDialogTitle, upsertSessionSummary, workspaceRelative, type ChatMessage } from "./conversation";
 
 describe("conversation events", () => {
   it("calculates prompt cache hit rate from reported token usage", () => {
@@ -1559,5 +1559,241 @@ describe("upsertSessionSummary", () => {
     expect(collectProgressTasks(messages).map((item) => [item.status, item.subject])).toEqual([
       ["completed", "find x"],
     ]);
+  });
+
+  it("nests delegated subagents under the plan step they were launched from", () => {
+    const brief = "工作目录 /Users/yfdl/project/TAcode（Electron 桌面工作台 TACode）。请只读分析本项目的子代理实现链路。";
+    const messages: ChatMessage[] = [
+      {
+        id: "msg-plan",
+        role: "assistant",
+        text: "",
+        images: [],
+        work: [],
+        tools: [{
+          id: "tool-plan",
+          name: "update_plan",
+          title: "Update plan",
+          status: "complete",
+          args: {
+            plan: [
+              { step: "探索项目结构", status: "completed" },
+              { step: "启动 2 个只读子代理", status: "in_progress" },
+              { step: "汇总写入文档", status: "pending" },
+            ],
+          },
+        }],
+      },
+      {
+        id: "msg-delegate",
+        role: "assistant",
+        text: "",
+        images: [],
+        work: [],
+        tools: [{
+          id: "tool-delegate",
+          name: "delegate",
+          title: "",
+          status: "running",
+          args: { tasks: [{ role: "explorer", task: brief }, { role: "code-reviewer", task: brief }] },
+          details: {
+            total: 2,
+            done: 0,
+            tasks: [
+              { delegationId: "delegation-1", role: "explorer", task: brief, status: "running" },
+              { delegationId: "delegation-2", role: "code-reviewer", task: brief, status: "running" },
+            ],
+          },
+        }],
+      },
+    ];
+    const tasks = collectProgressTasks(messages);
+    // 计划步骤保持顺序，子代理行紧跟它们所属的第 2 步，而不是漂到列表尾部。
+    expect(tasks.map((item) => [item.kind, item.id, item.status])).toEqual([
+      ["plan", "tool-plan-plan-0", "completed"],
+      ["plan", "tool-plan-plan-1", "running"],
+      ["delegate", "delegation-1", "running"],
+      ["delegate", "delegation-2", "running"],
+      ["plan", "tool-plan-plan-2", "pending"],
+    ]);
+    // 标题是短摘要（剥掉「工作目录 …」前缀），完整 brief 只留在 detail 里。
+    expect(tasks[2]?.subject).toBe("请只读分析本项目的子代理实现链路");
+    expect(tasks[2]?.role).toBe("explorer");
+    expect(tasks[2]?.parentId).toBe("tool-plan-plan-1");
+    expect(tasks[2]?.detail).toContain("工作目录 /Users/yfdl/project/TAcode");
+  });
+
+  it("anchors delegated rows to the snapshot they were launched from, not the latest one", () => {
+    const planMessage = (id: string, steps: Array<{ step: string; status: string }>): ChatMessage => ({
+      id: `msg-${id}`,
+      role: "assistant",
+      text: "",
+      images: [],
+      work: [],
+      tools: [{ id: `tool-${id}`, name: "update_plan", title: "Update plan", status: "complete", args: { plan: steps } }],
+    });
+    const delegated: ChatMessage = {
+      id: "msg-delegate",
+      role: "assistant",
+      text: "",
+      images: [],
+      work: [],
+      tools: [{
+        id: "tool-delegate",
+        name: "delegate",
+        title: "",
+        status: "running",
+        args: { tasks: [{ role: "explorer", task: "分析代理链路" }] },
+        details: {
+          total: 1,
+          done: 0,
+          tasks: [{ delegationId: "delegation-1", role: "explorer", task: "分析代理链路", status: "running" }],
+        },
+      }],
+    };
+    const tasks = collectProgressTasks([
+      planMessage("a", [
+        { step: "第一步", status: "completed" },
+        { step: "第二步", status: "in_progress" },
+        { step: "第三步", status: "pending" },
+      ]),
+      delegated,
+      planMessage("b", [
+        { step: "第一步", status: "completed" },
+        { step: "第二步", status: "completed" },
+        { step: "第三步", status: "in_progress" },
+      ]),
+    ]);
+    // 用最后一份计划渲染步骤，但子代理仍挂在「发起时进行中」的第 2 步（下标 1）下。
+    expect(tasks.map((item) => item.id)).toEqual([
+      "tool-b-plan-0",
+      "tool-b-plan-1",
+      "delegation-1",
+      "tool-b-plan-2",
+    ]);
+  });
+
+  it("updates a repeated delegation in place instead of duplicating or freezing the row", () => {
+    const delegateMessage = (toolId: string, status: string): ChatMessage => ({
+      id: `msg-${toolId}`,
+      role: "assistant",
+      text: "",
+      images: [],
+      work: [],
+      tools: [{
+        id: toolId,
+        name: "delegate",
+        title: "",
+        status: "running",
+        args: { tasks: [{ role: "explorer", task: "分析代理链路" }] },
+        details: {
+          total: 1,
+          done: status === "completed" ? 1 : 0,
+          tasks: [{ delegationId: "delegation-1", role: "explorer", task: "分析代理链路", status }],
+        },
+      }],
+    });
+    const tasks = collectProgressTasks([
+      delegateMessage("tool-d1", "running"),
+      delegateMessage("tool-d2", "completed"),
+    ]);
+    expect(tasks.map((item) => [item.id, item.status, item.subject])).toEqual([
+      ["delegation-1", "completed", "分析代理链路"],
+    ]);
+  });
+
+  it("shortens a delegated brief into a title without swallowing the body", () => {
+    expect(delegateTaskLabel("explorer", "read main")).toBe("read main");
+    // 路径后紧跟全角逗号：只吃掉「工作目录 /repo，」，不能连正文一起吞掉。
+    expect(delegateTaskLabel("explorer", "工作目录 /repo，请只读分析 子代理链路。"))
+      .toBe("请只读分析 子代理链路");
+    expect(delegateTaskLabel("explorer", "工作目录 /Users/yfdl/project/TAcode（Electron 桌面工作台 TACode）。请只读分析本项目。"))
+      .toBe("请只读分析本项目");
+    expect(delegateTaskLabel("explorer", "工作目录 /x (Electron) — 分析链路")).toBe("分析链路");
+    // 整段只有工作目录时没有正文可提炼，保留原文而不是给出空标题。
+    expect(delegateTaskLabel("explorer", "工作目录 /x")).toBe("工作目录 /x");
+    expect(delegateTaskLabel("explorer", "x".repeat(80)).length).toBeLessThanOrEqual(42);
+    expect(delegateTaskLabel("agent", "")).toBe("agent");
+  });
+
+  it("keeps a delegation launched before any plan flat instead of hanging it on the last step", () => {
+    const delegated: ChatMessage = {
+      id: "msg-delegate",
+      role: "assistant",
+      text: "",
+      images: [],
+      work: [],
+      tools: [{
+        id: "tool-delegate",
+        name: "delegate",
+        title: "",
+        status: "running",
+        args: { tasks: [{ role: "explorer", task: "分析代理链路" }] },
+        details: {
+          total: 1,
+          done: 0,
+          tasks: [{ delegationId: "delegation-1", role: "explorer", task: "分析代理链路", status: "running" }],
+        },
+      }],
+    };
+    const planMessage: ChatMessage = {
+      id: "msg-plan",
+      role: "assistant",
+      text: "",
+      images: [],
+      work: [],
+      tools: [{ id: "tool-plan", name: "update_plan", title: "Update plan", status: "complete", args: { plan: [
+        { step: "第一步", status: "completed" },
+        { step: "第二步", status: "in_progress" },
+      ] } }],
+    };
+    const tasks = collectProgressTasks([delegated, planMessage]);
+    expect(tasks.map((item) => item.id)).toEqual([
+      "tool-plan-plan-0",
+      "tool-plan-plan-1",
+      "delegation-1",
+    ]);
+    // 没有 parentId：浮层不平铺缩进，不会假装它挂在上一步下面。
+    expect(tasks[2]?.parentId).toBeUndefined();
+  });
+
+  it("does not pin a delegation to a step that a later plan replaced", () => {
+    const delegated: ChatMessage = {
+      id: "msg-delegate",
+      role: "assistant",
+      text: "",
+      images: [],
+      work: [],
+      tools: [{
+        id: "tool-delegate",
+        name: "delegate",
+        title: "",
+        status: "running",
+        args: { tasks: [{ role: "explorer", task: "分析代理链路" }] },
+        details: {
+          total: 1,
+          done: 0,
+          tasks: [{ delegationId: "delegation-1", role: "explorer", task: "分析代理链路", status: "running" }],
+        },
+      }],
+    };
+    const planMessage = (id: string, step: string): ChatMessage => ({
+      id: `msg-${id}`,
+      role: "assistant",
+      text: "",
+      images: [],
+      work: [],
+      tools: [{ id: `tool-${id}`, name: "update_plan", title: "Update plan", status: "complete", args: { plan: [
+        { step, status: "in_progress" },
+        { step: "另一个步骤", status: "pending" },
+      ] } }],
+    });
+    const tasks = collectProgressTasks([planMessage("a", "旧计划的第一步"), delegated, planMessage("b", "重写后的第一步")]);
+    expect(tasks.map((item) => item.id)).toEqual([
+      "tool-b-plan-0",
+      "tool-b-plan-1",
+      "delegation-1",
+    ]);
+    expect(tasks[2]?.parentId).toBeUndefined();
   });
 });

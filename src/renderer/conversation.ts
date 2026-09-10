@@ -1790,20 +1790,60 @@ export function planAwaitingApproval(
 
 export type ProgressTaskStatus = "pending" | "running" | "completed" | "failed";
 
-/** 底部进度浮层使用的最小任务项：仅聚合 delegate 与 plan 两类。 */
+export type ProgressTaskKind = "plan" | "delegate";
+
+/**
+ * 底部进度浮层使用的最小任务项：仅聚合 delegate 与 plan 两类。
+ * `kind` 让浮层区分两个维度——plan 是顺序的计划步骤，delegate 是并行的子代理任务，
+ * 后者缩进挂在「发起时计划推进到的那一步」下面，不再平铺在列表尾部。
+ */
 export interface ProgressTask {
   id: string;
   subject: string;
   status: ProgressTaskStatus;
   activeForm?: string;
+  kind?: ProgressTaskKind;
+  /** 子代理角色（explorer / code-reviewer / …），浮层显示为 role chip。 */
+  role?: string;
+  /** 所属计划步骤的 id：有此字段才缩进渲染；挂在计划之前发起的子代理没有它。 */
+  parentId?: string;
+  /** 原始完整文本（委派 brief 全文），仅用于 tooltip，不占列表行宽。 */
+  detail?: string;
+}
+
+/** 计划快照里「当前推进到」的步骤下标，用于把委派子任务挂到正确的步骤下。 */
+function activePlanIndex(steps: SessionTodo[]): number {
+  const running = steps.findIndex((step) => step.active);
+  if (running >= 0) return running;
+  const pending = steps.findIndex((step) => !step.done);
+  if (pending >= 0) return pending;
+  return steps.length - 1;
+}
+
+/**
+ * 子代理委派行的短标题：剥掉「工作目录 <path>（…）。」这类 brief 前缀，取首句再截断；
+ * 完整 brief 由调用方放进 `detail`，只在 tooltip 里出现。
+ */
+export function delegateTaskLabel(role: string, task: string): string {
+  const flat = task.replace(/\s+/g, " ").trim();
+  // 只吃掉「工作目录 <path>（注释）。」这一段：路径部分不允许空格与中文标点，
+  // 否则「工作目录 /repo，请只读分析…」会把正文一起吞掉，标题反而更误导。
+  const body = flat
+    .replace(/^工作目录\s*[^\s，,。．；;：:（()）]*\s*(?:[（(][^）)]{0,40}[）)])?\s*[。．.：:，,、；;！!？?—-]*/, "")
+    .trim() || flat;
+  const sentence = body.split(/[。．!！?？;；]/)[0]?.trim() ?? "";
+  const label = sentence || body;
+  if (!label) return role;
+  return label.length > 42 ? `${label.slice(0, 41).trimEnd()}…` : label;
 }
 
 /**
  * 聚合会话中 delegate（委派）与 plan（update_plan/规划）的进度，供底部复合浮层展示。
  * 仅聚合这两类（不包含 TaskCreate/TaskUpdate 任务工具）。
+ * 输出顺序：计划步骤按计划顺序，委派子任务紧跟其所属步骤；两者维度不同（顺序 vs 并行），
+ * 浮层据此分层渲染并分开计数。
  */
 export function collectProgressTasks(messages: ChatMessage[]): ProgressTask[] {
-  const tasks = new Map<string, ProgressTask>();
   const tools = sessionTools(messages);
   // update_plan 每推进一步都会被再调一次（同一份计划的不同快照）。只取最后一次有
   // 步骤的规划工具，否则同一份计划会按调用次数在「任务规划」列表里重复出现。
@@ -1812,36 +1852,72 @@ export function collectProgressTasks(messages: ChatMessage[]): ProgressTask[] {
     const steps = todosFromPlanTool(tool);
     if (steps) latestPlan = { id: tool.id, steps };
   }
+  const steps: ProgressTask[] = (latestPlan?.steps ?? []).map((todo, index) => ({
+    id: `${latestPlan?.id ?? "plan"}-${todo.id ?? index}`,
+    subject: todo.text.trim() || "任务",
+    status: todo.done ? "completed" : todo.active ? "running" : "pending",
+    activeForm: todo.active ? todo.text.trim() : undefined,
+    kind: "plan",
+  }));
+  // 子任务按「发起那一刻计划推进到哪一步」挂载：迭代工具时维护当前位置的计划快照。
+  const children = new Map<number, ProgressTask[]>();
+  const orphans: ProgressTask[] = [];
+  // 同一委派 id 可能出现在多次更新里：保留首次出现的位置，用最新字段原地覆盖。
+  const placed = new Map<string, ProgressTask>();
+  let seenPlan: { id: string; steps: SessionTodo[] } | undefined;
   for (const tool of tools) {
-    if (tool.name === "delegate") {
-      const progress = delegateProgress(tool, tools);
-      progress.tasks.forEach((item, index) => {
-        const id = item.id ?? `${tool.id}-${item.role}-${index}`;
-        const status: ProgressTaskStatus = item.status === "running"
-          ? "running"
-          : item.status === "failed" ? "failed" : item.status === "pending" ? "pending" : "completed";
-        tasks.set(id, {
-          id,
-          subject: item.task.replace(/\s+/g, " ").trim() || item.role,
-          status,
-          activeForm: item.live?.trim() ?? undefined,
-        });
-      });
-      continue;
+    const snapshot = todosFromPlanTool(tool);
+    if (snapshot) seenPlan = { id: tool.id, steps: snapshot };
+    if (tool.name !== "delegate") continue;
+    // 锚定到「发起那一刻正在进行的步骤」；若最后一份计划把步骤替换/重排了（文本对不上），
+    // 宁可不挂，也不要钉到一个无关步骤上：这种情况平铺在列表末尾。
+    let owner: number | undefined;
+    if (seenPlan?.steps.length && steps.length) {
+      const index = activePlanIndex(seenPlan.steps);
+      const clamped = Math.min(index, steps.length - 1);
+      if (steps[clamped]?.subject === seenPlan.steps[index]?.text.trim()) owner = clamped;
     }
-    if (!latestPlan || tool.id !== latestPlan.id) continue;
-    latestPlan.steps.forEach((todo, index) => {
-      const id = `${tool.id}-${todo.id ?? index}`;
-      if (tasks.has(id)) return;
-      tasks.set(id, {
+    const progress = delegateProgress(tool, tools);
+    progress.tasks.forEach((item, index) => {
+      const id = item.id ?? `${tool.id}-${item.role}-${index}`;
+      const status: ProgressTaskStatus = item.status === "running"
+        ? "running"
+        : item.status === "failed" ? "failed" : item.status === "pending" ? "pending" : "completed";
+      const brief = item.task.replace(/\s+/g, " ").trim();
+      const task: ProgressTask = {
         id,
-        subject: todo.text.trim() || "任务",
-        status: todo.done ? "completed" : todo.active ? "running" : "pending",
-        activeForm: todo.active ? todo.text.trim() : undefined,
-      });
+        subject: delegateTaskLabel(item.role, item.task),
+        status,
+        activeForm: item.live?.trim() ?? undefined,
+        kind: "delegate",
+        role: item.role,
+        ...(brief ? { detail: brief } : {}),
+      };
+      const previous = placed.get(id);
+      if (previous) {
+        Object.assign(previous, task);
+        if (!task.detail) delete previous.detail;
+        return;
+      }
+      placed.set(id, task);
+      const parent = owner === undefined ? undefined : steps[owner];
+      if (owner === undefined || !parent) {
+        orphans.push(task);
+        return;
+      }
+      task.parentId = parent.id;
+      const list = children.get(owner) ?? [];
+      list.push(task);
+      children.set(owner, list);
     });
   }
-  return [...tasks.values()];
+  const tasks: ProgressTask[] = [];
+  steps.forEach((step, index) => {
+    tasks.push(step);
+    tasks.push(...(children.get(index) ?? []));
+  });
+  tasks.push(...orphans);
+  return tasks;
 }
 
 function todosFromPlanTool(tool: ToolActivity): SessionTodo[] | undefined {

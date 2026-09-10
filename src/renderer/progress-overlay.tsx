@@ -28,9 +28,21 @@ function statusLabel(task: ProgressTask | undefined, t: ReturnType<typeof useI18
   return t("trace.delegateDone");
 }
 
-/** 当前正在进展的任务：优先 running，其次第一个非终态项。 */
+/** 计划步骤（顺序维度）。 */
+function planRows(tasks: ProgressTask[]): ProgressTask[] {
+  return tasks.filter((task) => task.kind !== "delegate");
+}
+
+/** 委派子任务（并行维度）。 */
+function delegateRows(tasks: ProgressTask[]): ProgressTask[] {
+  return tasks.filter((task) => task.kind === "delegate");
+}
+
+/** 当前正在进展的任务：优先计划步骤（顺序主线）；计划已走完但仍有子代理在跑时回落到子代理。 */
 function currentTask(tasks: ProgressTask[]): ProgressTask | undefined {
-  return tasks.find((item) => item.status === "running")
+  const plan = planRows(tasks);
+  return plan.find((item) => item.status === "running")
+    ?? plan.find((item) => !isTerminal(item.status))
     ?? tasks.find((item) => !isTerminal(item.status));
 }
 
@@ -120,12 +132,32 @@ export const ProgressOverlay = memo(function ProgressOverlay({
     );
   }
 
-  const completed = tasks.filter((item) => isTerminal(item.status)).length;
+  // 计数口径：有计划时以计划步骤为分母，子代理另算一组；没有计划时退回扁平计数。
+  const plan = planRows(tasks);
+  const delegates = delegateRows(tasks);
+  const counted = plan.length > 0 ? plan : tasks;
+  const completed = counted.filter((item) => isTerminal(item.status)).length;
+  const delegateCount = plan.length > 0 && delegates.length > 0
+    ? t("inspect.delegates", {
+      done: delegates.filter((item) => isTerminal(item.status)).length,
+      total: delegates.length,
+    })
+    : "";
   // 流式运行时才把未完成项当作“当前任务”；完成后（收尾态）统一显示「任务已完成」。
   const active = streaming ? currentTask(tasks) : undefined;
   const liveActive = streaming && active?.status === "running" ? active : undefined;
   const pillLabel = active?.activeForm ?? active?.subject ?? t("task.doneLabel");
   const statusText = streaming && active && !isTerminal(active.status) ? statusLabel(active, t) : "";
+  // 有计划时给步骤编号 1..N；子代理行不编号，靠缩进 + role chip 表达从属关系。
+  const ordinals = new Map<string, number>();
+  if (plan.length > 0) {
+    let n = 0;
+    for (const task of tasks) {
+      if (task.kind === "delegate") continue;
+      n += 1;
+      ordinals.set(task.id, n);
+    }
+  }
 
   return (
     <div ref={rootRef} className={`progress-overlay${fading ? " fading" : ""}`}>
@@ -157,9 +189,10 @@ export const ProgressOverlay = memo(function ProgressOverlay({
         }}
       >
         {statusGlyph(liveActive ?? (active && isTerminal(active.status) ? active : undefined))}
-        <span className="progress-overlay-count">{completed}/{tasks.length}</span>
+        <span className="progress-overlay-count">{completed}/{counted.length}</span>
         <span className="progress-overlay-title">{pillLabel}</span>
         {statusText && <span className="progress-overlay-status">{statusText}</span>}
+        {delegateCount && <span className="progress-overlay-status">{delegateCount}</span>}
         {atBottom
           ? <ChevronRight size={14} className={open ? "progress-chevron-rotated" : "progress-chevron"} aria-hidden="true" />
           : <ArrowDown size={14} className="progress-chevron" aria-hidden="true" />}
@@ -168,17 +201,30 @@ export const ProgressOverlay = memo(function ProgressOverlay({
         <div className="progress-overlay-popover">
           <div className="progress-overlay-head">
             <span>{t("inspect.progress")}</span>
-            <span className="progress-overlay-head-count">{completed}/{tasks.length}</span>
+            <span className="progress-overlay-head-count">
+              {completed}/{counted.length}{delegateCount ? ` · ${delegateCount}` : ""}
+            </span>
           </div>
           <ul className="progress-overlay-list">
             {tasks.map((task) => {
               // 非流式（收尾态）不把任务当作进行中，避免继续转圈。
               const displayTask = streaming ? task : (isTerminal(task.status) ? task : undefined);
+              const nested = task.kind === "delegate" && Boolean(task.parentId);
+              const ordinal = ordinals.get(task.id);
+              // 子代理行固定显示短标题（完整 brief 留在 tooltip），正在执行的步骤挪到行尾状态位。
+              const text = task.kind === "delegate" ? task.subject : task.activeForm ?? task.subject;
+              const live = !isTerminal(task.status) && streaming ? task.activeForm?.trim() : undefined;
+              const status = isTerminal(task.status) || streaming ? statusLabel(task, t) : t("task.doneLabel");
               return (
-                <li key={task.id} className={`progress-task ${task.status}`}>
+                <li
+                  key={task.id}
+                  className={`progress-task ${task.status}${nested ? " nested" : ""}${task.kind === "delegate" ? " delegated" : ""}`}
+                >
                   <span className="progress-task-glyph">{statusGlyph(displayTask)}</span>
-                  <span className="progress-task-text">{task.activeForm ?? task.subject}</span>
-                  <span className="progress-task-status">{isTerminal(task.status) ? statusLabel(task, t) : streaming ? statusLabel(task, t) : t("task.doneLabel")}</span>
+                  {ordinal && <span className="progress-task-ordinal">{ordinal}</span>}
+                  {task.kind === "delegate" && task.role && <span className="progress-role-chip">{task.role}</span>}
+                  <span className="progress-task-text" title={task.detail}>{text}</span>
+                  <span className="progress-task-status">{task.kind === "delegate" && live && live !== text ? live : status}</span>
                   {renderTaskDetail?.(task)}
                 </li>
               );

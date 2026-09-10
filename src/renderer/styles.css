@@ -2529,6 +2529,11 @@ textarea::selection,
 .progress-task-glyph, .progress-task-glyph > svg { flex: none; }
 .progress-task-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12.5px * var(--ui-font-scale)); }
 .progress-task-status { margin-left: auto; flex: none; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); white-space: nowrap; }
+/* 委派子任务：缩进挂在所属计划步骤下，用 role chip + 连接线表达从属关系 */
+.progress-task.nested { position: relative; padding-left: 26px; }
+.progress-task.nested::before { content: ""; position: absolute; left: 14px; top: 50%; width: 7px; height: 1px; background: var(--line-strong); }
+.progress-task-ordinal { flex: none; min-width: 12px; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); font-variant-numeric: tabular-nums; text-align: right; }
+.progress-role-chip { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--ink-3); font-size: calc(10.5px * var(--ui-font-scale)); }
 .flow-spinner { animation: flow-spin 1.1s linear infinite; }
 @keyframes flow-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
