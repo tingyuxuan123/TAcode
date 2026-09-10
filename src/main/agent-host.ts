@@ -7,7 +7,14 @@ import { killProcessTree } from "./process-tree";
 import { drainUtf8Lines } from "./rpc-lines";
 import { IPC_LIMITS, formatBytes, redactSecrets } from "./ipc-validation";
 import type { DiagnosticSink } from "./local-logger";
-import { type BrowserParams, type BrowserRequest, type BrowserToolResult } from "../shared/browser-tools";
+import type { BrowserParams, BrowserRequest, BrowserToolResult } from "../shared/browser-tools";
+import {
+  DELEGATION_BRIDGE_EVENT,
+  DELEGATION_BRIDGE_REQUEST,
+  DELEGATION_BRIDGE_RESPONSE,
+  type DelegationBridgeEvent,
+  type DelegationBridgeRequest,
+} from "../shared/delegation";
 
 interface PendingRequest {
   resolve(value: unknown): void;
@@ -65,6 +72,7 @@ export class AgentHost {
     private readonly executeBrowser?: (tool: string, params: BrowserParams, signal: AbortSignal) => Promise<BrowserToolResult>,
     private readonly resetBrowser?: () => void,
     private readonly log?: DiagnosticSink,
+    private readonly handleDelegation?: (request: DelegationBridgeRequest, host: AgentHost) => Promise<unknown>,
   ) {}
 
   /** 已发出事件的最高序号；snapshot 用它切出需要回放的事件。 */
@@ -189,6 +197,10 @@ export class AgentHost {
     if (options.maxTokens) args.push("--max-tokens", String(options.maxTokens));
     if (options.effort) args.push("--effort", options.effort);
     args.push("--transport", "chat");
+    if (options.activeTools) {
+      if (options.activeTools.length) args.push("--tools", options.activeTools.join(","));
+      else args.push("--no-tools");
+    }
     if (options.sessionPath) args.push("--session", options.sessionPath);
     if (options.visionExtension) args.push("--extension", options.visionExtension);
     if (options.providerExtension) args.push("--extension", options.providerExtension);
@@ -218,6 +230,11 @@ export class AgentHost {
         ...(options.writableRoots?.length
           ? { TETHER_WRITABLE_ROOTS: options.writableRoots.join(path.delimiter) }
           : {}),
+        ...(options.delegationDepth !== undefined
+          ? { SUBAGENT_DEPTH: String(options.delegationDepth) }
+          : {}),
+        ...(options.serviceId ? { TACODE_SERVICE_ID: options.serviceId } : {}),
+        ...(this.handleDelegation ? { TACODE_DELEGATION_BRIDGE: "1" } : {}),
       },
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe", "ipc"],
@@ -225,18 +242,54 @@ export class AgentHost {
     this.child = child;
     child.on("message", (message: unknown) => {
       if (this.child !== child || !message || typeof message !== "object") return;
-      const request = message as BrowserRequest | { type: "tether:browser:cancel"; id: string };
-      if (typeof request.id !== "string") return;
-      if (request.type === "tether:browser:cancel") { this.browserRequests.get(request.id)?.abort(); return; }
-      if (request.type !== "tether:browser:request" || !this.executeBrowser || this.browserRequests.has(request.id)) return;
+      const request = message as
+        | BrowserRequest
+        | { type: "tether:browser:cancel"; id: string }
+        | DelegationBridgeRequest;
+      if (request.type === DELEGATION_BRIDGE_REQUEST && typeof request.requestId === "string") {
+        const bridgeRequest = {
+          ...request,
+          parentSessionPath:
+            request.parentSessionPath || this.sessionKey || this.requestedSessionPath || "",
+        } as DelegationBridgeRequest;
+        void Promise.resolve()
+          .then(() => this.handleDelegation?.(bridgeRequest, this))
+          .then(
+            (result) => {
+              if (this.child === child && child.connected) {
+                child.send({
+                  type: DELEGATION_BRIDGE_RESPONSE,
+                  requestId: request.requestId,
+                  ok: true,
+                  result,
+                }, () => {});
+              }
+            },
+            (error) => {
+              if (this.child === child && child.connected) {
+                child.send({
+                  type: DELEGATION_BRIDGE_RESPONSE,
+                  requestId: request.requestId,
+                  ok: false,
+                  error: error instanceof Error ? error.message : String(error),
+                }, () => {});
+              }
+            },
+          );
+        return;
+      }
+      const browserRequest = request as BrowserRequest | { type: "tether:browser:cancel"; id: string };
+      if (typeof browserRequest.id !== "string") return;
+      if (browserRequest.type === "tether:browser:cancel") { this.browserRequests.get(browserRequest.id)?.abort(); return; }
+      if (browserRequest.type !== "tether:browser:request" || !this.executeBrowser || this.browserRequests.has(browserRequest.id)) return;
       const controller = new AbortController();
-      this.browserRequests.set(request.id, controller);
+      this.browserRequests.set(browserRequest.id, controller);
       const reply = (payload: object) => {
-        if (this.child === child && child.connected) child.send({ type: "tether:browser:response", id: request.id, ...payload }, () => {});
+        if (this.child === child && child.connected) child.send({ type: "tether:browser:response", id: browserRequest.id, ...payload }, () => {});
       };
-      Promise.resolve().then(() => this.executeBrowser!(request.tool, request.params, controller.signal))
+      Promise.resolve().then(() => this.executeBrowser!(browserRequest.tool, browserRequest.params, controller.signal))
         .then((result) => reply({ result }), (error) => reply({ error: error instanceof Error ? error.message : String(error) }))
-        .finally(() => this.browserRequests.delete(request.id));
+        .finally(() => this.browserRequests.delete(browserRequest.id));
     });
     child.stdout.on("data", (chunk: Buffer) => this.handleChunk(chunk));
     child.stderr.on("data", (chunk: Buffer) => {
@@ -277,6 +330,12 @@ export class AgentHost {
     });
 
     return this.snapshot();
+  }
+
+  sendDelegationEvent(event: DelegationBridgeEvent): void {
+    const child = this.child;
+    if (!child || !child.connected) return;
+    child.send({ type: DELEGATION_BRIDGE_EVENT, event: event.event }, () => {});
   }
 
   async stop(): Promise<void> {

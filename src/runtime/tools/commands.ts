@@ -55,9 +55,18 @@ export interface CommandToolOptions {
 }
 
 export function registerCommandTools(pi: ExtensionAPI, options: CommandToolOptions): void {
+  for (const tool of createCommandTools(options))
+    pi.registerTool(tool as ToolDefinition<any, any, any>);
+}
+
+/**
+ * 构造命令类工具定义（不注册）。子代理委派会复用这些定义，
+ * 让子代理的 exec_command 走与父会话相同的沙箱与权限路径。
+ */
+export function createCommandTools(options: CommandToolOptions) {
   const { registry, getPermission, access, sandboxFor, onAccessChanged, onCheckpoint } = options;
 
-  pi.registerTool({
+  const execTool: ToolDefinition<typeof execCommandParameters, ManagedResult> = {
     name: "exec_command",
     label: "Execute command",
     description:
@@ -136,9 +145,9 @@ export function registerCommandTools(pi: ExtensionAPI, options: CommandToolOptio
         if (liveTimer) clearTimeout(liveTimer);
       }
     },
-  });
+  };
 
-  pi.registerTool({
+  const writeTool: ToolDefinition<typeof writeStdinParameters, ManagedResult> = {
     name: "write_stdin",
     label: "Write to process",
     description: "Write characters to, poll, or terminate a managed process returned by exec_command.",
@@ -157,7 +166,9 @@ export function registerCommandTools(pi: ExtensionAPI, options: CommandToolOptio
         details: result,
       };
     },
-  });
+  };
+
+  return [execTool, writeTool];
 }
 
 export function formatManagedResult(result: ManagedResult, live = false): string {

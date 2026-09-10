@@ -170,9 +170,12 @@ export function SessionRow({
     callback();
   };
 
+  const delegationRunning = session.delegationStatus === "pending" || session.delegationStatus === "running";
+  const sessionIsRunning = running || delegationRunning;
+
   return (
     <div
-      className={["session-item", active && "active", menu && "menu-open"].filter(Boolean).join(" ")}
+      className={["session-item", session.sourceDelegationId && "delegated-session", active && "active", menu && "menu-open"].filter(Boolean).join(" ")}
       onContextMenu={(event) => {
         event.preventDefault();
         openMenu(event.clientX, event.clientY);
@@ -201,16 +204,17 @@ export function SessionRow({
         <button
           type="button"
           className="session-row"
-          title={session.title || t("common.unnamed")}
-          aria-label={session.title || t("common.unnamed")}
+          title={session.sourceDelegationId ? `${session.delegationRole ?? "subagent"}: ${session.title || t("common.unnamed")}` : session.title || t("common.unnamed")}
+          aria-label={session.sourceDelegationId ? `${session.delegationRole ?? "subagent"}: ${session.title || t("common.unnamed")}` : session.title || t("common.unnamed")}
           aria-current={active ? "page" : undefined}
           onClick={onOpen}
         >
           {session.pinned && <Icon path={PIN_ICON} size={12} />}
-          {running && (
+          {sessionIsRunning && (
             <span className="session-running" title={t("nav.sessionRunning")} aria-label={t("nav.sessionRunning")}></span>
           )}
-          <span className="sidebar-full-label">{session.title || t("common.unnamed")}</span>
+          {session.sourceDelegationId && !sessionIsRunning && <Icon path="M4 5h16v14H4zM8 9h8M8 13h5" size={12} />}
+          <span className="sidebar-full-label">{session.sourceDelegationId ? `${session.delegationRole ?? "subagent"} · ` : ""}{session.title || t("common.unnamed")}</span>
           <span className="sidebar-short-label" aria-hidden="true">{Array.from(session.title.trim() || t("common.unnamed")).slice(0, 2).join("")}</span>
         </button>
       )}

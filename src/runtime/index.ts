@@ -80,6 +80,19 @@ export {
 } from "./state.js";
 export { getTacodeRpcEntryPath } from "./rpc-client.js";
 export {
+  BUILTIN_SUBAGENTS,
+  deleteUserSubagent,
+  getSubagentsDir,
+  getSubagentsStatePath,
+  loadEnabledSubagents,
+  loadSubagents,
+  loadUserSubagents,
+  readUserSubagent,
+  saveUserSubagent,
+  setSubagentEnabled,
+  subagentDocumentPath,
+} from "./subagents.js";
+export {
   ASK_USER_TOOL,
   WEB_ACCESS_TOOLS,
   defaultActiveTools,

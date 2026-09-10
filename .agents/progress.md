@@ -1,5 +1,16 @@
 # 模型供应商管理进度
 
+## 2026-09-09：子代理（delegate）P0–P3 全量落地（22:06，Asia/Shanghai）
+
+- 背景：用户看到 PI-Desktop 的「智能体模式 + 子代理卡片」，要求把之前分析的 P0–P3 一次做完再统一测试。
+- **P0 运行时**：新增 `src/runtime/tools/delegate.ts`。子代理是 worker 进程内第二个 Pi `Agent`（`@earendil-works/pi-agent-core`），独立 system prompt / 模型 / 思考等级，工具集按定义声明并复用父会话 `ExtensionContext`（同一沙箱、同一审批）。`delegate` 默认阻塞到全部结算，进度用 `onUpdate` 回流渲染层现有卡片；父上下文只拿报告（12k 截断）。
+- **P1 定义与设置**：新增 `src/shared/subagents.ts`（定义结构、可分配工具白名单、缺省只读、frontmatter 解析/渲染、上限常量）+ `src/runtime/subagents.ts`（内置 explorer/code-reviewer/test-runner/fixer、`~/.tether/subagents/*.md` 用户文档按名覆盖、启用状态 `~/.tether/subagents.json`）；主进程新增 `subagents:list|read|save|remove|set-enabled|reveal` IPC + preload + 设置页「子代理」（`src/renderer/subagent-settings.tsx`，列表/启停/编辑校验/删除/打开目录）。
+- **P2 生命周期与卡片**：`delegate` 支持 `background: true`；新增 `delegate_wait` / `delegate_list` / `delegate_stop`；后台结算后按批回灌报告（`sendUserMessage(deliverAs: followUp)`）；渲染层 `delegationStatuses()` 从生命周期工具结果反推委派状态，`delegateProgress(tool, tools)` 回填到卡片与底部「任务规划」，新增生命周期工具行文案与 i18n。
+- **P3 隔离与成本**：定义支持 `model` pin（找不到即失败，不静默降级）、`thinkingLevel`、`maxTurns`（超限标 truncated 并保留部分报告）、`permission: plan` 时剔除写类工具；子代理 token 用量汇总回传并在卡片展示；子代理工具调用统一走父会话审批（新增串行化，避免多子代理同时弹确认覆盖渲染层单槽位）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 58 文件 496 测试通过（新增 `shared/subagents.test.ts` 11 项、`runtime/subagents.test.ts` 8 项、`runtime/tools/delegate.test.ts` 10 项、`main/agent-subagents.test.ts` 真实 RPC worker 冒烟 1 项：父模型调用 delegate → 子代理跑出报告 → 父回合继续）；`pnpm build` 通过；`pnpm dev` 启动无报错。
+- 已知限制（未做）：子代理事件不落父会话转录（只回报告，设计如此）；项目级子代理定义未支持（仅全局）；子代理行不会出现在会话文件里，重开会话后只剩父会话的工具结果；`permission: inherit` 之外只实现了 plan 限制（未做逐调用权限作用域）；Web 搜索类工具未开放给子代理。
+- 未提交、未发布、未改 AGENTS.md。
+
 ## 2026-09-09：修复「任务规划」列表重复（20:42，Asia/Shanghai）
 
 - 现象（用户报告）：底部进度浮层展开的「任务规划」里同一份计划重复出现（计数也被抬高，如 3/6）。

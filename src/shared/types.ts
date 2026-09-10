@@ -45,6 +45,13 @@ export interface SessionSummary {
   preview?: string;
   pinned: boolean;
   archived: boolean;
+  parentSessionPath?: string;
+  sourceDelegationId?: string;
+  delegationRole?: string;
+  delegationStatus?: import("./delegation").DelegationStatus;
+  delegationDepth?: number;
+  delegationReport?: string;
+  delegationError?: string;
 }
 
 export interface ProviderStatus {
@@ -81,6 +88,10 @@ export interface AgentStartOptions {
   extraModels?: string[];
   /** Extra host paths merged into workspace-write sandbox (absolute). */
   writableRoots?: string[];
+  /** Restrict a worker to this exact tool set; omitted keeps the runtime defaults. */
+  activeTools?: string[];
+  /** Child workers use depth 1 to disable recursive delegation. */
+  delegationDepth?: number;
 }
 
 export interface AgentSessionStats {
@@ -225,6 +236,18 @@ export interface DesktopApi {
     remove(id: string): Promise<void>;
     pin(id: string, pinned: boolean): Promise<void>;
     rename(id: string, title: string): Promise<void>;
+  };
+  /** 子代理定义管理（`~/.tether/subagents/*.md` + 启用状态）。 */
+  subagents: {
+    list(): Promise<{
+      subagents: import("./subagents").SubagentInfo[];
+      warnings: string[];
+    }>;
+    read(name: string): Promise<string | null>;
+    save(text: string): Promise<import("./subagents").SubagentDefinition>;
+    remove(name: string): Promise<boolean>;
+    setEnabled(name: string, enabled: boolean): Promise<boolean>;
+    reveal(name?: string): Promise<void>;
   };
   auth: {
     status(): Promise<ProviderStatus[]>;

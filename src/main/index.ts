@@ -15,12 +15,19 @@ import {
 } from "electron";
 import {
   createTacodeCredentialStore,
+  deleteUserSubagent,
   ensureSessionRuntimeLink,
+  getSubagentsDir,
   getTacodeHome,
   getStoredDeepSeekBaseUrl,
   getStoredModelSelection,
   initializeTacodeHome,
   listTacodeThreads,
+  loadSubagents,
+  readUserSubagent,
+  saveUserSubagent,
+  setSubagentEnabled,
+  subagentDocumentPath,
   TacodeStateStore,
   defaultModelForProvider,
   providerDisplayName,
@@ -33,6 +40,7 @@ import {
   type SupportedProviderId,
 } from "../runtime/index";
 import { AgentHost } from "./agent-host";
+import { DelegationCoordinator } from "./delegation-coordinator";
 import { AgentManager, sessionFileOf } from "./agent-manager";
 import { closeAllBrowserPopups } from "./browser/popups";
 import { closeAllDetachedBrowserWindows } from "./browser/windows";
@@ -88,11 +96,14 @@ import {
   type Locale,
 } from "../shared/i18n";
 import { getLatestUpdate } from "./update-check";
+import { MAX_SUBAGENT_DOCUMENT_BYTES } from "../shared/subagents";
 import {
   IPC_LIMITS,
   assertPayloadLimit,
   base64PayloadBytes,
   formatBytes,
+  optionalBoolean,
+  optionalString,
   requireRecord,
   requireString,
   validateAgentStartOptions,
@@ -105,6 +116,7 @@ import {
   type AgentSnapshot,
   type AgentStartOptions,
   type ProviderStatus,
+  type SandboxMode,
   type SessionSummary,
   type WorkspaceItem,
 } from "../shared/types";
@@ -163,23 +175,36 @@ const diagnostics = new LocalLogger({
     }),
 });
 
-/** Phase 3a：每个会话一个独立 AgentHost（各自 spawn 一个 RPC worker）。
- * 切换会话不再杀其它会话的 host，后台会话继续运行；命令按 runtimeId 路由。 */
-const agentManager = new AgentManager({
-  createHost: (runtimeId) =>
-    new AgentHost(
-      (event) => mainWindow?.webContents.send("agent:event", event),
-      (message, sessionKey, errorRuntimeId) =>
+let delegationCoordinator: DelegationCoordinator | undefined;
+
+function createAgentHost(runtimeId: string, delegationId?: string): AgentHost {
+  return new AgentHost(
+    (event) => {
+      if (!delegationId) mainWindow?.webContents.send("agent:event", event);
+    },
+    (message, sessionKey, errorRuntimeId) => {
+      if (!delegationId) {
         mainWindow?.webContents.send("agent:error", {
           message,
           __sessionId: sessionKey,
           __runtimeId: errorRuntimeId,
-        }),
-      (tool, params, signal) =>
-        browserAutomation.execute(tool, params, signal, runtimeId),
-      () => browserAutomation.resetAgent(runtimeId),
-      diagnostics,
-    ),
+        });
+      }
+    },
+    (tool, params, signal) => browserAutomation.execute(tool, params, signal, runtimeId),
+    () => browserAutomation.resetAgent(runtimeId),
+    diagnostics,
+    (request, host) => {
+      if (!delegationCoordinator) throw new Error("Delegation coordinator is not ready.");
+      return delegationCoordinator.handleRequest(request, host);
+    },
+  );
+}
+
+/** Phase 3a：每个会话一个独立 AgentHost（各自 spawn 一个 RPC worker）。
+ * 切换会话不再杀其它会话的 host，后台会话继续运行；命令按 runtimeId 路由。 */
+const agentManager = new AgentManager({
+  createHost: (runtimeId) => createAgentHost(runtimeId),
 });
 let activeAgentCwd: string | undefined;
 
@@ -451,7 +476,10 @@ function createWindow(): void {
     closeAllDetachedBrowserWindows();
     // macOS keeps the app alive after the window closes; still reap the RPC tree
     // so sandbox shells don't keep burning RAM in the background.
-    void agentManager.stopAll();
+    void Promise.all([
+      agentManager.stopAll(),
+      delegationCoordinator?.stopAll() ?? Promise.resolve(),
+    ]);
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
@@ -546,6 +574,46 @@ function registerIpc(): void {
   ipcMain.handle("app:list-skills", async () =>
     listLocalSkills(activeAgentCwd),
   );
+
+  ipcMain.handle("subagents:list", async () => loadSubagents());
+  ipcMain.handle("subagents:read", async (_event, rawName: unknown) =>
+    (await readUserSubagent(requireString(rawName, "子代理名称", { maxLength: 128 }))) ?? null,
+  );
+  ipcMain.handle("subagents:save", async (_event, rawText: unknown) =>
+    saveUserSubagent(
+      requireString(rawText, "子代理文档", {
+        maxLength: MAX_SUBAGENT_DOCUMENT_BYTES + 4_096,
+      }),
+    ),
+  );
+  ipcMain.handle("subagents:remove", async (_event, rawName: unknown) =>
+    deleteUserSubagent(requireString(rawName, "子代理名称", { maxLength: 128 })),
+  );
+  ipcMain.handle(
+    "subagents:set-enabled",
+    async (_event, rawName: unknown, rawEnabled: unknown) => {
+      const name = requireString(rawName, "子代理名称", { maxLength: 128 });
+      const enabled = optionalBoolean(rawEnabled, "enabled");
+      if (enabled === undefined) throw new Error("无效的 enabled");
+      return setSubagentEnabled(name, enabled);
+    },
+  );
+  ipcMain.handle("subagents:reveal", async (_event, rawName?: unknown) => {
+    const name = optionalString(rawName, "子代理名称", { maxLength: 128 });
+    if (name) {
+      const file = subagentDocumentPath(name);
+      try {
+        await fsp.access(file);
+        shell.showItemInFolder(file);
+        return;
+      } catch {
+        // 用户文档不存在时退回到目录。
+      }
+    }
+    const dir = getSubagentsDir();
+    await fsp.mkdir(dir, { recursive: true });
+    await shell.openPath(dir);
+  });
 
   ipcMain.handle("window:minimize", () => mainWindow?.minimize());
   ipcMain.handle("window:toggle-maximize", () => {
@@ -864,6 +932,13 @@ function registerIpc(): void {
         ...(thread.preview ? { preview: thread.preview } : {}),
         pinned: thread.pinned,
         archived: thread.archived,
+        ...(thread.parentSessionPath ? { parentSessionPath: thread.parentSessionPath } : {}),
+        ...(thread.sourceDelegationId ? { sourceDelegationId: thread.sourceDelegationId } : {}),
+        ...(thread.delegationRole ? { delegationRole: thread.delegationRole } : {}),
+        ...(thread.delegationStatus ? { delegationStatus: thread.delegationStatus } : {}),
+        ...(thread.delegationDepth !== undefined ? { delegationDepth: thread.delegationDepth } : {}),
+        ...(thread.delegationReport ? { delegationReport: thread.delegationReport } : {}),
+        ...(thread.delegationError ? { delegationError: thread.delegationError } : {}),
       }),
     );
     return mergeLoadedSessions(mapped, cwd);
@@ -878,6 +953,11 @@ function registerIpc(): void {
       // sessionIdFromPath 匹配会漏删，导致删除后残留合成占位（title 退化为 cwd 名，
       // 需再删一次）。这里按真实路径 + basename + cwd 多重匹配，确保一次删净。
       const thread = store.get(id);
+      if (thread?.sourceDelegationId && thread.parentSessionPath) {
+        await delegationCoordinator?.stop(thread.parentSessionPath, {
+          delegationIds: [thread.sourceDelegationId],
+        });
+      }
       const targets = new Set<string>();
       if (thread) {
         if (thread.sessionPath) targets.add(thread.sessionPath);
@@ -1049,11 +1129,20 @@ function registerIpc(): void {
       ...startOptions
     } = options;
     let sessionPath = startOptions.sessionPath;
+    let delegatedSession = false;
     if (sessionPath) {
       sessionPath = await ensureSessionRuntimeLink(
         sessionPath,
         storagePath || sessionPath,
       );
+      const store = new TacodeStateStore();
+      try {
+        await store.refresh();
+        const thread = store.findBySessionPath(sessionPath);
+        delegatedSession = Boolean(thread?.sourceDelegationId);
+      } finally {
+        store.close();
+      }
     }
 
     // 命中已在运行的同一会话（切回后台会话，含 openSession 的 resume=false）：
@@ -1088,6 +1177,7 @@ function registerIpc(): void {
     // 每个会话独立 host：已有实例（同会话重启）则复用，否则新建，绝不停止其它会话。
     const started = await agentManager.start({
       ...startOptions,
+      ...(delegatedSession ? { delegationDepth: 1 } : {}),
       ...(sessionPath ? { sessionPath } : {}),
       cwd,
       sandbox,
@@ -1900,6 +1990,60 @@ async function addSkillManifests(root: string, files: string[]): Promise<void> {
 
 app.whenReady().then(async () => {
   await initializeTacodeHome();
+  delegationCoordinator = new DelegationCoordinator({
+    createHost: (runtimeId, delegationId) => createAgentHost(runtimeId, delegationId),
+    findParentHost: (sessionPath) => agentManager.findBySession(sessionPath),
+    buildStartOptions: async (payload, definition, sessionPath) => {
+      const provider = payload.provider as SupportedProviderId;
+      if (!SUPPORTED_PROVIDER_IDS.includes(provider)) throw new Error(`Unsupported delegation provider: ${payload.provider}`);
+      const tasksDir = path.resolve(path.join(userDataPath, "tasks"));
+      const cwd = path.resolve(payload.cwd);
+      await fsp.mkdir(cwd, { recursive: true });
+      const sandbox = cwd === tasksDir ? "read-only" : payload.sandbox;
+      const storedUrl = provider === "deepseek" ? getStoredDeepSeekBaseUrl() : undefined;
+      const rawUrl = payload.baseUrl ?? storedUrl;
+      await syncDeepSeekVisionConfig().catch(() => undefined);
+      const profiles = await loadChatProfiles();
+      const maxTokens = payload.maxTokens ?? activeCustomProfile(profiles)?.maxTokens;
+      const baseUrl = rawUrl ? apiBaseUrl(rawUrl) : undefined;
+      const desktopProvider = payload.serviceId
+        ? await resolveDesktopProvider(payload.serviceId, definition.model?.modelId ?? payload.model)
+        : undefined;
+      return {
+        provider,
+        permission: payload.permission ?? "auto",
+        sandbox: sandbox as SandboxMode,
+        network: payload.network,
+        cwd,
+        sessionPath,
+        ...(definition.model?.modelId || payload.model
+          ? { model: definition.model?.modelId ?? payload.model }
+          : {}),
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(maxTokens ? { maxTokens } : {}),
+        ...(payload.writableRoots?.length ? { writableRoots: payload.writableRoots } : {}),
+        activeTools: [...definition.tools],
+        delegationDepth: 1,
+        visionExtension: visionExtensionPath(),
+        browserExtension: path.join(currentDirectory, "../extensions/browser.js"),
+        visionConfig: visionConfigPath(),
+        visionUploads: visionUploadsDir(),
+        ...(desktopProvider
+          ? {
+              provider: "openai" as const,
+              model: desktopProvider.model,
+              baseUrl: desktopProvider.config.baseUrl,
+              maxTokens: undefined,
+              providerExtension: path.join(currentDirectory, "../extensions/provider.js"),
+              desktopProvider,
+            }
+          : {}),
+      };
+    },
+    emitEvent: (parentSessionPath, event) => {
+      agentManager.findBySession(parentSessionPath)?.sendDelegationEvent(event);
+    },
+  });
   await loadLoadedSessions();
   await loadLocale();
   protocol.handle(PREVIEW_SCHEME, servePreview);
@@ -1950,8 +2094,10 @@ app.on("before-quit", (event) => {
   workspaceWatcher?.close();
   closeAllBrowserPopups();
   closeAllDetachedBrowserWindows();
-  agentManager
-    .stopAll()
+  Promise.all([
+    agentManager.stopAll(),
+    delegationCoordinator?.close() ?? Promise.resolve(),
+  ])
     .catch(() => undefined)
     .finally(() => app.exit(0));
 });

@@ -169,6 +169,9 @@ export function validateAgentStartOptions(value: unknown): AgentStartOptions {
   const maxTokens = optionalNumber(record.maxTokens, "maxTokens");
   if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 1_000_000))
     throw invalid("maxTokens");
+  const delegationDepth = optionalNumber(record.delegationDepth, "delegationDepth");
+  if (delegationDepth !== undefined && (!Number.isInteger(delegationDepth) || delegationDepth < 0 || delegationDepth > 1))
+    throw invalid("delegationDepth");
 
   return {
     provider: provider as AgentStartOptions["provider"],
@@ -187,6 +190,8 @@ export function validateAgentStartOptions(value: unknown): AgentStartOptions {
     ...(optionalBoolean(record.resume, "resume") !== undefined ? { resume: record.resume as boolean } : {}),
     ...(optionalStringArray(record.extraModels, "extraModels", { maxItems: 200, maxItemLength: 200 }) ? { extraModels: record.extraModels as string[] } : {}),
     ...(optionalStringArray(record.writableRoots, "writableRoots", { maxItems: 64, maxItemLength: 4_096 }) ? { writableRoots: record.writableRoots as string[] } : {}),
+    ...(optionalStringArray(record.activeTools, "activeTools", { maxItems: 128, maxItemLength: 128 }) ? { activeTools: record.activeTools as string[] } : {}),
+    ...(delegationDepth !== undefined ? { delegationDepth } : {}),
   };
 }
 

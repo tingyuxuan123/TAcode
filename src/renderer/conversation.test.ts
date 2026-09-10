@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { visionAgentPrompt } from "../shared/vision-api";
-import { applyAgentEvent, approvalTitle, assistantErrorRecovered, assistantGroupSucceeded, assistantReplyText, baseName, cacheHitRate, collectFileChanges, collectProgressTasks, collectTodos, collectWorkingFiles, delegateProgress, dropLastTurn, filterMentionPaths, formatCommand, formatThinking, friendlyAgentError, groupConversation, hasNewCheckpointUndo, isRecoverableRequestError, isTransientStreamError, lastTurnRestoreFiles, liveStatus, mentionedFiles, normalizeFilePath, normalizeMessages, omitFinalReply, optimisticUserMessage, parseFeaturesJson, planAwaitingApproval, recoverableFailStreaks, repairMarkdownTables, sessionTerminals, splitHttpUrls, splitPromptChips, splitPatch, stripEmptyMarkdown, terminalLabel, thoughtSteps, toolErrorText, toolSummary, toolWritePreview, takeTrailingUrl, isHttpUrl, urlChipLabel, spliceFileMention, traceRows, turnAnchorId, turnAnchors, turnWork, undoDialogTitle, upsertSessionSummary, workspaceRelative, type ChatMessage } from "./conversation";
+import { applyAgentEvent, approvalTitle, assistantErrorRecovered, assistantGroupSucceeded, assistantReplyText, baseName, cacheHitRate, collectFileChanges, collectProgressTasks, collectTodos, collectWorkingFiles, delegateProgress, dropLastTurn, filterMentionPaths, formatCommand, formatThinking, friendlyAgentError, groupConversation, hasNewCheckpointUndo, isRecoverableRequestError, isTransientStreamError, lastTurnRestoreFiles, liveStatus, mentionedFiles, normalizeFilePath, normalizeMessages, omitFinalReply, optimisticUserMessage, parseFeaturesJson, planAwaitingApproval, recoverableFailStreaks, repairMarkdownTables, sessionTerminals, sessionTools, splitHttpUrls, splitPromptChips, splitPatch, stripEmptyMarkdown, terminalLabel, thoughtSteps, toolErrorText, toolSummary, toolWritePreview, takeTrailingUrl, isHttpUrl, urlChipLabel, spliceFileMention, traceRows, turnAnchorId, turnAnchors, turnWork, undoDialogTitle, upsertSessionSummary, workspaceRelative, type ChatMessage } from "./conversation";
 
 describe("conversation events", () => {
   it("calculates prompt cache hit rate from reported token usage", () => {
@@ -392,6 +392,44 @@ describe("conversation events", () => {
     });
     expect(messages[0]?.tools[0]).toMatchObject({ status: "complete", title: "委托 3/3" });
     expect(traceRows(messages[0]!.work, messages[0]!.tools)[0]?.chip).toBe("3/3 · explorer · read main");
+  });
+
+  it("normalizes terminal subagent statuses for the progress card", () => {
+    const tasks = [
+      { role: "explorer", task: "truncated task" },
+      { role: "explorer", task: "aborted task" },
+    ];
+    let messages = applyAgentEvent([], {
+      type: "tool_execution_start",
+      toolCallId: "d-terminal-status",
+      toolName: "delegate",
+      args: { tasks },
+    });
+    messages = applyAgentEvent(messages, {
+      type: "tool_execution_end",
+      toolCallId: "d-terminal-status",
+      toolName: "delegate",
+      args: { tasks },
+      result: {
+        content: [{ type: "text", text: "done" }],
+        details: {
+          total: 2,
+          done: 2,
+          tasks: [
+            { ...tasks[0], status: "truncated" },
+            { ...tasks[1], status: "aborted" },
+          ],
+          results: [
+            { ...tasks[0], success: true, output: "partial" },
+            { ...tasks[1], success: false, output: "stopped" },
+          ],
+        },
+      },
+    });
+    expect(delegateProgress(messages[0]!.tools[0]!).tasks.map((item) => item.status)).toEqual([
+      "completed",
+      "failed",
+    ]);
   });
 
   it("marks running tools as interrupted when the turn settles early", () => {
@@ -1325,6 +1363,60 @@ describe("upsertSessionSummary", () => {
       ["completed", "读代码"],
       ["completed", "改 UI"],
       ["running", "补测试"],
+    ]);
+  });
+
+  it("applies lifecycle tool results to background delegations", () => {
+    const delegate: ChatMessage = {
+      id: "msg-delegate",
+      role: "assistant",
+      text: "",
+      images: [],
+      work: [],
+      tools: [{
+        id: "tool-delegate",
+        name: "delegate",
+        title: "",
+        status: "complete",
+        args: { tasks: [{ role: "explorer", task: "find x" }] },
+        details: {
+          total: 1,
+          done: 0,
+          tasks: [
+            { id: "delegation-1", delegationId: "delegation-1", role: "explorer", task: "find x", status: "running" },
+          ],
+          results: [],
+        },
+      }],
+    };
+    const wait: ChatMessage = {
+      id: "msg-wait",
+      role: "assistant",
+      text: "",
+      images: [],
+      work: [],
+      tools: [{
+        id: "tool-wait",
+        name: "delegate_wait",
+        title: "",
+        status: "complete",
+        details: {
+          status: "completed",
+          delegations: [
+            { delegationId: "delegation-1", role: "explorer", task: "find x", status: "completed", report: "done" },
+          ],
+        },
+      }],
+    };
+    const messages = [delegate, wait];
+    const tools = sessionTools(messages);
+    const progress = delegateProgress(tools[0]!, tools);
+    expect(progress.tasks[0]?.status).toBe("completed");
+    expect(progress.done).toBe(1);
+
+    // 底部浮层同样以生命周期结果为准。
+    expect(collectProgressTasks(messages).map((item) => [item.status, item.subject])).toEqual([
+      ["completed", "find x"],
     ]);
   });
 });

@@ -954,11 +954,18 @@ function toolDetails(value: unknown): unknown {
 export type DelegateTaskStatus = "pending" | "running" | "completed" | "failed";
 
 export interface DelegateTaskState {
+  /** 子代理委派 id（运行时的 delegationId），用于与生命周期工具结果对齐。 */
+  id?: string;
   role: string;
   task: string;
   status: DelegateTaskStatus;
   /** Latest step while the child agent is running (e.g. "正在读取 …"). */
   live?: string;
+  /** 子代理 token 用量（结算后由运行时回传）。 */
+  usage?: { totalTokens?: number; input?: number; output?: number };
+  /** 定义里 pin 的模型；未 pin 时跟随会话。 */
+  model?: { providerId: string; modelId: string };
+  thinkingLevel?: string;
 }
 
 export interface DelegateProgress {
@@ -967,35 +974,75 @@ export interface DelegateProgress {
   tasks: DelegateTaskState[];
 }
 
-export function delegateProgress(tool: ToolActivity): DelegateProgress {
+const DELEGATE_LIFECYCLE_TOOLS = new Set(["delegate_wait", "delegate_list", "delegate_stop"]);
+
+function lifecycleStatus(value: unknown): DelegateTaskStatus | undefined {
+  if (value === "completed" || value === "truncated") return "completed";
+  if (value === "failed" || value === "aborted" || value === "stopped" || value === "denied") return "failed";
+  if (value === "running" || value === "pending") return value;
+  return undefined;
+}
+
+/**
+ * 从生命周期工具（delegate_wait / delegate_list / delegate_stop）的结果里反推
+ * 每个委派的最终状态。后台委派的 `delegate` 卡片本身不会更新，靠这里回填。
+ */
+export function delegationStatuses(tools: ToolActivity[]): Map<string, DelegateTaskStatus> {
+  const statuses = new Map<string, DelegateTaskStatus>();
+  for (const tool of tools) {
+    if (!DELEGATE_LIFECYCLE_TOOLS.has(tool.name)) continue;
+    const details = isRecord(tool.details) ? tool.details : {};
+    const entries = [
+      ...(Array.isArray(details.delegations) ? details.delegations : []),
+      ...(Array.isArray(details.stopped) ? details.stopped : []),
+    ];
+    for (const entry of entries) {
+      if (!isRecord(entry)) continue;
+      const id = stringField(entry, "delegationId") || stringField(entry, "id");
+      const status = lifecycleStatus(entry.status);
+      if (id && status) statuses.set(id, status);
+    }
+  }
+  return statuses;
+}
+
+export function delegateProgress(tool: ToolActivity, tools?: ToolActivity[]): DelegateProgress {
   const args = isRecord(tool.args) ? tool.args : {};
   const details = isRecord(tool.details) ? tool.details : {};
   const detailTasks = Array.isArray(details.tasks)
     ? details.tasks.map(normalizeDelegateTask).filter(Boolean) as DelegateTaskState[]
     : [];
-  if (detailTasks.length > 0) {
-    const done = typeof details.done === "number"
-      ? details.done
-      : detailTasks.filter((item) => item.status === "completed" || item.status === "failed").length;
-    return {
-      total: typeof details.total === "number" ? details.total : detailTasks.length,
-      done,
-      tasks: detailTasks,
-    };
-  }
-  const argTasks = Array.isArray(args.tasks) ? args.tasks : [];
   const results = Array.isArray(details.results) ? details.results : [];
-  const tasks = argTasks.map((item, index) => {
-    const role = isRecord(item) && typeof item.role === "string" ? item.role : "agent";
-    const task = isRecord(item) && typeof item.task === "string" ? item.task : "";
-    const result = results[index];
-    let status: DelegateTaskStatus = tool.status === "running" ? "pending" : "completed";
-    if (isRecord(result)) status = result.success === false ? "failed" : "completed";
-    else if (tool.status === "running" && index < results.length) status = "completed";
-    else if (tool.status === "running" && index === results.length) status = "running";
-    return { role, task, status };
-  });
-  const done = typeof details.done === "number"
+  let tasks: DelegateTaskState[];
+  if (detailTasks.length > 0) {
+    tasks = detailTasks.map((item) => {
+      const result = results.find(
+        (entry) => isRecord(entry) && entry.role === item.role && entry.task === item.task,
+      );
+      const usage = isRecord(result) && isRecord(result.usage) ? result.usage : undefined;
+      return usage ? { ...item, usage } : item;
+    });
+  } else {
+    const argTasks = Array.isArray(args.tasks) ? args.tasks : [];
+    tasks = argTasks.map((item, index) => {
+      const role = isRecord(item) && typeof item.role === "string" ? item.role : "agent";
+      const task = isRecord(item) && typeof item.task === "string" ? item.task : "";
+      const result = results[index];
+      let status: DelegateTaskStatus = tool.status === "running" ? "pending" : "completed";
+      if (isRecord(result)) status = result.success === false ? "failed" : "completed";
+      else if (tool.status === "running" && index < results.length) status = "completed";
+      else if (tool.status === "running" && index === results.length) status = "running";
+      return { role, task, status };
+    });
+  }
+  const overrides = tools ? delegationStatuses(tools) : undefined;
+  if (overrides?.size) {
+    tasks = tasks.map((item) => {
+      const next = item.id ? overrides.get(item.id) : undefined;
+      return next && next !== item.status ? { ...item, status: next } : item;
+    });
+  }
+  const done = typeof details.done === "number" && !overrides?.size
     ? details.done
     : tasks.filter((item) => item.status === "completed" || item.status === "failed").length;
   return {
@@ -1026,16 +1073,49 @@ export function delegateStatusLabel(status: DelegateTaskStatus): string {
   return ct("trace.delegateDone");
 }
 
+/** 生命周期工具（delegate_wait/list/stop）行尾的汇总 chip。 */
+function delegateLifecycleChip(tool: ToolActivity): string {
+  const details = isRecord(tool.details) ? tool.details : {};
+  const entries = [
+    ...(Array.isArray(details.delegations) ? details.delegations : []),
+    ...(Array.isArray(details.stopped) ? details.stopped : []),
+  ].filter(isRecord);
+  if (entries.length === 0) return "";
+  const statuses = entries.map((entry) => lifecycleStatus(entry.status));
+  const done = statuses.filter((status) => status === "completed").length;
+  const failed = statuses.filter((status) => status === "failed").length;
+  const running = statuses.filter((status) => status === "running" || status === "pending").length;
+  return [
+    ct("trace.delegateProgress", { done, total: entries.length }),
+    running ? ct("trace.delegateRunning") : "",
+    failed ? ct("trace.delegateFailed") : "",
+  ].filter(Boolean).join(" · ");
+}
+
 function normalizeDelegateTask(value: unknown): DelegateTaskState | undefined {
   if (!isRecord(value)) return undefined;
+  const id = stringField(value, "delegationId") || stringField(value, "id") || undefined;
   const role = typeof value.role === "string" ? value.role : "";
   const task = typeof value.task === "string" ? value.task : "";
   const live = typeof value.live === "string" && value.live.trim() ? value.live.trim() : undefined;
+  const model = isRecord(value.model) && typeof value.model.providerId === "string" && typeof value.model.modelId === "string"
+    ? { providerId: value.model.providerId, modelId: value.model.modelId }
+    : undefined;
+  const thinkingLevel = typeof value.thinkingLevel === "string" ? value.thinkingLevel : undefined;
   const status = value.status;
-  if (status !== "pending" && status !== "running" && status !== "completed" && status !== "failed") {
-    return role || task ? { role: role || "agent", task, status: "pending", ...(live ? { live } : {}) } : undefined;
+  const base = {
+    ...(id ? { id } : {}),
+    role: role || "agent",
+    task,
+    ...(live ? { live } : {}),
+    ...(model ? { model } : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+  };
+  const normalizedStatus = lifecycleStatus(status);
+  if (!normalizedStatus) {
+    return role || task ? { ...base, status: "pending" } : undefined;
   }
-  return { role: role || "agent", task, status, ...(live ? { live } : {}) };
+  return { ...base, status: normalizedStatus };
 }
 
 function mergeToolDetails(name: string, previous: unknown, incoming: unknown): unknown {
@@ -1250,7 +1330,7 @@ export function liveStatus(tools: ToolActivity[]): string {
   }
   if (/exec|bash|command/i.test(running.name)) return ct("live.running");
   if (running.name === "delegate") {
-    const progress = delegateProgress(running);
+    const progress = delegateProgress(running, tools);
     const active = progress.tasks.find((item) => item.status === "running");
     if (active?.live?.trim()) return active.live.trim();
     if (progress.total > 0) return ct("live.delegating", { done: progress.done, total: progress.total });
@@ -1305,6 +1385,8 @@ export interface TraceRow {
   /** Thinking markdown, for `think` rows. */
   text?: string;
   tool?: ToolActivity;
+  /** 本会话全部工具：委派卡片用它回填生命周期工具给出的状态。 */
+  tools?: ToolActivity[];
 }
 
 /**
@@ -1331,7 +1413,7 @@ export function traceRows(work: WorkItem[], tools: ToolActivity[], fallback = ""
     if (step.tools.length === 0) continue;
     flushThinking();
     for (const tool of step.tools) {
-      const row = toolRow(tool, rows.length);
+      const row = { ...toolRow(tool, rows.length, tools), tools };
       const last = rows.at(-1);
       if (tool.name === "update_plan" && last?.tool?.name === "update_plan") {
         rows[rows.length - 1] = { ...row, id: last.id };
@@ -1349,7 +1431,7 @@ export function traceRows(work: WorkItem[], tools: ToolActivity[], fallback = ""
   return rows;
 }
 
-export function toolRow(tool: ToolActivity, index = 0): TraceRow {
+export function toolRow(tool: ToolActivity, index = 0, tools?: ToolActivity[]): TraceRow {
   const base = { id: `row-${index}-${tool.id}`, status: tool.status, tool, mono: true };
   const name = tool.name.toLowerCase();
   if (name.startsWith("browser_")) {
@@ -1357,7 +1439,7 @@ export function toolRow(tool: ToolActivity, index = 0): TraceRow {
     return { ...base, kind: "look", label: tool.title, chip: stringField(args, "url") || stringField(args, "name") || stringField(args, "selector") || stringField(args, "ref"), mono: false };
   }
   if (name === "delegate") {
-    const progress = delegateProgress(tool);
+    const progress = delegateProgress(tool, tools);
     const active = progress.tasks.find((item) => item.status === "running")
       ?? progress.tasks.find((item) => item.status === "pending")
       ?? progress.tasks[0];
@@ -1369,6 +1451,12 @@ export function toolRow(tool: ToolActivity, index = 0): TraceRow {
       live || [active?.role, short].filter(Boolean).join(" · "),
     ].filter(Boolean).join(" · ");
     return { ...base, kind: "tool", label: ct("trace.delegate"), chip, mono: false };
+  }
+  if (name === "delegate_wait" || name === "delegate_list" || name === "delegate_stop") {
+    const label = name === "delegate_wait"
+      ? ct("trace.delegateWait")
+      : name === "delegate_stop" ? ct("trace.delegateStop") : ct("trace.delegateList");
+    return { ...base, kind: "tool", label, chip: delegateLifecycleChip(tool), mono: false };
   }
   const command = formatCommand(toolCommand(tool));
   if (command) {
@@ -1676,9 +1764,9 @@ export function collectProgressTasks(messages: ChatMessage[]): ProgressTask[] {
   }
   for (const tool of tools) {
     if (tool.name === "delegate") {
-      const progress = delegateProgress(tool);
+      const progress = delegateProgress(tool, tools);
       progress.tasks.forEach((item, index) => {
-        const id = `${tool.id}-${item.role}-${index}`;
+        const id = item.id ?? `${tool.id}-${item.role}-${index}`;
         const status: ProgressTaskStatus = item.status === "running"
           ? "running"
           : item.status === "failed" ? "failed" : item.status === "pending" ? "pending" : "completed";

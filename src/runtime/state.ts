@@ -18,6 +18,7 @@ import {
   type PartitionedSessionPath,
 } from "./home.js";
 import { getTacodeStorageSettings } from "./settings.js";
+import type { DelegationStatus } from "../shared/delegation.js";
 
 const require = createRequire(import.meta.url);
 
@@ -49,6 +50,15 @@ interface ThreadRow {
   archived: number;
   file_size: number;
   file_mtime_ms: number;
+  parent_session_path: string | null;
+  source_delegation_id: string | null;
+  delegation_role: string | null;
+  delegation_status: DelegationStatus | null;
+  delegation_depth: number | null;
+  delegation_goal: string | null;
+  delegation_report: string | null;
+  delegation_error: string | null;
+  delegation_completed_at: number | null;
 }
 
 export interface TacodeThread {
@@ -65,11 +75,39 @@ export interface TacodeThread {
   messageCount: number;
   pinned: boolean;
   archived: boolean;
+  parentSessionPath?: string;
+  sourceDelegationId?: string;
+  delegationRole?: string;
+  delegationStatus?: DelegationStatus;
+  delegationDepth?: number;
+  delegationGoal?: string;
+  delegationReport?: string;
+  delegationError?: string;
+  delegationCompletedAt?: string;
 }
 
 export interface ListThreadOptions {
   cwd?: string;
   includeArchived?: boolean;
+  parentSessionPath?: string;
+  sourceDelegationId?: string;
+}
+
+export interface DelegatedThreadInput {
+  id: string;
+  sessionPath: string;
+  storagePath?: string;
+  cwd: string;
+  title: string;
+  provider?: string;
+  model?: string;
+  parentSessionPath: string;
+  sourceDelegationId: string;
+  delegationRole: string;
+  delegationStatus: DelegationStatus;
+  delegationDepth: number;
+  delegationGoal: string;
+  createdAt?: number;
 }
 
 export function getTacodeStatePath(): string {
@@ -110,13 +148,45 @@ export class TacodeStateStore {
         pinned INTEGER NOT NULL DEFAULT 0,
         archived INTEGER NOT NULL DEFAULT 0,
         file_size INTEGER NOT NULL DEFAULT 0,
-        file_mtime_ms REAL NOT NULL DEFAULT 0
+        file_mtime_ms REAL NOT NULL DEFAULT 0,
+        parent_session_path TEXT,
+        source_delegation_id TEXT,
+        delegation_role TEXT,
+        delegation_status TEXT,
+        delegation_depth INTEGER,
+        delegation_goal TEXT,
+        delegation_report TEXT,
+        delegation_error TEXT,
+        delegation_completed_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS threads_updated_at_idx ON threads(archived, pinned DESC, updated_at DESC);
       CREATE INDEX IF NOT EXISTS threads_cwd_idx ON threads(cwd, archived, updated_at DESC);
       CREATE INDEX IF NOT EXISTS threads_storage_path_idx ON threads(storage_path);
-      PRAGMA user_version = 1;
     `);
+    const columns = new Set(
+      (this.database.prepare("PRAGMA table_info(threads)").all() as Array<{ name?: unknown }>)
+        .map((column) => (typeof column.name === "string" ? column.name : ""))
+        .filter(Boolean),
+    );
+    const migrations: Array<[string, string]> = [
+      ["parent_session_path", "TEXT"],
+      ["source_delegation_id", "TEXT"],
+      ["delegation_role", "TEXT"],
+      ["delegation_status", "TEXT"],
+      ["delegation_depth", "INTEGER"],
+      ["delegation_goal", "TEXT"],
+      ["delegation_report", "TEXT"],
+      ["delegation_error", "TEXT"],
+      ["delegation_completed_at", "INTEGER"],
+    ];
+    for (const [name, type] of migrations) {
+      if (!columns.has(name)) this.database.exec(`ALTER TABLE threads ADD COLUMN ${name} ${type}`);
+    }
+    this.database.exec(
+      "CREATE INDEX IF NOT EXISTS threads_parent_session_idx ON threads(parent_session_path, created_at DESC);" +
+      "CREATE UNIQUE INDEX IF NOT EXISTS threads_source_delegation_idx ON threads(source_delegation_id);" +
+      "PRAGMA user_version = 2;",
+    );
     if (statePath !== ":memory:") fsSync.chmodSync(statePath, 0o600);
     this.findByPath = this.database.prepare(
       "SELECT * FROM threads WHERE session_path = ? OR storage_path = ? LIMIT 1",
@@ -138,13 +208,15 @@ export class TacodeStateStore {
       seen.add(file);
       await this.indexFile(file, file, true);
     }
-    const rows = this.database.prepare("SELECT id, storage_path FROM threads").all() as Array<{
+    const rows = this.database.prepare("SELECT id, storage_path, source_delegation_id, delegation_status FROM threads").all() as Array<{
       id: string;
       storage_path: string;
+      source_delegation_id: string | null;
+      delegation_status: string | null;
     }>;
     const remove = this.database.prepare("DELETE FROM threads WHERE id = ?");
     for (const row of rows) {
-      if (!seen.has(row.storage_path)) remove.run(row.id);
+      if (!seen.has(row.storage_path) && !row.source_delegation_id) remove.run(row.id);
     }
   }
 
@@ -161,6 +233,14 @@ export class TacodeStateStore {
       where.push("cwd = ?");
       parameters.push(path.resolve(options.cwd));
     }
+    if (options.parentSessionPath) {
+      where.push("parent_session_path = ?");
+      parameters.push(path.resolve(options.parentSessionPath));
+    }
+    if (options.sourceDelegationId) {
+      where.push("source_delegation_id = ?");
+      parameters.push(options.sourceDelegationId);
+    }
     const query = `SELECT * FROM threads${where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY pinned DESC, created_at DESC`;
     return (this.database.prepare(query).all(...parameters) as ThreadRow[]).map(rowToThread);
   }
@@ -169,6 +249,103 @@ export class TacodeStateStore {
     const row = this.database.prepare("SELECT * FROM threads WHERE id = ?").get(id) as
       | ThreadRow
       | undefined;
+    return row ? rowToThread(row) : undefined;
+  }
+
+  findBySessionPath(sessionPath: string): TacodeThread | undefined {
+    const row = this.findByPath.get(sessionPath, sessionPath) as ThreadRow | undefined;
+    return row ? rowToThread(row) : undefined;
+  }
+
+  createDelegatedThread(input: DelegatedThreadInput): TacodeThread {
+    const createdAt = input.createdAt ?? Date.now();
+    const storagePath = input.storagePath ?? input.sessionPath;
+    this.database
+      .prepare(`
+        INSERT INTO threads (
+          id, session_path, storage_path, cwd, title, preview, provider, model,
+          created_at, updated_at, message_count, pinned, archived, file_size, file_mtime_ms,
+          parent_session_path, source_delegation_id, delegation_role, delegation_status,
+          delegation_depth, delegation_goal, delegation_report, delegation_error,
+          delegation_completed_at
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+        ON CONFLICT(id) DO UPDATE SET
+          session_path = excluded.session_path,
+          storage_path = excluded.storage_path,
+          cwd = excluded.cwd,
+          title = excluded.title,
+          provider = excluded.provider,
+          model = excluded.model,
+          parent_session_path = excluded.parent_session_path,
+          source_delegation_id = excluded.source_delegation_id,
+          delegation_role = excluded.delegation_role,
+          delegation_status = excluded.delegation_status,
+          delegation_depth = excluded.delegation_depth,
+          delegation_goal = excluded.delegation_goal,
+          delegation_report = COALESCE(threads.delegation_report, excluded.delegation_report),
+          delegation_error = COALESCE(threads.delegation_error, excluded.delegation_error),
+          delegation_completed_at = COALESCE(threads.delegation_completed_at, excluded.delegation_completed_at),
+          updated_at = excluded.updated_at
+      `)
+      .run(
+        input.id,
+        input.sessionPath,
+        storagePath,
+        path.resolve(input.cwd),
+        input.title,
+        input.provider ?? null,
+        input.model ?? null,
+        createdAt,
+        createdAt,
+        path.resolve(input.parentSessionPath),
+        input.sourceDelegationId,
+        input.delegationRole,
+        input.delegationStatus,
+        input.delegationDepth,
+        input.delegationGoal,
+      );
+    return this.get(input.id)!;
+  }
+
+  updateDelegation(
+    sourceDelegationId: string,
+    updates: Partial<Pick<TacodeThread, "title" | "delegationStatus" | "delegationGoal" | "delegationReport" | "delegationError" | "delegationCompletedAt">> & {
+      preview?: string;
+      updatedAt?: number;
+    },
+  ): TacodeThread | undefined {
+    const current = this.database.prepare(
+      "SELECT * FROM threads WHERE source_delegation_id = ? LIMIT 1",
+    ).get(sourceDelegationId) as ThreadRow | undefined;
+    if (!current) return undefined;
+    const nextTitle = updates.title ?? current.title;
+    const nextStatus = updates.delegationStatus ?? current.delegation_status;
+    const nextGoal = updates.delegationGoal ?? current.delegation_goal;
+    const nextReport = updates.delegationReport ?? current.delegation_report;
+    const nextError = updates.delegationError ?? current.delegation_error;
+    const nextCompletedAt = updates.delegationCompletedAt
+      ? Date.parse(updates.delegationCompletedAt)
+      : current.delegation_completed_at;
+    const nextPreview = updates.preview ?? current.preview;
+    this.database.prepare(`
+      UPDATE threads
+      SET title = ?, preview = ?, delegation_status = ?, delegation_goal = ?,
+          delegation_report = ?, delegation_error = ?, delegation_completed_at = ?, updated_at = ?
+      WHERE source_delegation_id = ?
+    `).run(
+      nextTitle,
+      nextPreview,
+      nextStatus,
+      nextGoal,
+      nextReport,
+      nextError,
+      nextCompletedAt,
+      updates.updatedAt ?? Date.now(),
+      sourceDelegationId,
+    );
+    const row = this.database.prepare(
+      "SELECT * FROM threads WHERE source_delegation_id = ? LIMIT 1",
+    ).get(sourceDelegationId) as ThreadRow | undefined;
     return row ? rowToThread(row) : undefined;
   }
 
@@ -263,6 +440,7 @@ export class TacodeStateStore {
     }
     const parsed = await parseSession(storagePath, stat);
     if (!parsed) return undefined;
+    const indexedId = cached?.source_delegation_id ? cached.id : parsed.id;
     this.database
       .prepare(`
         INSERT INTO threads (
@@ -285,7 +463,7 @@ export class TacodeStateStore {
           file_mtime_ms = excluded.file_mtime_ms
       `)
       .run(
-        parsed.id,
+        indexedId,
         sessionPath,
         storagePath,
         parsed.cwd,
@@ -402,6 +580,19 @@ function rowToThread(row: ThreadRow): TacodeThread {
     messageCount: row.message_count,
     pinned: Boolean(row.pinned),
     archived: Boolean(row.archived),
+    ...(row.parent_session_path ? { parentSessionPath: row.parent_session_path } : {}),
+    ...(row.source_delegation_id ? { sourceDelegationId: row.source_delegation_id } : {}),
+    ...(row.delegation_role ? { delegationRole: row.delegation_role } : {}),
+    ...(row.delegation_status ? { delegationStatus: row.delegation_status } : {}),
+    ...(row.delegation_depth === null || row.delegation_depth === undefined
+      ? {}
+      : { delegationDepth: row.delegation_depth }),
+    ...(row.delegation_goal ? { delegationGoal: row.delegation_goal } : {}),
+    ...(row.delegation_report ? { delegationReport: row.delegation_report } : {}),
+    ...(row.delegation_error ? { delegationError: row.delegation_error } : {}),
+    ...(row.delegation_completed_at
+      ? { delegationCompletedAt: new Date(row.delegation_completed_at).toISOString() }
+      : {}),
   };
 }
 

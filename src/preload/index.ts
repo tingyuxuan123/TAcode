@@ -64,6 +64,14 @@ const api: DesktopApi = {
     pin: (id, pinned) => ipcRenderer.invoke("sessions:pin", id, pinned),
     rename: (id, title) => ipcRenderer.invoke("sessions:rename", id, title),
   },
+  subagents: {
+    list: () => ipcRenderer.invoke("subagents:list"),
+    read: (name) => ipcRenderer.invoke("subagents:read", name),
+    save: (text) => ipcRenderer.invoke("subagents:save", text),
+    remove: (name) => ipcRenderer.invoke("subagents:remove", name),
+    setEnabled: (name, enabled) => ipcRenderer.invoke("subagents:set-enabled", name, enabled),
+    reveal: (name) => ipcRenderer.invoke("subagents:reveal", name),
+  },
   auth: {
     status: () => ipcRenderer.invoke("auth:status"),
     readApiKey: (provider) => ipcRenderer.invoke("auth:read-api-key", provider),

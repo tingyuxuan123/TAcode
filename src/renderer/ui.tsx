@@ -24,6 +24,7 @@ import { ExecutionFlow } from "./execution-flow";
 import { startPanelResize } from "./panel-resize";
 import { clampInspectWidth, readInspectWidth, shouldAutoCollapseSidebar, writeInspectWidth } from "./panel-width";
 import { buildTurnPresentation, toolRow } from "./conversation";
+import { SubagentsSettings } from "./subagent-settings";
 import logo from "./logo.svg";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -792,7 +793,7 @@ function traceDetail(row: TraceRow): ReactNode {
   const tool = row.tool;
   if (!tool) return null;
   if (tool.name === "delegate") {
-    return <DelegateDetail tool={tool} />;
+    return <DelegateDetail tool={tool} tools={row.tools} />;
   }
   const command = formatCommand(toolCommand(tool));
   if (command) return <TerminalBlock command={command} tool={tool} />;
@@ -917,8 +918,8 @@ function writeDiffTokens(text: string, path: string): ReactNode {
     : <span key={spot}>{token.text}</span>);
 }
 
-function DelegateDetail({ tool }: { tool: ToolActivity }) {
-  const progress = delegateProgress(tool);
+function DelegateDetail({ tool, tools }: { tool: ToolActivity; tools?: ToolActivity[] }) {
+  const progress = delegateProgress(tool, tools);
   const details = tool.details && typeof tool.details === "object" ? tool.details as Record<string, unknown> : {};
   const results = Array.isArray(details.results) ? details.results : [];
   if (progress.tasks.length === 0) return null;
@@ -940,6 +941,8 @@ function DelegateDetail({ tool }: { tool: ToolActivity }) {
             status={item.status}
             task={item.task}
             live={item.live}
+            model={item.model}
+            usage={item.usage}
             startedAt={tool.startedAt}
             output={diff ? [output, "```diff", diff, "```"].filter(Boolean).join("\n\n") : output}
           />
@@ -955,6 +958,8 @@ function DelegateTaskRow({
   task,
   live,
   output,
+  model,
+  usage,
   startedAt,
   defaultOpen = false,
 }: {
@@ -963,6 +968,8 @@ function DelegateTaskRow({
   task: string;
   live?: string;
   output?: string;
+  model?: { providerId: string; modelId: string };
+  usage?: { totalTokens?: number; input?: number; output?: number };
   startedAt?: number;
   defaultOpen?: boolean;
 }) {
@@ -1015,6 +1022,13 @@ function DelegateTaskRow({
         <div className="delegate-task-body">
           {summary && <p className="delegate-task-text">{summary}</p>}
           {showLive && <p className="delegate-task-live">{live}</p>}
+          {(model || usage?.totalTokens) && (
+            <p className="delegate-task-meta">
+              {[model ? `${model.providerId}/${model.modelId}` : "", usage?.totalTokens ? `${usage.totalTokens.toLocaleString()} tokens` : ""]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          )}
           {output?.trim() && (
             <div className="delegate-task-output markdown">
               <Markdown>{output.trim()}</Markdown>
@@ -3153,7 +3167,7 @@ function ApiProfilesEditor({
   );
 }
 
-type SettingsPane = "providers" | "vision" | "appearance" | "shortcuts" | "skills" | "about";
+type SettingsPane = "providers" | "vision" | "subagents" | "appearance" | "shortcuts" | "skills" | "about";
 
 function settingsNav(t: ReturnType<typeof useI18n>["t"]): Array<{ label: string; items: Array<{ id: SettingsPane; label: string; icon: string }> }> {
   return [
@@ -3162,6 +3176,7 @@ function settingsNav(t: ReturnType<typeof useI18n>["t"]): Array<{ label: string;
     items: [
       { id: "providers", label: t("settings.providers"), icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
       { id: "vision", label: t("settings.vision"), icon: "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z\nM11 9a2 2 0 1 1-4 0 2 2 0 0 1 4 0\nm21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" },
+      { id: "subagents", label: t("settings.subagents"), icon: "M12 8V4H8\nM4 8h16v12H4z\nM2 14h2M20 14h2M15 13v2M9 13v2" },
     ],
   },
   {
@@ -3337,6 +3352,8 @@ export function Login({
                   ? t("settings.providers")
                   : pane === "vision"
                     ? t("settings.vision")
+                    : pane === "subagents"
+                      ? t("settings.subagents")
                     : pane === "appearance"
                       ? t("settings.appearance")
                       : pane === "skills"
@@ -3350,6 +3367,7 @@ export function Login({
             </button>
           </header>
           <div className="settings-body">
+            {pane === "subagents" && <SubagentsSettings />}
             {pane === "vision" && (
               <>
                 <p className="settings-hint">{t("settings.visionHint")}</p>

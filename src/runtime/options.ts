@@ -57,6 +57,7 @@ export interface TacodeRuntimeOptions {
   toolsExplicit: boolean;
   extraModelIds: string[];
   writableRoots: string[];
+  serviceId?: string;
   personalizationFile?: string;
 }
 
@@ -117,6 +118,7 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
   let toolsExplicit = false;
   let writableRoots = parseWritableRoots(cwd, tacodeEnv("WRITABLE_ROOTS"));
   const personalizationFile = tacodeEnv("PERSONALIZATION_FILE")?.trim();
+  const serviceId = tacodeEnv("SERVICE_ID")?.trim();
   let help = false;
   let version = false;
   let yolo = false;
@@ -236,6 +238,7 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
       toolsExplicit,
       extraModelIds,
       writableRoots,
+      ...(serviceId ? { serviceId } : {}),
       ...(personalizationFile ? { personalizationFile: path.resolve(personalizationFile) } : {}),
     },
     piArgs: forwarded,
@@ -245,7 +248,9 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
 }
 
 export function defaultActiveTools(harness: HarnessMode): string[] {
-  const delegation = Number(tacodeEnv("SUBAGENT_DEPTH") ?? "0") < 1 ? ["delegate"] : [];
+  const delegation = Number(tacodeEnv("SUBAGENT_DEPTH") ?? "0") < 1
+    ? ["delegate", "delegate_wait", "delegate_list", "delegate_stop", "delegate_continue"]
+    : [];
   return harness === "minimal"
     ? [
         "update_plan",

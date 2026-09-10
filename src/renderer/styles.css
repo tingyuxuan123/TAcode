@@ -3140,6 +3140,13 @@ textarea::selection,
   font-size: calc(11.5px * var(--ui-font-scale));
   line-height: 1.4;
 }
+.delegate-task-meta {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: calc(10.5px * var(--ui-font-scale));
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
 .delegate-task-output {
   margin: 0;
   padding: 0;
@@ -7747,4 +7754,227 @@ kbd {
   word-break: break-word;
   max-height: 240px;
   overflow: auto;
+}
+
+/* ── 子代理设置 ───────────────────────────────────────────── */
+.pane-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 16px;
+  flex-wrap: wrap;
+  flex: none;
+}
+.pane-head .settings-hint {
+  flex: 1 1 320px;
+  min-width: 0;
+  padding-top: 4px;
+}
+.pane-head .row-actions {
+  flex: none;
+}
+.settings-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.subagent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+.subagent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-hairline);
+  transition: border-color 140ms ease, opacity 140ms ease;
+}
+.subagent-row:hover {
+  border-color: var(--ink-3);
+}
+.subagent-row.disabled {
+  opacity: 0.55;
+}
+.subagent-row.disabled:hover {
+  border-color: var(--line);
+}
+.subagent-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.subagent-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.subagent-title code {
+  font: calc(12.5px * var(--ui-font-scale))/1.3 var(--mono);
+  font-weight: 600;
+}
+.subagent-badge {
+  font-size: calc(10.5px * var(--ui-font-scale));
+  line-height: 1.3;
+  color: var(--ink-3);
+  background: var(--inset);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.subagent-badge.source {
+  color: var(--ink-2);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.subagent-badge.mono {
+  font-family: var(--mono);
+}
+.subagent-description {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: calc(12.5px * var(--ui-font-scale));
+  line-height: 1.5;
+}
+.subagent-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 2px;
+}
+.subagent-tools code {
+  font: calc(10.5px * var(--ui-font-scale))/1.3 var(--mono);
+  color: var(--ink-2);
+  background: var(--inset);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+.subagent-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.subagent-actions .switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  user-select: none;
+}
+.subagent-actions .switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.subagent-actions .switch-track {
+  position: relative;
+  width: 30px;
+  height: 17px;
+  border-radius: 999px;
+  background: var(--hover);
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition: background 140ms ease, box-shadow 140ms ease;
+  flex: none;
+}
+.subagent-actions .switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--line);
+  transition: transform 140ms ease;
+}
+.subagent-actions .switch input:checked + .switch-track {
+  background: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+.subagent-actions .switch input:checked + .switch-track .switch-knob {
+  transform: translateX(13px);
+  box-shadow: none;
+}
+.subagent-actions .switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 2px;
+}
+.subagent-actions .switch input:disabled + .switch-track {
+  opacity: 0.5;
+}
+.subagent-actions .switch:has(input:disabled) {
+  cursor: default;
+}
+.subagent-actions .switch-label {
+  font-size: calc(11px * var(--ui-font-scale));
+  color: var(--ink-2);
+}
+.subagent-actions .danger {
+  color: var(--red);
+}
+.subagent-editor {
+  width: min(720px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.subagent-editor .row-actions {
+  justify-content: flex-end;
+}
+.subagent-textarea {
+  width: 100%;
+  min-height: 300px;
+  resize: vertical;
+  font: calc(12px * var(--ui-font-scale))/1.5 var(--mono);
+  color: var(--ink);
+  background: var(--inset);
+  box-shadow: inset 0 0 0 1px var(--line);
+  border: none;
+  border-radius: 10px;
+  padding: 10px 12px;
+  white-space: pre;
+  overflow: auto;
+}
+.subagent-textarea:focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 1px;
+}
+.subagent-editor-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: calc(11px * var(--ui-font-scale));
+  color: var(--ink-3);
+}
+.settings-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: #b54708;
+  font-size: calc(11.5px * var(--ui-font-scale));
+  line-height: 1.5;
+}
+.settings-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #067647;
+  font-size: calc(11.5px * var(--ui-font-scale));
 }

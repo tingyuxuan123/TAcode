@@ -8,16 +8,27 @@
  */
 
 import type {
+  AgentTool,
+} from "@earendil-works/pi-agent-core";
+import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
   ToolCallEvent,
   ToolCallEventResult,
+  ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import {
+  SUBAGENT_MUTATING_TOOLS,
+  type SubagentDefinition,
+  type SubagentPermission,
+} from "../shared/subagents.js";
+import { loadEnabledSubagents } from "./subagents.js";
 import type { PermissionMode, TacodeRuntimeOptions } from "./options.js";
 import { registerAskUserTool, ASK_USER_TOOL } from "./tools/ask-user.js";
 import { capturePatchCheckpoint, type Checkpoint } from "./tools/checkpoint.js";
-import { registerCommandTools } from "./tools/commands.js";
+import { registerCommandTools, createCommandTools, type CommandToolOptions } from "./tools/commands.js";
+import { registerDelegateTools, registerRemoteDelegateTools } from "./tools/delegate.js";
 import { registerDeepSeekProvider } from "./tools/deepseek-provider.js";
 import { createFileTools } from "./tools/files.js";
 import { ManagedProcessRegistry } from "./tools/managed-process.js";
@@ -31,6 +42,7 @@ import {
 } from "./tools/plan.js";
 import { classifyCommand, SessionAccessController, type EffectiveAccess } from "./tools/policy.js";
 import { sandboxDescription, type SandboxOptions } from "./tools/sandbox.js";
+import { createRuntimeDelegationClient } from "./delegation-bridge.js";
 import { Workspace } from "./tools/workspace.js";
 import { Type } from "@earendil-works/pi-ai";
 
@@ -60,6 +72,22 @@ const askWithoutPromptTools = new Set<string>([
   "get_search_content",
   ASK_USER_TOOL,
 ]);
+
+const permissionRank: Record<PermissionMode, number> = {
+  plan: 0,
+  ask: 1,
+  auto: 2,
+  full: 3,
+};
+
+/** 子代理不能获得超过父会话的权限；未指定时继承父模式。 */
+function effectiveSubagentPermission(
+  parent: PermissionMode,
+  requested: SubagentPermission | undefined,
+): PermissionMode {
+  if (!requested || requested === "inherit") return parent;
+  return permissionRank[requested] < permissionRank[parent] ? requested : parent;
+}
 
 const applyPatchParameters = Type.Object({
   input: Type.String({ minLength: 1, description: "A complete *** Begin Patch / *** End Patch patch" }),
@@ -142,6 +170,60 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
       );
       registerAskUserTool(pi);
 
+      // 本地 fallback 仍保留给没有主进程 bridge 的 runtime 测试/CLI 场景。
+      const commandToolOptions: CommandToolOptions = {
+        registry,
+        getPermission: () => permission,
+        access,
+        sandboxFor,
+        onAccessChanged: () => undefined,
+        onCheckpoint: appendCheckpoint,
+      };
+
+      const childDepth = Number(process.env.SUBAGENT_DEPTH ?? "0");
+      const delegateBridge = process.env.TACODE_DELEGATION_BRIDGE === "1" && childDepth < 1
+        ? createRuntimeDelegationClient()
+        : undefined;
+      const delegateRegistry = childDepth >= 1
+        ? undefined
+        : delegateBridge ? undefined : registerDelegateTools(pi, {
+        getDefinitions: () => loadEnabledSubagents(),
+        createTools: (definition, ctx) =>
+          createSubagentTools(definition, ctx, commandToolOptions, appendCheckpoint),
+        deliverReport: (text) => {
+          try {
+            pi.sendUserMessage(text, { deliverAs: "followUp" });
+          } catch (error) {
+            console.error("[subagent] failed to deliver report", error);
+          }
+        },
+        log: (message, details) => console.error("[subagent]", message, details ?? ""),
+      });
+      if (delegateBridge) {
+        registerRemoteDelegateTools(pi, {
+          client: delegateBridge,
+          startPayload: (definition, task, ctx) => {
+            const current = effectiveAccess();
+            return {
+              role: definition.name,
+              task,
+              title: definition.name,
+              cwd: ctx.cwd,
+              provider: definition.model?.providerId ?? options.providerId,
+              model: definition.model?.modelId ?? options.modelId,
+              thinkingLevel: definition.thinkingLevel ?? ctx.thinkingLevel,
+              permission,
+              sandbox: current.sandbox,
+              network: current.network,
+              ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
+              ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
+              ...(options.serviceId ? { serviceId: options.serviceId } : {}),
+              ...(options.writableRoots.length ? { writableRoots: options.writableRoots } : {}),
+            };
+          },
+        });
+      }
+
       pi.on("session_start", (_event, ctx) => {
         checkpoints.length = 0;
         planState = restorePlanState(
@@ -173,86 +255,13 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
         };
       });
 
-      pi.on("tool_call", async (event: ToolCallEvent, ctx): Promise<ToolCallEventResult | undefined> => {
-        if (
-          event.toolName === "bash" ||
-          event.toolName === "run_command" ||
-          event.toolName === "edit" ||
-          event.toolName === "write"
-        ) {
-          return {
-            block: true,
-            reason:
-              event.toolName === "bash" || event.toolName === "run_command"
-                ? "This shell tool bypasses TACode Runtime's managed OS sandbox. Use exec_command instead."
-                : "This write tool bypasses TACode checkpoints. Use apply_patch instead.",
-          };
-        }
-        if (permission === "plan" && !planAllowedTools.has(event.toolName)) {
-          return {
-            block: true,
-            reason: `Plan mode does not allow ${event.toolName}. Run /plan to leave plan mode.`,
-          };
-        }
-        const externalMcp = event.toolName.startsWith("mcp__");
-        const command =
-          event.toolName === "exec_command" &&
-          isRecord(event.input) &&
-          typeof event.input.cmd === "string"
-            ? event.input.cmd
-            : undefined;
-        const dangerousCommand = command !== undefined && classifyCommand(command) === "dangerous";
-        if (permission === "plan" && dangerousCommand) {
-          return {
-            block: true,
-            reason: "Plan mode blocks destructive commands. Leave plan mode before running this command.",
-          };
-        }
-        const needsApproval =
-          permission === "ask" || (permission === "auto" && (externalMcp || dangerousCommand));
-        if (!needsApproval) return;
-        if (!externalMcp && askWithoutPromptTools.has(event.toolName)) return;
-        if (
-          event.toolName === "write_stdin" &&
-          isRecord(event.input) &&
-          typeof event.input.chars !== "string" &&
-          event.input.terminate !== true
-        ) {
-          return;
-        }
-        if (!ctx.hasUI) {
-          return {
-            block: true,
-            reason:
-              "This action requires an interactive approval UI. Use --permission full for an explicitly trusted non-interactive run.",
-          };
-        }
-        if (dangerousCommand) {
-          const approved = await ctx.ui.confirm(
-            "Run destructive command?",
-            `${command}\n\nThis may delete data or alter system/process state.`,
-          );
-          if (!approved) return { block: true, reason: "Destructive command denied by user" };
-        } else if (
-          event.toolName === "apply_patch" &&
-          isRecord(event.input) &&
-          typeof event.input.input === "string"
-        ) {
-          for (const section of patchApprovalSections(event.input.input)) {
-            const approved = await ctx.ui.confirm(`Apply ${section.file}?`, section.patch);
-            if (!approved) return { block: true, reason: `Denied ${section.file} by user` };
-          }
-        } else {
-          const approved = await ctx.ui.confirm(
-            `Allow ${event.toolName}?`,
-            approvalSummary(event.toolName, event.input),
-          );
-          if (!approved) return { block: true, reason: "Denied by user" };
-        }
-        return undefined;
-      });
+      pi.on("tool_call", (event: ToolCallEvent, ctx): Promise<ToolCallEventResult | undefined> =>
+        approveToolCallSerialized(event.toolName, event.input, permission, ctx),
+      );
 
       pi.on("session_shutdown", () => {
+        delegateRegistry?.dispose();
+        delegateBridge?.dispose();
         registry.dispose();
       });
 
@@ -452,7 +461,14 @@ function registerReadTools(pi: ExtensionAPI): void {
 }
 
 function registerPatchTool(pi: ExtensionAPI, appendCheckpoint: (checkpoint: Checkpoint) => void): void {
-  pi.registerTool({
+  pi.registerTool(createPatchTool(appendCheckpoint));
+}
+
+/** 构造 apply_patch 定义（不注册），供子代理复用。 */
+function createPatchTool(
+  appendCheckpoint: (checkpoint: Checkpoint) => void,
+): ToolDefinition<typeof applyPatchParameters, Record<string, unknown>> {
+  return {
     name: "apply_patch",
     label: "Apply patch",
     description:
@@ -491,11 +507,155 @@ function registerPatchTool(pi: ExtensionAPI, appendCheckpoint: (checkpoint: Chec
         details: { ...result, checkpointId: checkpoint.id, patch: params.input },
       };
     },
-  });
+  };
 }
 
-function approvalSummary(toolName: string, input: unknown): string {
-  if (!isRecord(input)) return `Tool: ${toolName}`;
+/**
+ * 为子代理构造受限工具集：按定义声明的名字取工具，包一层父会话审批，
+ * 并在定义要求 plan 时剔除写类工具。
+ */
+function createSubagentTools(
+  definition: SubagentDefinition,
+  ctx: ExtensionContext,
+  commandOptions: CommandToolOptions,
+  appendCheckpoint: (checkpoint: Checkpoint) => void,
+): AgentTool[] {
+  const childPermission = effectiveSubagentPermission(
+    commandOptions.getPermission(),
+    definition.permission,
+  );
+  const mutating = SUBAGENT_MUTATING_TOOLS as readonly string[];
+  const names = childPermission === "plan"
+    ? definition.tools.filter((name) => !mutating.includes(name))
+    : definition.tools;
+  const childCommandOptions: CommandToolOptions = {
+    ...commandOptions,
+    getPermission: () => childPermission,
+  };
+
+  const available = new Map<string, ToolDefinition<any, any, any>>();
+  for (const template of createFileTools(new Workspace(ctx.cwd))) {
+    available.set(template.name, {
+      ...template,
+      async execute(id, params, signal, onUpdate, innerCtx) {
+        const workspace = new Workspace(innerCtx.cwd);
+        await workspace.initialize();
+        const live = createFileTools(workspace).find((tool) => tool.name === template.name);
+        if (!live) throw new Error(`Tool disappeared: ${template.name}`);
+        return live.execute(id, params, signal, onUpdate, innerCtx);
+      },
+    });
+  }
+  available.set("apply_patch", createPatchTool(appendCheckpoint));
+  for (const tool of createCommandTools(childCommandOptions)) available.set(tool.name, tool);
+
+  const tools: AgentTool[] = [];
+  for (const name of names) {
+    const tool = available.get(name);
+    if (!tool) continue;
+    tools.push({
+      name: tool.name,
+      label: tool.label,
+      description: tool.description,
+      parameters: tool.parameters,
+      ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
+      async execute(toolCallId, params, signal, onUpdate) {
+        const blocked = await approveToolCallSerialized(tool.name, params, childPermission, ctx);
+        if (blocked) throw new Error(blocked.reason ?? "Denied by user");
+        return tool.execute(toolCallId, params, signal, onUpdate as never, ctx);
+      },
+    });
+  }
+  return tools;
+}
+
+/**
+ * 串行化 UI 审批：多个子代理可能同时请求确认，而渲染层只有一个待确认槽位。
+ */
+let approvalChain: Promise<unknown> = Promise.resolve();
+function approveToolCallSerialized(
+  toolName: string,
+  input: unknown,
+  permission: PermissionMode,
+  ctx: ExtensionContext,
+): Promise<ToolCallEventResult | undefined> {
+  const next = approvalChain.then(
+    () => approveToolCall(toolName, input, permission, ctx),
+    () => approveToolCall(toolName, input, permission, ctx),
+  );
+  approvalChain = next.catch(() => undefined);
+  return next;
+}
+
+/**
+ * 统一的工具审批：父会话的 `tool_call` 钩子与子代理工具包装共用，
+ * 保证子代理不会绕过父会话的权限模式与危险命令确认。
+ */
+async function approveToolCall(
+  toolName: string,
+  input: unknown,
+  permission: PermissionMode,
+  ctx: ExtensionContext,
+): Promise<ToolCallEventResult | undefined> {
+  if (toolName === "bash" || toolName === "run_command" || toolName === "edit" || toolName === "write") {
+    return {
+      block: true,
+      reason:
+        toolName === "bash" || toolName === "run_command"
+          ? "This shell tool bypasses TACode Runtime's managed OS sandbox. Use exec_command instead."
+          : "This write tool bypasses TACode checkpoints. Use apply_patch instead.",
+    };
+  }
+  if (permission === "plan" && !planAllowedTools.has(toolName)) {
+    return { block: true, reason: `Plan mode does not allow ${toolName}. Run /plan to leave plan mode.` };
+  }
+  const externalMcp = toolName.startsWith("mcp__");
+  const command =
+    toolName === "exec_command" && isRecord(input) && typeof input.cmd === "string" ? input.cmd : undefined;
+  const dangerousCommand = command !== undefined && classifyCommand(command) === "dangerous";
+  if (permission === "plan" && dangerousCommand) {
+    return {
+      block: true,
+      reason: "Plan mode blocks destructive commands. Leave plan mode before running this command.",
+    };
+  }
+  const needsApproval = permission === "ask" || (permission === "auto" && (externalMcp || dangerousCommand));
+  if (!needsApproval) return undefined;
+  if (!externalMcp && askWithoutPromptTools.has(toolName)) return undefined;
+  if (
+    toolName === "write_stdin" &&
+    isRecord(input) &&
+    typeof input.chars !== "string" &&
+    input.terminate !== true
+  ) {
+    return undefined;
+  }
+  if (!ctx.hasUI) {
+    return {
+      block: true,
+      reason:
+        "This action requires an interactive approval UI. Use --permission full for an explicitly trusted non-interactive run.",
+    };
+  }
+  if (dangerousCommand) {
+    const approved = await ctx.ui.confirm(
+      "Run destructive command?",
+      `${command}\n\nThis may delete data or alter system/process state.`,
+    );
+    if (!approved) return { block: true, reason: "Destructive command denied by user" };
+  } else if (toolName === "apply_patch" && isRecord(input) && typeof input.input === "string") {
+    for (const section of patchApprovalSections(input.input)) {
+      const approved = await ctx.ui.confirm(`Apply ${section.file}?`, section.patch);
+      if (!approved) return { block: true, reason: `Denied ${section.file} by user` };
+    }
+  } else {
+    const approved = await ctx.ui.confirm(`Allow ${toolName}?`, approvalSummary(toolName, input));
+    if (!approved) return { block: true, reason: "Denied by user" };
+  }
+  return undefined;
+}
+
+function approvalSummary(toolName: string, input: unknown): string {  if (!isRecord(input)) return `Tool: ${toolName}`;
   const cmd = input.cmd;
   if (typeof cmd === "string") return cmd;
   const path = input.path;
