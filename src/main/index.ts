@@ -2043,6 +2043,7 @@ app.whenReady().then(async () => {
     emitEvent: (parentSessionPath, event) => {
       agentManager.findBySession(parentSessionPath)?.sendDelegationEvent(event);
     },
+    log: diagnostics,
   });
   await loadLoadedSessions();
   await loadLocale();

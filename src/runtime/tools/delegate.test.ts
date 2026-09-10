@@ -171,6 +171,78 @@ describe("delegate tool", () => {
     expect(updates.some((details) => details.tasks?.[0]?.status === "running" && details.tasks[0].live === "read_file src/runtime/delegate.ts")).toBe(true);
   });
 
+  it("任务明细带 startedAt/toolCalls/turns，活动缓冲记录工具成败与报告", async () => {
+    const { tools } = harness({
+      script: async (agent) => {
+        agent.emit({
+          type: "tool_execution_start",
+          toolCallId: "read-1",
+          toolName: "read_file",
+          args: { path: "a.ts" },
+        } as unknown as AgentEvent);
+        agent.emit({
+          type: "tool_execution_end",
+          toolCallId: "read-1",
+          toolName: "read_file",
+          result: {},
+          isError: false,
+        } as unknown as AgentEvent);
+        agent.emit({
+          type: "tool_execution_start",
+          toolCallId: "read-2",
+          toolName: "read_file",
+          args: { path: "b.ts" },
+        } as unknown as AgentEvent);
+        agent.emit({
+          type: "tool_execution_end",
+          toolCallId: "read-2",
+          toolName: "read_file",
+          result: {},
+          isError: true,
+        } as unknown as AgentEvent);
+        agent.report("found it");
+      },
+    });
+    const result = await runTool(
+      tools,
+      DELEGATE_TOOL_NAME,
+      { tasks: [{ role: "explorer", task: "find it" }] },
+    );
+    const task = result.details.tasks[0];
+    expect(typeof task.startedAt).toBe("number");
+    expect(task.toolCalls).toBe(2);
+    expect(task.turns).toBe(1);
+    const recent: Array<{ kind: string; text: string; isError?: boolean }> = task.recent;
+    expect(recent.filter((entry) => entry.kind === "tool")).toHaveLength(2);
+    expect(recent.find((entry) => entry.kind === "tool" && entry.text.includes("b.ts"))?.isError).toBe(true);
+    expect(recent.find((entry) => entry.kind === "tool" && entry.text.includes("a.ts"))?.isError).toBeUndefined();
+    expect(recent.some((entry) => entry.kind === "report" && entry.text.includes("found it"))).toBe(true);
+  });
+
+  it("活动缓冲有上限，不随长任务无限增长", async () => {
+    const { tools } = harness({
+      script: async (agent) => {
+        for (let index = 0; index < 80; index += 1) {
+          agent.emit({
+            type: "tool_execution_start",
+            toolCallId: `t-${index}`,
+            toolName: "read_file",
+            args: { path: `f${index}.ts` },
+          } as unknown as AgentEvent);
+        }
+        agent.report("done");
+      },
+    });
+    const result = await runTool(
+      tools,
+      DELEGATE_TOOL_NAME,
+      { tasks: [{ role: "explorer", task: "scan" }] },
+    );
+    expect(result.details.tasks[0].recent.length).toBeLessThanOrEqual(60);
+    // 保留的是最近的记录
+    expect(JSON.stringify(result.details.tasks[0].recent)).toContain("f79.ts");
+  });
+
   it("runner 初始化失败时也会结算为 failed", async () => {
     const { tools } = harness({ failAgent: true });
     const result = await runTool(
@@ -214,6 +286,27 @@ describe("delegate tool", () => {
     const listed = await runTool(tools, DELEGATE_LIST_TOOL_NAME, {});
     expect(listed.details.delegations).toHaveLength(1);
     expect(listed.content[0]?.text).toContain("explorer");
+  });
+
+  it("delegate_wait 等待期间推送 waiting 进度", async () => {
+    const updates: Array<Record<string, any>> = [];
+    const { tools } = harness({
+      script: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      },
+    });
+    await runTool(tools, DELEGATE_TOOL_NAME, {
+      tasks: [{ role: "explorer", task: "slow" }],
+      background: true,
+    });
+    const waited = await runTool(
+      tools,
+      DELEGATE_WAIT_TOOL_NAME,
+      { timeoutSeconds: 5 },
+      (partial) => updates.push(partial.details as Record<string, any>),
+    );
+    expect(waited.details.status).toBe("completed");
+    expect(updates.some((details) => details.status === "waiting" && details.delegations?.[0]?.status === "running")).toBe(true);
   });
 
   it("delegate_stop 中止后台委派", async () => {

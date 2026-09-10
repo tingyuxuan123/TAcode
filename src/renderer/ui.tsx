@@ -15,7 +15,7 @@ import { effortLabelKey, reasoningLevelsAvailable } from "../shared/thinking";
 import type { ModelOption } from "../shared/model-selection";
 import { EffortPicker, ModelPicker, usePickerPopover } from "./composer-pickers";
 import { PromptToolbar } from "./prompt-toolbar";
-import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolPath, toolSummary, toolWritePreview, toolWriteSource, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
+import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolPath, toolSummary, toolWritePreview, toolWriteSource, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type DelegateTaskState, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
 import { tokenizeCode } from "./highlight";
 import type { AgentSkillCommand } from "../shared/skills";
 import { PROJECT_SKILL_ROOTS, USER_SKILL_ROOTS, skillSlashCommand } from "../shared/skills";
@@ -919,125 +919,231 @@ function writeDiffTokens(text: string, path: string): ReactNode {
     : <span key={spot}>{token.text}</span>);
 }
 
+/** 聚合委托卡：头部总进度 + 每个子代理一条节点行；点击行打开右侧详情抽屉。 */
 function DelegateDetail({ tool, tools }: { tool: ToolActivity; tools?: ToolActivity[] }) {
+  const { t } = useI18n();
   const progress = delegateProgress(tool, tools);
   const details = tool.details && typeof tool.details === "object" ? tool.details as Record<string, unknown> : {};
   const results = Array.isArray(details.results) ? details.results : [];
+  const [selected, setSelected] = useState<number | null>(null);
   if (progress.tasks.length === 0) return null;
+  const tasks = progress.tasks;
+  const total = progress.total || tasks.length;
+  const allSettled = tasks.every((item) => item.status !== "running" && item.status !== "pending");
+  const startedAt = tasks.reduce<number | undefined>((min, item) => {
+    if (item.startedAt === undefined) return min;
+    return min === undefined ? item.startedAt : Math.min(min, item.startedAt);
+  }, undefined) ?? tool.startedAt;
+  const completedAt = allSettled
+    ? tool.endedAt ?? tasks.reduce<number | undefined>((max, item) => {
+      if (item.completedAt === undefined) return max;
+      return max === undefined ? item.completedAt : Math.max(max, item.completedAt);
+    }, undefined)
+    : undefined;
+  const outputOf = (item: DelegateTaskState) => {
+    const result = results.find((entry) => (
+      entry
+      && typeof entry === "object"
+      && (entry as { role?: string }).role === item.role
+      && (entry as { task?: string }).task === item.task
+    )) as { output?: string; success?: boolean; diff?: string } | undefined;
+    const output = typeof result?.output === "string" ? result.output : undefined;
+    const diff = typeof result?.diff === "string" && result.diff.trim() ? result.diff.trim() : undefined;
+    return diff ? [output, "```diff", diff, "```"].filter(Boolean).join("\n\n") : output;
+  };
+  const selectedTask = selected !== null ? tasks[selected] : undefined;
   return (
     <div className="delegate-tool">
-      {progress.tasks.map((item, index) => {
-        const result = results.find((entry) => (
-          entry
-          && typeof entry === "object"
-          && (entry as { role?: string }).role === item.role
-          && (entry as { task?: string }).task === item.task
-        )) as { output?: string; success?: boolean; diff?: string } | undefined;
-        const output = typeof result?.output === "string" ? result.output : undefined;
-        const diff = typeof result?.diff === "string" && result.diff.trim() ? result.diff.trim() : undefined;
-        return (
-          <DelegateTaskRow
-            key={`${item.role}-${index}`}
-            role={item.role}
-            status={item.status}
-            task={item.task}
-            live={item.live}
-            model={item.model}
-            usage={item.usage}
-            startedAt={tool.startedAt}
-            output={diff ? [output, "```diff", diff, "```"].filter(Boolean).join("\n\n") : output}
-          />
-        );
-      })}
+      <div className="delegate-card-head">
+        <span className="delegate-card-count">{progress.done}/{total}</span>
+        <span className="delegate-card-bar" role="progressbar" aria-label={t("delegate.cardLabel")} aria-valuemin={0} aria-valuemax={total} aria-valuenow={progress.done}>
+          <span className="delegate-card-bar-fill" style={{ width: `${total > 0 ? Math.min(100, (progress.done / total) * 100) : 0}%` }} />
+        </span>
+        <Elapsed start={startedAt} end={completedAt} live={!allSettled} />
+      </div>
+      {tasks.map((item, index) => (
+        <DelegateTaskRow
+          key={`${item.role}-${index}`}
+          task={item}
+          fallbackStart={startedAt}
+          output={outputOf(item)}
+          onOpen={() => setSelected(index)}
+        />
+      ))}
+      {selectedTask && (
+        <SubagentDrawer
+          task={selectedTask}
+          fallbackStart={startedAt}
+          output={outputOf(selectedTask)}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   );
 }
 
+function DelegateAvatar({ status, large }: { status: string; large?: boolean }) {
+  return (
+    <span className={`delegate-avatar${large ? " lg" : ""} ${status}`} aria-hidden="true">
+      {status === "completed" ? <Icon path="M4 12l5 5 11-11" size={large ? 13 : 11} />
+        : status === "failed" ? <Icon path="M6 6l12 12M18 6L6 18" size={large ? 13 : 11} />
+          : null}
+    </span>
+  );
+}
+
+/** 单个子代理节点行：状态环头像 + 元信息 + 任务摘要 + 实时步骤/结果预览；点击打开详情抽屉。 */
 function DelegateTaskRow({
-  role,
-  status,
   task,
-  live,
   output,
-  model,
-  usage,
-  startedAt,
-  defaultOpen = false,
+  fallbackStart,
+  onOpen,
 }: {
-  role: string;
-  status: string;
-  task: string;
-  live?: string;
+  task: DelegateTaskState;
   output?: string;
-  model?: { providerId: string; modelId: string };
-  usage?: { totalTokens?: number; input?: number; output?: number };
-  startedAt?: number;
-  defaultOpen?: boolean;
+  fallbackStart?: number;
+  onOpen(): void;
 }) {
   const { t } = useI18n();
-  const summary = task.replace(/\s+/g, " ").trim();
-  const [open, setOpen] = useState(defaultOpen);
+  const summary = task.task.replace(/\s+/g, " ").trim();
   const [stale, setStale] = useState(false);
   const lastActivity = useRef(Date.now());
   useEffect(() => {
-    if (defaultOpen) setOpen(true);
-  }, [defaultOpen]);
-  useEffect(() => {
-    if (status === "running") lastActivity.current = Date.now();
+    if (task.status === "running") lastActivity.current = Date.now();
     else setStale(false);
-  }, [status]);
+  }, [task.status]);
   useEffect(() => {
-    if (live?.trim()) lastActivity.current = Date.now();
-  }, [live]);
+    if (task.live?.trim()) lastActivity.current = Date.now();
+  }, [task.live]);
   useEffect(() => {
-    if (status !== "running") return;
+    if (task.status !== "running") return;
+    const anchor = task.startedAt ?? fallbackStart;
     const timer = setInterval(() => {
-      const anchor = startedAt ?? lastActivity.current;
-      const quietFor = Date.now() - Math.max(anchor, lastActivity.current);
+      const quietFor = Date.now() - Math.max(anchor ?? lastActivity.current, lastActivity.current);
       setStale(quietFor >= 120_000);
     }, 15_000);
     return () => clearInterval(timer);
-  }, [startedAt, status]);
-  const showLive = status === "running" && Boolean(live?.trim());
-  const body = [summary, showLive ? live : undefined, output?.trim()].filter(Boolean).join("\n\n");
-  const canOpen = body.length > 0;
+  }, [task.startedAt, fallbackStart, task.status]);
+  const running = task.status === "running";
+  const showLive = running && Boolean(task.live?.trim());
+  const preview = showLive
+    ? task.live
+    : !running && output ? output.replace(/\s+/g, " ").trim().slice(0, 160) : "";
+  const meta = [
+    task.model ? `${task.model.providerId}/${task.model.modelId}` : "",
+    task.toolCalls ? t("delegate.steps", { n: task.toolCalls }) : "",
+    task.usage?.totalTokens ? `${task.usage.totalTokens.toLocaleString()} tokens` : "",
+  ].filter(Boolean).join(" · ");
   return (
-    <div className={`delegate-task ${status}${stale ? " stale" : ""}${open ? " open" : ""}`}>
-      <button
-        type="button"
-        className="delegate-task-head"
-        aria-expanded={open}
-        disabled={!canOpen}
-        onClick={() => canOpen && setOpen((was) => !was)}
-      >
-        <span className="delegate-role">{role}</span>
-        <span className="delegate-status">
-          {stale ? t("trace.delegateStale") : delegateStatusLabel(status as "pending" | "running" | "completed" | "failed")}
+    <button
+      type="button"
+      className={`delegate-task ${task.status}${stale ? " stale" : ""}`}
+      aria-haspopup="dialog"
+      onClick={onOpen}
+    >
+      <DelegateAvatar status={task.status} />
+      <span className="delegate-node-main">
+        <span className="delegate-node-top">
+          <span className="delegate-role">{task.role}</span>
+          <span className="delegate-status">{stale ? t("trace.delegateStale") : delegateStatusLabel(task.status)}</span>
+          <Elapsed start={task.startedAt ?? fallbackStart} end={task.completedAt} live={running} />
         </span>
-        {!open && (showLive ? live : summary) && (
-          <span className="delegate-summary">{showLive ? live : summary}</span>
-        )}
-        {canOpen && <Icon className="delegate-chevron chevron" path="M6 9l6 6 6-6" size={12} />}
-      </button>
-      {open && (
-        <div className="delegate-task-body">
-          {summary && <p className="delegate-task-text">{summary}</p>}
-          {showLive && <p className="delegate-task-live">{live}</p>}
-          {(model || usage?.totalTokens) && (
-            <p className="delegate-task-meta">
-              {[model ? `${model.providerId}/${model.modelId}` : "", usage?.totalTokens ? `${usage.totalTokens.toLocaleString()} tokens` : ""]
-                .filter(Boolean)
-                .join(" · ")}
+        {summary && <span className="delegate-node-task">{summary}</span>}
+        {meta && <span className="delegate-task-meta">{meta}</span>}
+        {preview && <span className={`delegate-node-preview${showLive ? " live" : ""}`}>{preview}</span>}
+      </span>
+      <Icon className="delegate-chevron chevron" path="M9 6l6 6-6 6" size={12} />
+    </button>
+  );
+}
+
+/** 子代理详情抽屉：头部元信息 + 任务 + 活动流 + 最终报告（借鉴 PI-Desktop 的子智能体面板）。 */
+function SubagentDrawer({
+  task,
+  output,
+  fallbackStart,
+  onClose,
+}: {
+  task: DelegateTaskState;
+  output?: string;
+  fallbackStart?: number;
+  onClose(): void;
+}) {
+  const { t } = useI18n();
+  const activity = task.recent ?? [];
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onKey = (event: WindowEventMap["keydown"]): void => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const running = task.status === "running";
+  useEffect(() => {
+    const node = bodyRef.current;
+    if (node && running) node.scrollTop = node.scrollHeight;
+  }, [activity.length, task.live, running]);
+  const meta = [
+    task.model ? `${task.model.providerId}/${task.model.modelId}` : "",
+    delegateStatusLabel(task.status),
+    task.toolCalls ? t("delegate.steps", { n: task.toolCalls }) : "",
+    task.usage?.totalTokens ? `${task.usage.totalTokens.toLocaleString()} tokens` : "",
+  ].filter(Boolean).join(" · ");
+  return createPortal(
+    <div className="drawer-backdrop" onClick={onClose}>
+      <section className="drawer-panel delegate-drawer" role="dialog" aria-modal="true" aria-label={t("delegate.detailTitle")}>
+        <header className="drawer-head">
+          <DelegateAvatar status={task.status} large />
+          <div className="drawer-head-copy">
+            <strong>{task.role}</strong>
+            <span className="drawer-head-meta">
+              {meta}
+              {meta && " · "}
+              <Elapsed start={task.startedAt ?? fallbackStart} end={task.completedAt} live={running} />
+            </span>
+          </div>
+          <button type="button" className="drawer-close" aria-label={t("common.close")} onClick={onClose}>
+            <X size={15} />
+          </button>
+        </header>
+        <div className="drawer-body" ref={bodyRef}>
+          <p className="delegate-task-text">{task.task}</p>
+          {task.childSessionPath && (
+            <p className="delegate-task-meta delegate-child-session">
+              {t("delegate.detailChildSession")}：<code>{task.childSessionPath}</code>
             </p>
           )}
+          <section className="delegate-drawer-section">
+            <h4>{t("delegate.detailActivity")}</h4>
+            {activity.length === 0 && !task.live?.trim()
+              ? <p className="drawer-empty">{t("delegate.detailEmpty")}</p>
+              : (
+                <ul className="delegate-activity">
+                  {activity.map((entry, index) => (
+                    <li key={`${entry.at}-${index}`} className={`delegate-activity-item kind-${entry.kind}${entry.isError ? " is-error" : ""}`}>
+                      <time>{new Date(entry.at).toLocaleTimeString()}</time>
+                      <span>{entry.text}</span>
+                    </li>
+                  ))}
+                  {running && task.live?.trim() && (
+                    <li className="delegate-activity-item now"><time aria-hidden="true">•</time><span>{task.live}</span></li>
+                  )}
+                </ul>
+              )}
+          </section>
           {output?.trim() && (
-            <div className="delegate-task-output markdown">
-              <Markdown>{output.trim()}</Markdown>
-            </div>
+            <section className="delegate-drawer-section">
+              <h4>{t("delegate.detailReport")}</h4>
+              <div className="delegate-task-output markdown">
+                <Markdown>{output.trim()}</Markdown>
+              </div>
+            </section>
           )}
         </div>
-      )}
-    </div>
+      </section>
+    </div>,
+    document.body,
   );
 }
 

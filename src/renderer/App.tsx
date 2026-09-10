@@ -71,6 +71,7 @@ import {
 import { WorkbenchPanels } from "./browser/workbench-panels";
 import { useBrowserPanels } from "./browser/use-browser-panels";
 import { useSidebarLayout } from "./sidebar-layout";
+import { branchAutoExpanded, groupDelegatedSessions } from "./session-tree";
 import { ProgressOverlay } from "./progress-overlay";
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
@@ -129,6 +130,9 @@ export function SessionRow({
   session,
   active,
   running,
+  childCount,
+  branchExpanded,
+  onToggleBranch,
   onOpen,
   onPin,
   onRename,
@@ -137,6 +141,10 @@ export function SessionRow({
   session: SessionSummary;
   active: boolean;
   running: boolean;
+  /** 委派子会话数量；> 0 时显示分支展开开关。 */
+  childCount?: number;
+  branchExpanded?: boolean;
+  onToggleBranch?(): void;
   onOpen(): void;
   onPin(): void;
   onRename(title: string): void;
@@ -218,6 +226,21 @@ export function SessionRow({
           <span className="sidebar-short-label" aria-hidden="true">{Array.from(session.title.trim() || t("common.unnamed")).slice(0, 2).join("")}</span>
         </button>
       )}
+      {childCount ? (
+        <button
+          type="button"
+          className="session-branch-toggle"
+          aria-label={t("nav.delegatedSessions")}
+          title={t("nav.delegatedSessions")}
+          aria-expanded={Boolean(branchExpanded)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleBranch?.();
+          }}
+        >
+          <Icon className="chevron" path="M9 6l6 6-6 6" size={12} />
+        </button>
+      ) : null}
       <button
         type="button"
         className="session-del session-more"
@@ -442,6 +465,8 @@ export function App() {
   // Phase 3b：每个会话的运行状态（含后台会话），供侧边栏徽标与后台完成提示。
   const runningSessionIdsRef = useRef<Set<string>>(new Set());
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(new Set());
+  /** 委派子会话分支的手动开合覆盖（未设置时按“父活跃或子运行中”自动展开）。 */
+  const [railOpen, setRailOpen] = useState<Record<string, boolean>>({});
   const markSessionRunning = useCallback((sessionId: string | undefined, isRunning: boolean) => {
     if (!sessionId) return;
     setRunningSessionIds((current) => {
@@ -1632,18 +1657,46 @@ export function App() {
               {open && (
                 <div className="session-list nested">
                   {threads.length === 0 && <p className="task-empty">{t("nav.noThreads")}</p>}
-                  {threads.map((session) => (
-                    <SessionRow
-                      key={session.id}
-                      session={session}
-                      active={isSameSession(session, activeSession)}
-                      running={runningSessionIds.has(session.path)}
-                      onOpen={() => openSession(session)}
-                      onPin={() => void pinSession(session)}
-                      onRename={(title) => void renameSession(session, title)}
-                      onRemove={() => void removeSession(session)}
-                    />
-                  ))}
+                  {groupDelegatedSessions(threads).map(({ session, children }) => {
+                    const expanded = railOpen[session.id] ?? branchAutoExpanded({
+                      children,
+                      isActive: (item) => isSameSession(item, activeSession),
+                      isRunning: (item) => runningSessionIds.has(item.path),
+                      isParentActive: () => isSameSession(session, activeSession),
+                    });
+                    return (
+                      <div key={session.id} className={expanded && children.length > 0 ? "session-branch open" : "session-branch"}>
+                        <SessionRow
+                          session={session}
+                          active={isSameSession(session, activeSession)}
+                          running={runningSessionIds.has(session.path)}
+                          childCount={children.length}
+                          branchExpanded={expanded}
+                          onToggleBranch={() => setRailOpen((current) => ({ ...current, [session.id]: !expanded }))}
+                          onOpen={() => openSession(session)}
+                          onPin={() => void pinSession(session)}
+                          onRename={(title) => void renameSession(session, title)}
+                          onRemove={() => void removeSession(session)}
+                        />
+                        {children.length > 0 && expanded && (
+                          <div className="delegated-children">
+                            {children.map((child) => (
+                              <SessionRow
+                                key={child.id}
+                                session={child}
+                                active={isSameSession(child, activeSession)}
+                                running={runningSessionIds.has(child.path)}
+                                onOpen={() => openSession(child)}
+                                onPin={() => void pinSession(child)}
+                                onRename={(title) => void renameSession(child, title)}
+                                onRemove={() => void removeSession(child)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

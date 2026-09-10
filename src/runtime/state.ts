@@ -19,6 +19,7 @@ import {
 } from "./home.js";
 import { getTacodeStorageSettings } from "./settings.js";
 import type { DelegationStatus } from "../shared/delegation.js";
+import type { PermissionMode } from "../shared/types.js";
 
 const require = createRequire(import.meta.url);
 
@@ -58,6 +59,7 @@ interface ThreadRow {
   delegation_goal: string | null;
   delegation_report: string | null;
   delegation_error: string | null;
+  delegation_permission: string | null;
   delegation_completed_at: number | null;
 }
 
@@ -83,6 +85,7 @@ export interface TacodeThread {
   delegationGoal?: string;
   delegationReport?: string;
   delegationError?: string;
+  delegationPermission?: PermissionMode;
   delegationCompletedAt?: string;
 }
 
@@ -107,6 +110,8 @@ export interface DelegatedThreadInput {
   delegationStatus: DelegationStatus;
   delegationDepth: number;
   delegationGoal: string;
+  /** 子代理的权限模式；持久化保存，避免恢复/续跑时回退成默认值造成越权。 */
+  delegationPermission?: PermissionMode;
   createdAt?: number;
 }
 
@@ -157,6 +162,7 @@ export class TacodeStateStore {
         delegation_goal TEXT,
         delegation_report TEXT,
         delegation_error TEXT,
+        delegation_permission TEXT,
         delegation_completed_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS threads_updated_at_idx ON threads(archived, pinned DESC, updated_at DESC);
@@ -177,6 +183,7 @@ export class TacodeStateStore {
       ["delegation_goal", "TEXT"],
       ["delegation_report", "TEXT"],
       ["delegation_error", "TEXT"],
+      ["delegation_permission", "TEXT"],
       ["delegation_completed_at", "INTEGER"],
     ];
     for (const [name, type] of migrations) {
@@ -185,7 +192,7 @@ export class TacodeStateStore {
     this.database.exec(
       "CREATE INDEX IF NOT EXISTS threads_parent_session_idx ON threads(parent_session_path, created_at DESC);" +
       "CREATE UNIQUE INDEX IF NOT EXISTS threads_source_delegation_idx ON threads(source_delegation_id);" +
-      "PRAGMA user_version = 2;",
+      "PRAGMA user_version = 3;",
     );
     if (statePath !== ":memory:") fsSync.chmodSync(statePath, 0o600);
     this.findByPath = this.database.prepare(
@@ -267,8 +274,8 @@ export class TacodeStateStore {
           created_at, updated_at, message_count, pinned, archived, file_size, file_mtime_ms,
           parent_session_path, source_delegation_id, delegation_role, delegation_status,
           delegation_depth, delegation_goal, delegation_report, delegation_error,
-          delegation_completed_at
-        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+          delegation_permission, delegation_completed_at
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL)
         ON CONFLICT(id) DO UPDATE SET
           session_path = excluded.session_path,
           storage_path = excluded.storage_path,
@@ -284,6 +291,7 @@ export class TacodeStateStore {
           delegation_goal = excluded.delegation_goal,
           delegation_report = COALESCE(threads.delegation_report, excluded.delegation_report),
           delegation_error = COALESCE(threads.delegation_error, excluded.delegation_error),
+          delegation_permission = COALESCE(threads.delegation_permission, excluded.delegation_permission),
           delegation_completed_at = COALESCE(threads.delegation_completed_at, excluded.delegation_completed_at),
           updated_at = excluded.updated_at
       `)
@@ -303,6 +311,7 @@ export class TacodeStateStore {
         input.delegationStatus,
         input.delegationDepth,
         input.delegationGoal,
+        input.delegationPermission ?? null,
       );
     return this.get(input.id)!;
   }
@@ -590,6 +599,7 @@ function rowToThread(row: ThreadRow): TacodeThread {
     ...(row.delegation_goal ? { delegationGoal: row.delegation_goal } : {}),
     ...(row.delegation_report ? { delegationReport: row.delegation_report } : {}),
     ...(row.delegation_error ? { delegationError: row.delegation_error } : {}),
+    ...(row.delegation_permission ? { delegationPermission: row.delegation_permission as PermissionMode } : {}),
     ...(row.delegation_completed_at
       ? { delegationCompletedAt: new Date(row.delegation_completed_at).toISOString() }
       : {}),

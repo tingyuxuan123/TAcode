@@ -41,6 +41,85 @@ export interface DelegationUsage {
   cost: number;
 }
 
+/** 委派活动缓冲的单条记录（有界，随快照下发给渲染层展示）。 */
+export interface DelegationActivity {
+  at: number;
+  kind: "tool" | "notice" | "report";
+  text: string;
+  isError?: boolean;
+}
+
+/**
+ * 委派"完成"的统一定义（两套实现都必须遵守）：
+ *
+ * pi RPC 的 `prompt` 响应是"接收即返回"——preflight 成功就应答，不等整轮生成结束。
+ * 因此判定委派完成绝不能以 prompt 的响应为依据，必须：
+ * 1. 等到子代理空闲（一轮生成结束：本地用 `agent.waitForIdle()`，主进程用
+ *    `AgentHost.waitForIdle()` 监听 `agent_settled`）；
+ * 2. 空闲后取最后一条带文本的 assistant 消息作为最终报告（`extractAssistantReport`）；
+ * 3. 空闲且仍无 assistant 文本才算真正的 no_report 失败。
+ */
+export const DELEGATION_COMPLETION_CONTRACT = "idle-then-last-assistant-text" as const;
+
+/** 从消息数组里提取最后一条带文本的 assistant 消息作为最终报告；没有则返回空串。 */
+export function extractAssistantReport(messages: unknown[] | undefined): string {
+  if (!Array.isArray(messages)) return "";
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object") continue;
+    const record = message as Record<string, unknown>;
+    if (record.role !== "assistant") continue;
+    const content = record.content;
+    if (typeof content === "string" && content.trim()) return content.trim();
+    if (!Array.isArray(content)) continue;
+    const text = content
+      .filter((part): part is { type?: unknown; text?: unknown } => Boolean(part) && typeof part === "object")
+      .filter((part) => part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text as string)
+      .join("\n")
+      .trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+/** 判定依据的摘要：消息条数、最后一条消息的 role/type、assistant 轮次与工具调用数，供诊断日志与失败详情使用。 */
+export function describeAssistantEvidence(messages: unknown[] | undefined): {
+  count: number;
+  lastRole?: string;
+  lastType?: string;
+  turns: number;
+  toolCalls: number;
+} {
+  if (!Array.isArray(messages)) return { count: 0, turns: 0, toolCalls: 0 };
+  const count = messages.length;
+  let turns = 0;
+  let toolCalls = 0;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const record = message as Record<string, unknown>;
+    if (record.role !== "assistant") continue;
+    turns += 1;
+    if (Array.isArray(record.content)) {
+      for (const part of record.content) {
+        if (!part || typeof part !== "object") continue;
+        const kind = (part as Record<string, unknown>).type;
+        if (typeof kind === "string" && kind.toLowerCase().includes("tool")) toolCalls += 1;
+      }
+    }
+  }
+  const last = messages.at(-1);
+  if (!last || typeof last !== "object") return { count, turns, toolCalls };
+  const record = last as Record<string, unknown>;
+  return {
+    count,
+    turns,
+    toolCalls,
+    ...(typeof record.role === "string" ? { lastRole: record.role } : {}),
+    ...(typeof record.type === "string" ? { lastType: record.type } : {}),
+  };
+}
+
 /** Serializable metadata shared by main, runtime and renderer. */
 export interface DelegationRecordSnapshot {
   delegationId: string;
@@ -63,6 +142,8 @@ export interface DelegationRecordSnapshot {
   resultSummary?: string;
   live?: string;
   usage?: DelegationUsage;
+  /** 有界活动缓冲（最近若干条），供失败态展示判定与运行轨迹。 */
+  recent?: DelegationActivity[];
 }
 
 export interface DelegationStartPayload {

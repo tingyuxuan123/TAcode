@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   assertDelegationTransition,
   boundedDelegationText,
+  describeAssistantEvidence,
+  extractAssistantReport,
   isDelegationBridgeResponse,
   isDelegationTerminal,
   validateDelegationTask,
@@ -43,5 +45,29 @@ describe("delegation protocol", () => {
     })).toBe(true);
     expect(isDelegationBridgeResponse({ type: "wrong", requestId: "r1", ok: true })).toBe(false);
     expect(isDelegationBridgeResponse({ type: "tacode:delegation:response", ok: true })).toBe(false);
+  });
+
+  it("extracts the last assistant text as the final report (completion contract)", () => {
+    const messages = [
+      { role: "user", content: "work" },
+      { role: "assistant", content: [{ type: "text", text: "first draft" }] },
+      { role: "user", content: "continue" },
+      { role: "assistant", content: [{ type: "text", text: "final report body" }, { type: "toolCall", id: "t1" }] },
+    ];
+    expect(extractAssistantReport(messages)).toBe("final report body");
+    expect(extractAssistantReport([{ role: "assistant", content: "plain string" }])).toBe("plain string");
+    expect(extractAssistantReport([{ role: "user", content: "no assistant yet" }])).toBe("");
+    expect(extractAssistantReport(undefined)).toBe("");
+  });
+
+  it("summarizes judgment evidence: counts, last message, turns and tool calls", () => {
+    const evidence = describeAssistantEvidence([
+      { role: "user", content: "work" },
+      { role: "assistant", content: [{ type: "toolCall", id: "t1" }, { type: "toolCall", id: "t2" }] },
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+    ]);
+    expect(evidence).toMatchObject({ count: 3, lastRole: "assistant", turns: 2, toolCalls: 2 });
+    expect(evidence.lastType).toBeUndefined();
+    expect(describeAssistantEvidence(undefined)).toEqual({ count: 0, turns: 0, toolCalls: 0 });
   });
 });

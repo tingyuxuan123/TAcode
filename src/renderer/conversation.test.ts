@@ -432,6 +432,130 @@ describe("conversation events", () => {
     ]);
   });
 
+  it("delegateProgress 透传运行时新明细字段（startedAt/toolCalls/turns/recent）", () => {
+    const messages = applyAgentEvent([], {
+      type: "tool_execution_update",
+      toolCallId: "d9",
+      toolName: "delegate",
+      args: { tasks: [{ role: "explorer", task: "scan" }] },
+      partialResult: {
+        details: {
+          total: 1,
+          done: 0,
+          tasks: [
+            {
+              id: "delegation-1",
+              delegationId: "delegation-1",
+              role: "explorer",
+              task: "scan",
+              status: "running",
+              live: "read_file src/app.ts",
+              startedAt: 1_000,
+              toolCalls: 4,
+              turns: 2,
+              recent: [
+                { at: 1_100, kind: "tool", text: "read_file src/app.ts" },
+                { at: 1_200, kind: "tool", text: "exec_command pnpm test", isError: true },
+                { at: 1_300, kind: "report", text: "partial findings" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const task = delegateProgress(messages[0]!.tools[0]!).tasks[0]!;
+    expect(task.startedAt).toBe(1_000);
+    expect(task.toolCalls).toBe(4);
+    expect(task.turns).toBe(2);
+    expect(task.recent).toEqual([
+      { at: 1_100, kind: "tool", text: "read_file src/app.ts" },
+      { at: 1_200, kind: "tool", text: "exec_command pnpm test", isError: true },
+      { at: 1_300, kind: "report", text: "partial findings" },
+    ]);
+  });
+
+  it("失败委派卡片透传子会话路径与 recent 活动缓冲（桥接模式）", () => {
+    const messages = applyAgentEvent([], {
+      type: "tool_execution_end",
+      toolCallId: "d-bridge-fail",
+      toolName: "delegate",
+      args: { tasks: [{ role: "explorer", task: "scan repo" }] },
+      result: {
+        content: [{ type: "text", text: "failed" }],
+        details: {
+          total: 1,
+          done: 1,
+          tasks: [
+            {
+              id: "delegation-bridge-1",
+              delegationId: "delegation-bridge-1",
+              role: "explorer",
+              task: "scan repo",
+              status: "failed",
+              childSessionPath: "/home/user/.tether/sessions/delegation-bridge-1.jsonl",
+              error: "The delegated worker exited before finishing. [reason=worker_exit; ...]",
+              recent: [
+                { at: 1_000, kind: "notice", text: "Launching worker (explorer)." },
+                { at: 1_100, kind: "notice", text: "Prompt accepted; waiting for the worker to settle." },
+                { at: 1_200, kind: "notice", text: "worker exited (code 137)", isError: true },
+              ],
+              startedAt: 900,
+              completedAt: 1_300,
+            },
+          ],
+          results: [
+            { role: "explorer", task: "scan repo", output: "The delegated worker exited before finishing.", success: false },
+          ],
+        },
+      },
+    });
+    const task = delegateProgress(messages[0]!.tools[0]!).tasks[0]!;
+    // 失败态不再是只有一句占位文案：子会话标识与活动缓冲都必须可达。
+    expect(task.status).toBe("failed");
+    expect(task.childSessionPath).toBe("/home/user/.tether/sessions/delegation-bridge-1.jsonl");
+    expect(task.recent?.map((entry) => entry.text)).toEqual([
+      "Launching worker (explorer).",
+      "Prompt accepted; waiting for the worker to settle.",
+      "worker exited (code 137)",
+    ]);
+    expect(task.recent?.at(-1)?.isError).toBe(true);
+  });
+
+  it("桥接模式的 cancelled/interrupted 终态归入失败而不是永久进行中", () => {
+    const tasks = [
+      { role: "explorer", task: "cancelled task" },
+      { role: "explorer", task: "interrupted task" },
+    ];
+    let messages = applyAgentEvent([], {
+      type: "tool_execution_start",
+      toolCallId: "d-bridge-cancel",
+      toolName: "delegate",
+      args: { tasks },
+    });
+    messages = applyAgentEvent(messages, {
+      type: "tool_execution_end",
+      toolCallId: "d-bridge-cancel",
+      toolName: "delegate",
+      args: { tasks },
+      result: {
+        content: [{ type: "text", text: "stopped" }],
+        details: {
+          total: 2,
+          done: 2,
+          tasks: [
+            { ...tasks[0], status: "cancelled" },
+            { ...tasks[1], status: "interrupted" },
+          ],
+          results: [],
+        },
+      },
+    });
+    expect(delegateProgress(messages[0]!.tools[0]!).tasks.map((item) => item.status)).toEqual([
+      "failed",
+      "failed",
+    ]);
+  });
+
   it("marks running tools as interrupted when the turn settles early", () => {
     let messages = applyAgentEvent([], {
       type: "tool_execution_start",
@@ -1013,6 +1137,23 @@ describe("conversation events", () => {
       args: { input: "*** Begin Patch\n*** Add File: about.html\n+<h1>Hi</h1>\n*** End Patch" },
     }])).toMatch(/正在写入 about\.html · 约 .+ 字符/);
     expect(liveStatus([])).toBe("思考中…");
+  });
+
+  it("shows waiting progress while delegate_wait runs", () => {
+    expect(liveStatus([{
+      id: "w1",
+      name: "delegate_wait",
+      title: "",
+      status: "running",
+      args: {},
+      details: {
+        status: "waiting",
+        delegations: [
+          { delegationId: "d1", status: "completed" },
+          { delegationId: "d2", status: "running" },
+        ],
+      },
+    }])).toBe("等待子代理 1/2");
   });
 
   it("uses the latest edit counts when the same file is patched again", () => {

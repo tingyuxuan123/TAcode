@@ -24,6 +24,10 @@ interface PendingRequest {
 
 const DEFAULT_RPC_TIMEOUT_MS = 45_000;
 const LONG_RPC_TIMEOUT_MS = 30 * 60_000;
+// RPC 语义提示：prompt 是“接收即返回”——preflight 成功即应答，不等整轮生成结束
+// （完成契约见 shared/delegation.ts 的 DELEGATION_COMPLETION_CONTRACT）。归入长请求
+// 只为放宽超时上限，绝不代表响应到达时子代理已完成；需要等“空闲”的调用方
+// （委派判定、/plan execute 等）应改用 waitForIdle()，不要拿 prompt 响应当完成依据。
 const LONG_RUNNING_REQUESTS = new Set([
   "prompt",
   "steer",
@@ -35,6 +39,8 @@ const LONG_RUNNING_REQUESTS = new Set([
   "fork",
   "compact",
 ]);
+/** 刚应答的 prompt 可能还没把 agent_start 事件发出来，等待空闲时给它一个有界宽限窗口。 */
+const PROMPT_START_GRACE_MS = 1_500;
 
 export class AgentHost {
   private child?: ChildProcessWithoutNullStreams;
@@ -56,6 +62,12 @@ export class AgentHost {
   private malformedLines = 0;
   /** 是否正在进行一轮生成（agent_start ~ agent_settled）；供侧边栏“正在运行”徽标与 renderer 重载恢复使用。 */
   private turnActive = false;
+  /** 等待下一轮开始的等待者（agent_start 到达或宽限超时后放行）。 */
+  private startWaiters: Array<(saw: boolean) => void> = [];
+  /** 等待本轮结束的等待者（agent_settled 或 worker 退出后放行）。 */
+  private settledWaiters: Array<() => void> = [];
+  /** 最近一次 worker 退出信息（退出码/信号 + 脱敏 stderr 摘要），委派失败分类用。 */
+  private exitInfo?: { code?: number; signal?: string; stderrExcerpt: string };
 
   /** 壳层分配的稳定句柄；不随会话文件路径变化，命令按它路由。 */
   public runtimeId = "";
@@ -96,8 +108,14 @@ export class AgentHost {
   private tagged(event: AgentEvent): AgentEvent {
     // 以 agent_start / agent_settled 驱动“活跃轮次”状态，供重载后恢复徽标：
     // 仅真正生成中的会话显示“正在运行”，空闲但存活的 worker 不再误报。
-    if (event.type === "agent_start") this.turnActive = true;
-    else if (event.type === "agent_settled") this.turnActive = false;
+    // 同时放行 waitForIdle 的等待者（委派判定依赖这两个事件收敛）。
+    if (event.type === "agent_start") {
+      this.turnActive = true;
+      this.flushStartWaiters(true);
+    } else if (event.type === "agent_settled") {
+      this.turnActive = false;
+      this.flushSettledWaiters();
+    }
     const next: AgentEvent = {
       ...event,
       __seq: ++this.seq,
@@ -117,6 +135,54 @@ export class AgentHost {
   /** 是否正在执行一轮生成（worker 存活但空闲时返回 false）。 */
   isInTurn(): boolean {
     return this.turnActive;
+  }
+
+  /**
+   * 等待 worker 空闲（完成契约见 shared/delegation.ts）。
+   *
+   * - 已在进行中的一轮：等到 `agent_settled`（或 worker 退出）。
+   * - 看似空闲：prompt 是“接收即返回”，`agent_start` 可能尚未到达，
+   *   给一个有界宽限窗口；窗口内开始生成则继续等到结束，否则视为空闲返回
+   *   （例如 prompt 被拒绝、没有产生轮次）。
+   */
+  async waitForIdle(options: { startGraceMs?: number } = {}): Promise<void> {
+    const graceMs = Math.max(0, options.startGraceMs ?? PROMPT_START_GRACE_MS);
+    await this.awaitSettledTurn();
+    if (this.turnActive || !this.isRunning()) return;
+    const sawStart = await new Promise<boolean>((resolve) => {
+      const entry = (saw: boolean): void => resolve(saw);
+      const timer = setTimeout(() => {
+        const index = this.startWaiters.indexOf(entry);
+        if (index >= 0) this.startWaiters.splice(index, 1);
+        resolve(false);
+      }, graceMs);
+      timer.unref?.();
+      this.startWaiters.push(entry);
+    });
+    if (sawStart) await this.awaitSettledTurn();
+  }
+
+  /** 最近一次 worker 退出信息；仍在运行或尚未退出过时返回 undefined。 */
+  describeExit(): { code?: number; signal?: string; stderrExcerpt: string } | undefined {
+    return this.exitInfo;
+  }
+
+  private async awaitSettledTurn(): Promise<void> {
+    while (this.turnActive && this.isRunning()) {
+      await new Promise<void>((resolve) => this.settledWaiters.push(resolve));
+    }
+  }
+
+  private flushStartWaiters(saw: boolean): void {
+    const waiters = this.startWaiters;
+    this.startWaiters = [];
+    for (const waiter of waiters) waiter(saw);
+  }
+
+  private flushSettledWaiters(): void {
+    const waiters = this.settledWaiters;
+    this.settledWaiters = [];
+    for (const waiter of waiters) waiter();
   }
 
   async snapshot(): Promise<AgentSnapshot> {
@@ -208,6 +274,7 @@ export class AgentHost {
 
     this.lineBuffer = Buffer.alloc(0);
     this.stderr = "";
+    this.exitInfo = undefined;
     const child = spawn(process.execPath, args, {
       cwd: options.cwd,
       env: {
@@ -322,6 +389,11 @@ export class AgentHost {
       this.child = undefined;
       // Worker may die before its own wipe; reap leftover shells/delegates.
       if (child.pid !== undefined) killProcessTree(child.pid, "SIGTERM");
+      this.exitInfo = {
+        ...(typeof code === "number" ? { code } : {}),
+        ...(signal ? { signal } : {}),
+        stderrExcerpt: redactSecrets(this.stderr.trim(), this.secrets).slice(-2_000),
+      };
       this.log?.error("worker", `worker exited (code ${code ?? "unknown"}${signal ? `, ${signal}` : ""})`, {
         runtimeId: this.runtimeId,
         sessionKey: this.sessionKey,
@@ -457,6 +529,10 @@ export class AgentHost {
 
   private handleExit(error: Error): void {
     this.cancelBrowserRequests();
+    // 所有退出路径（exit / spawn error）都必须放行 waitForIdle 的等待者，
+    // 否则委派完成判定会永久挂起。
+    this.flushStartWaiters(false);
+    this.flushSettledWaiters();
     const detail = redactSecrets(this.stderr.trim(), this.secrets);
     const message = detail
       ? `${redactSecrets(error.message, this.secrets)}\n${detail}`

@@ -36,11 +36,40 @@ export const DELEGATE_CONTINUE_TOOL_NAME = "delegate_continue";
 
 export type DelegationStatus = "pending" | "running" | "completed" | "failed" | "aborted" | "truncated";
 
+/** 活动记录类型统一走共享定义（主进程协调器与渲染层共用同一形状）。 */
+export type { DelegationActivity } from "../../shared/delegation.js";
+import type { DelegationActivity } from "../../shared/delegation.js";
+
 export interface DelegationUsage {
   input: number;
   output: number;
   totalTokens: number;
   cost: number;
+}
+
+/** 子代理运行期间的单条活动记录（有界，随 details 下发给渲染层）。 */
+interface InternalActivity extends DelegationActivity {
+  /** 运行时内部用于把 tool_execution_end 对回 start 条目，不下发。 */
+  callId?: string;
+}
+
+const MAX_RECENT_ACTIVITIES = 60;
+const MAX_ACTIVITY_TEXT_CHARS = 200;
+
+function pushActivity(record: DelegationRecord, entry: InternalActivity): void {
+  record.recent.push({
+    ...entry,
+    text: entry.text.length > MAX_ACTIVITY_TEXT_CHARS ? `${entry.text.slice(0, MAX_ACTIVITY_TEXT_CHARS)}…` : entry.text,
+  });
+  if (record.recent.length > MAX_RECENT_ACTIVITIES) {
+    record.recent.splice(0, record.recent.length - MAX_RECENT_ACTIVITIES);
+  }
+}
+
+function serializeActivity(entry: InternalActivity): DelegationActivity {
+  return entry.isError
+    ? { at: entry.at, kind: entry.kind, text: entry.text, isError: true }
+    : { at: entry.at, kind: entry.kind, text: entry.text };
 }
 
 export interface DelegationRecord {
@@ -56,6 +85,8 @@ export interface DelegationRecord {
   toolCalls: number;
   live?: string;
   usage?: DelegationUsage;
+  /** 运行期间的活动环形缓冲（最近 MAX_RECENT_ACTIVITIES 条）。 */
+  recent: InternalActivity[];
   delivered: boolean;
   background: boolean;
   ctx: ExtensionContext;
@@ -161,6 +192,7 @@ function recordSnapshot(record: DelegationRecord): Record<string, unknown> {
     ...(record.live ? { live: record.live } : {}),
     ...(record.usage ? { usage: record.usage } : {}),
     ...(record.definition.model ? { model: record.definition.model } : {}),
+    ...(record.recent.length ? { recent: record.recent.map(serializeActivity) } : {}),
   };
 }
 
@@ -175,9 +207,14 @@ function delegateDetails(records: DelegationRecord[]): Record<string, unknown> {
       role: record.definition.name,
       task: record.task,
       status: record.status,
+      startedAt: record.startedAt,
+      ...(record.completedAt ? { completedAt: record.completedAt } : {}),
+      toolCalls: record.toolCalls,
+      turns: record.turns,
       ...(record.live ? { live: record.live } : {}),
       ...(record.definition.model ? { model: record.definition.model } : {}),
       ...(record.definition.thinkingLevel ? { thinkingLevel: record.definition.thinkingLevel } : {}),
+      ...(record.recent.length ? { recent: record.recent.map(serializeActivity) } : {}),
     })),
     results: settled.map((record) => ({
       role: record.definition.name,
@@ -273,11 +310,15 @@ class DelegationRunner {
         turns += 1;
         this.record.turns = turns;
         const text = assistantText(event.message);
-        if (text.trim()) lastReport = text;
+        if (text.trim()) {
+          lastReport = text;
+          pushActivity(this.record, { at: Date.now(), kind: "report", text: text.trim() });
+        }
         usage = addUsage(usage, event.message.usage);
         if (turns >= maxTurns && !truncated) {
           truncated = true;
           this.record.live = `reached maxTurns (${maxTurns})`;
+          pushActivity(this.record, { at: Date.now(), kind: "notice", text: this.record.live });
           this.onProgress();
           agent.abort();
         }
@@ -285,13 +326,28 @@ class DelegationRunner {
         toolCalls += 1;
         this.record.toolCalls = toolCalls;
         this.record.live = describeToolCall(event.toolName, event.args);
+        pushActivity(this.record, { at: Date.now(), kind: "tool", text: this.record.live, callId: event.toolCallId });
         this.onProgress();
+      } else if (event.type === "tool_execution_end") {
+        // 把结束状态对回 start 条目；只有失败才立即推送，成功态随下一次进度一起下发。
+        for (let index = this.record.recent.length - 1; index >= 0; index -= 1) {
+          const entry = this.record.recent[index]!;
+          if (entry.kind === "tool" && entry.callId === event.toolCallId) {
+            if (event.isError) entry.isError = true;
+            break;
+          }
+        }
+        if (event.isError) this.onProgress();
       }
     });
     const onAbort = () => agent.abort();
     this.record.abort.signal.addEventListener("abort", onAbort, { once: true });
     try {
       await agent.prompt(this.record.task);
+      // 完成契约（shared/delegation.ts 的 DELEGATION_COMPLETION_CONTRACT）：
+      // 本地路径 prompt 返回即整轮结束的语义由 pi 的 Agent 保证，但这里仍显式
+      // await waitForIdle()，与主进程桥接路径（AgentHost.waitForIdle）保持同一判定：
+      // 空闲后以最后一条带文本的 assistant 消息为最终报告。
       await agent.waitForIdle();
     } catch (error) {
       this.settle(this.record.abort.signal.aborted ? "aborted" : "failed", lastReport, usage, error instanceof Error ? error.message : String(error));
@@ -340,6 +396,7 @@ export class DelegationRegistry {
       report: "",
       turns: 0,
       toolCalls: 0,
+      recent: [],
       delivered: false,
       background,
       ctx,
@@ -362,6 +419,7 @@ export class DelegationRegistry {
     record.status = "running";
     record.task = `${record.task}\n\nFollow-up: ${message.trim()}`;
     record.report = "";
+    record.recent = [];
     record.error = undefined;
     record.completedAt = undefined;
     record.delivered = false;
@@ -382,15 +440,23 @@ export class DelegationRegistry {
     }, 150);
     this.deliveryTimer.unref?.();
   }
-  async wait(ids: string[] | undefined, timeoutSeconds: number | undefined): Promise<{ status: "completed" | "timeout"; records: DelegationRecord[] }> {
+  async wait(ids: string[] | undefined, timeoutSeconds: number | undefined, onTick?: (records: DelegationRecord[]) => void): Promise<{ status: "completed" | "timeout"; records: DelegationRecord[] }> {
     const targets = ids?.length ? this.list().filter((record) => ids.includes(record.id)) : this.active();
     if (!targets.length) return { status: "completed", records: [] };
     const timeoutMs = Math.max(1, timeoutSeconds ?? 600) * 1_000;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), timeoutMs); timer.unref?.(); });
+    // 等待期间定期回报快照，驱动 UI 显示"等待子代理 x/y"进度。
+    let tickTimer: ReturnType<typeof setInterval> | undefined;
+    if (onTick) {
+      onTick(targets);
+      tickTimer = setInterval(() => onTick(targets), 1_000);
+      tickTimer.unref?.();
+    }
     const settled = Promise.all(targets.map((record) => record.completion)).then(() => "completed" as const);
     const status = await Promise.race([settled, timeout]);
     if (timer) clearTimeout(timer);
+    if (tickTimer) clearInterval(tickTimer);
     for (const record of targets) if (isSettled(record)) record.delivered = true;
     return { status, records: targets };
   }
@@ -444,8 +510,12 @@ export function registerDelegateTools(pi: ExtensionAPI, deps: DelegateToolDeps):
     parameters: waitParameters,
     renderShell: "self",
     executionMode: "sequential",
-    async execute(_id, params) {
-      const { status, records } = await registry.wait(params.delegationIds, params.timeoutSeconds);
+    async execute(_id, params, _signal, onUpdate) {
+      const publish = (records: DelegationRecord[]) => {
+        if (!records.length) return;
+        onUpdate?.({ content: [{ type: "text", text: delegateProgressText(records) }], details: { status: "waiting", delegations: records.map(recordSnapshot) } });
+      };
+      const { status, records } = await registry.wait(params.delegationIds, params.timeoutSeconds, publish);
       return { content: [{ type: "text", text: records.length ? `${status === "timeout" ? "Some subagents are still running.\n\n" : ""}${reportBlock(records)}` : "No matching subagents." }], details: { status, delegations: records.map(recordSnapshot), ...(status === "timeout" ? { pendingIds: records.filter((record) => !isSettled(record)).map((record) => record.id) } : {}) } };
     },
   });
@@ -624,7 +694,23 @@ function remoteDelegateDetails(records: DelegationRecordSnapshot[]): Record<stri
   return {
     total: records.length,
     done: settled.length,
-    tasks: records.map((record) => ({ id: record.delegationId, delegationId: record.delegationId, role: record.role, task: record.task, status: record.status, ...(record.live ? { live: record.live } : {}), ...(record.model ? { model: record.model } : {}), ...(record.thinkingLevel ? { thinkingLevel: record.thinkingLevel } : {}) })),
+    // 任务条目带上 childSessionPath / error / recent / 时间与轮次，失败卡片才有的可看，
+    // 而不是只剩一句占位文案（主进程协调器维护 recent 活动缓冲）。
+    tasks: records.map((record) => ({
+      id: record.delegationId,
+      delegationId: record.delegationId,
+      role: record.role,
+      task: record.task,
+      status: record.status,
+      ...(record.live ? { live: record.live } : {}),
+      ...(record.model ? { model: record.model } : {}),
+      ...(record.thinkingLevel ? { thinkingLevel: record.thinkingLevel } : {}),
+      ...(record.childSessionPath ? { childSessionPath: record.childSessionPath } : {}),
+      ...(record.error ? { error: record.error } : {}),
+      ...(record.recent?.length ? { recent: record.recent } : {}),
+      ...(record.startedAt ? { startedAt: record.startedAt } : {}),
+      ...(record.completedAt ? { completedAt: record.completedAt } : {}),
+    })),
     results: settled.map((record) => ({ role: record.role, task: record.task, output: record.report || record.error || "", success: record.status === "completed" || record.status === "truncated", ...(record.usage ? { usage: record.usage } : {}) })),
   };
 }

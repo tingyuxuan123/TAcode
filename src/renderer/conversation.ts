@@ -953,6 +953,14 @@ function toolDetails(value: unknown): unknown {
 
 export type DelegateTaskStatus = "pending" | "running" | "completed" | "failed";
 
+/** 子代理运行期间的单条活动记录（运行时有界缓冲，最近约 60 条）。 */
+export interface DelegateActivity {
+  at: number;
+  kind: "tool" | "notice" | "report";
+  text: string;
+  isError?: boolean;
+}
+
 export interface DelegateTaskState {
   /** 子代理委派 id（运行时的 delegationId），用于与生命周期工具结果对齐。 */
   id?: string;
@@ -961,6 +969,16 @@ export interface DelegateTaskState {
   status: DelegateTaskStatus;
   /** Latest step while the child agent is running (e.g. "正在读取 …"). */
   live?: string;
+  /** 本次委派的起止时间（运行时回传，用于耗时显示）。 */
+  startedAt?: number;
+  completedAt?: number;
+  /** 已发生的工具调用与助手轮次计数（运行时回传）。 */
+  toolCalls?: number;
+  turns?: number;
+  /** 运行期间的活动记录（有界，最近若干条）。 */
+  recent?: DelegateActivity[];
+  /** 子会话文件路径（主进程桥接模式回传），失败时可据此查看子代理会话。 */
+  childSessionPath?: string;
   /** 子代理 token 用量（结算后由运行时回传）。 */
   usage?: { totalTokens?: number; input?: number; output?: number };
   /** 定义里 pin 的模型；未 pin 时跟随会话。 */
@@ -979,6 +997,8 @@ const DELEGATE_LIFECYCLE_TOOLS = new Set(["delegate_wait", "delegate_list", "del
 function lifecycleStatus(value: unknown): DelegateTaskStatus | undefined {
   if (value === "completed" || value === "truncated") return "completed";
   if (value === "failed" || value === "aborted" || value === "stopped" || value === "denied") return "failed";
+  // 桥接模式的取消/中断也是终态；不能丢回 pending（会永远“进行中”）。
+  if (value === "cancelled" || value === "interrupted") return "failed";
   if (value === "running" || value === "pending") return value;
   return undefined;
 }
@@ -1102,15 +1122,39 @@ function normalizeDelegateTask(value: unknown): DelegateTaskState | undefined {
     ? { providerId: value.model.providerId, modelId: value.model.modelId }
     : undefined;
   const thinkingLevel = typeof value.thinkingLevel === "string" ? value.thinkingLevel : undefined;
-  const status = value.status;
+  const startedAt = typeof value.startedAt === "number" && Number.isFinite(value.startedAt) ? value.startedAt : undefined;
+  const completedAt = typeof value.completedAt === "number" && Number.isFinite(value.completedAt) ? value.completedAt : undefined;
+  const toolCalls = typeof value.toolCalls === "number" && Number.isFinite(value.toolCalls) ? value.toolCalls : undefined;
+  const turns = typeof value.turns === "number" && Number.isFinite(value.turns) ? value.turns : undefined;
+  const recent = Array.isArray(value.recent)
+    ? value.recent
+      .filter(isRecord)
+      .map((entry): DelegateActivity => ({
+        at: typeof entry.at === "number" && Number.isFinite(entry.at) ? entry.at : 0,
+        kind: entry.kind === "notice" || entry.kind === "report" ? entry.kind : "tool",
+        text: typeof entry.text === "string" ? entry.text : "",
+        ...(entry.isError === true ? { isError: true as const } : {}),
+      }))
+      .filter((entry) => entry.text)
+    : undefined;
+  const childSessionPath = typeof value.childSessionPath === "string" && value.childSessionPath.trim()
+    ? value.childSessionPath.trim()
+    : undefined;
   const base = {
     ...(id ? { id } : {}),
     role: role || "agent",
     task,
     ...(live ? { live } : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(completedAt !== undefined ? { completedAt } : {}),
+    ...(toolCalls !== undefined ? { toolCalls } : {}),
+    ...(turns !== undefined ? { turns } : {}),
+    ...(recent?.length ? { recent } : {}),
+    ...(childSessionPath ? { childSessionPath } : {}),
     ...(model ? { model } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}),
   };
+  const status = value.status;
   const normalizedStatus = lifecycleStatus(status);
   if (!normalizedStatus) {
     return role || task ? { ...base, status: "pending" } : undefined;
@@ -1329,6 +1373,12 @@ export function liveStatus(tools: ToolActivity[]): string {
     return file ? ct("live.reading", { file }) : ct("live.readingFile");
   }
   if (/exec|bash|command/i.test(running.name)) return ct("live.running");
+  if (running.name === "delegate_wait") {
+    const details = isRecord(running.details) ? running.details : {};
+    const entries = Array.isArray(details.delegations) ? details.delegations.filter(isRecord) : [];
+    const active = entries.filter((entry) => entry.status === "running" || entry.status === "pending").length;
+    if (entries.length > 0) return ct("live.waitingDelegations", { done: entries.length - active, total: entries.length });
+  }
   if (running.name === "delegate") {
     const progress = delegateProgress(running, tools);
     const active = progress.tasks.find((item) => item.status === "running");
