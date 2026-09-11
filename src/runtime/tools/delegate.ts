@@ -17,6 +17,7 @@ import {
   MAX_SUBAGENT_REPORT_CHARS,
   subagentCanMutate,
   subagentEditsFiles,
+  unknownSubagentMessage,
   type SubagentDefinition,
   type SubagentModelPin,
   type SubagentThinkingLevel,
@@ -491,7 +492,11 @@ export function registerDelegateTools(pi: ExtensionAPI, deps: DelegateToolDeps):
       if (!definitions.length) return { content: [{ type: "text", text: "No subagents are enabled. Configure them in Settings → Subagents." }], details: { total: 0, done: 0, tasks: [], results: [] }, isError: true };
       const byName = new Map(definitions.map((item) => [item.name, item]));
       const unknown = params.tasks.map((task) => task.role).filter((role) => !byName.has(role));
-      if (unknown.length) return { content: [{ type: "text", text: `Unknown subagent(s): ${unknown.join(", ")}. Available:\n${definitions.map((item) => `- ${item.name}: ${item.description}`).join("\n")}` }], details: { total: 0, done: 0, tasks: [], results: [] }, isError: true };
+      if (unknown.length) {
+        // 与主进程桥接路径共用同一份提示（含可用清单 + 最接近的名字）。
+        const text = unknown.map((role) => unknownSubagentMessage(role, definitions)).join("\n\n");
+        return { content: [{ type: "text", text }], details: { total: 0, done: 0, tasks: [], results: [] }, isError: true };
+      }
       if (registry.active().length + params.tasks.length > MAX_SUBAGENT_CONCURRENCY) return { content: [{ type: "text", text: `Too many concurrent subagents (limit ${MAX_SUBAGENT_CONCURRENCY}).` }], details: { total: 0, done: 0, tasks: [], results: [] }, isError: true };
       const background = params.background === true;
       let publish: () => void = () => undefined;

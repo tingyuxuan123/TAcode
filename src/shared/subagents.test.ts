@@ -10,8 +10,11 @@ import {
   normalizeSubagentName,
   parseSubagentDocument,
   renderSubagentDocument,
+  closestSubagentName,
   subagentCanMutate,
+  subagentCatalogText,
   subagentEditsFiles,
+  unknownSubagentMessage,
   type SubagentDefinition,
 } from "./subagents";
 
@@ -198,6 +201,55 @@ describe("可写性与常量来源", () => {
     const explorer = withTools([...DEFAULT_SUBAGENT_TOOLS]);
     expect(subagentCanMutate(explorer)).toBe(false);
     expect(subagentEditsFiles(explorer)).toBe(false);
+  });
+
+  it("未知角色提示附可用清单 + 最接近的名字（模型看不到目录）", () => {
+    const definitions = [
+      { name: "explorer", description: "Read-only repository explorer." },
+      { name: "code-reviewer", description: "Adversarial reviewer." },
+    ];
+    // 换大小写/拼写：都要给出「你是不是想找 X」
+    expect(closestSubagentName("Explore", definitions.map((item) => item.name))).toBe("explorer");
+    expect(closestSubagentName("reviewer", definitions.map((item) => item.name))).toBe("code-reviewer");
+    expect(closestSubagentName("fixr", definitions.map((item) => item.name))).toBeUndefined();
+
+    const message = unknownSubagentMessage("Explore", definitions);
+    expect(message).toContain('Unknown subagent: Explore');
+    expect(message).toContain('Did you mean "explorer"?');
+    expect(message).toContain("Available:");
+    expect(message).toContain("- code-reviewer: Adversarial reviewer.");
+  });
+
+  it("一个角色都没启用时给出配置指引", () => {
+    const message = unknownSubagentMessage("explorer", []);
+    expect(message).toContain("Unknown subagent: explorer");
+    expect(message).toContain("Settings → Subagents");
+  });
+
+  it("模型可见的子代理目录含角色、工具与上限", () => {
+    const catalog = subagentCatalogText([
+      { name: "explorer", description: "Read-only explorer.", tools: ["read_file"], maxTurns: 40, thinkingLevel: "medium" },
+    ]);
+    expect(catalog).toContain("Subagent catalog");
+    expect(catalog).toContain("- explorer: Read-only explorer. (tools: read_file; maxTurns 40; thinking medium)");
+    expect(subagentCatalogText([])).toBe("");
+  });
+
+  it("解析与渲染 execPolicy（只读命令策略）", () => {
+    const { definition, warnings } = parseSubagentDocument({
+      text: doc("name: explorer\ndescription: Explore\nexecPolicy: readonly"),
+      source: "builtin",
+    });
+    expect(definition?.execPolicy).toBe("readonly");
+    expect(warnings).toEqual([]);
+    expect(renderSubagentDocument(definition!)).toContain("execPolicy: readonly");
+
+    const invalid = parseSubagentDocument({
+      text: doc("name: explorer\ndescription: Explore\nexecPolicy: yolo"),
+      source: "builtin",
+    });
+    expect(invalid.definition?.execPolicy).toBeUndefined();
+    expect(invalid.warnings.join("\n")).toContain("execPolicy 非法");
   });
 
   it("并发与报告上限只有一份来源（本地与桥接不会漂移）", () => {

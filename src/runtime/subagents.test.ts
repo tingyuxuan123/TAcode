@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { subagentCanMutate, subagentEditsFiles } from "../shared/subagents";
 import {
   BUILTIN_SUBAGENTS,
   deleteUserSubagent,
@@ -96,4 +97,21 @@ describe("subagent definitions", () => {
     const raw = await readFile(join(getSubagentsDir(), "..", "subagents.json"), "utf8");
     expect(JSON.parse(raw)).toEqual({ disabled: ["explorer"] });
   });
+
+describe("内置角色：只读命令策略", () => {
+  it("explorer 声明 exec_command 但被限制为只读白名单", () => {
+    const explorer = BUILTIN_SUBAGENTS.find((item) => item.name === "explorer")!;
+    expect(explorer.execPolicy).toBe("readonly");
+    expect(explorer.tools).toContain("exec_command");
+    // 只读角色不算「会改文件」，但按现有判定算「可写子代理」（exec 在 mutating 集合里）。
+    expect(subagentEditsFiles(explorer)).toBe(false);
+    expect(subagentCanMutate(explorer)).toBe(true);
+  });
+
+  it("其余内置角色没有只读命令策略（test-runner 需要完整 exec）", () => {
+    for (const name of ["code-reviewer", "test-runner", "fixer"]) {
+      expect(BUILTIN_SUBAGENTS.find((item) => item.name === name)?.execPolicy).toBeUndefined();
+    }
+  });
+});
 });

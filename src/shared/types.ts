@@ -54,6 +54,26 @@ export interface SessionSummary {
   delegationError?: string;
 }
 
+/**
+ * 运行中的主进程是不是「旧构建」（本地 `pnpm build`/`pnpm dev` 重建后需要完全退出重启）。
+ * 由主进程比较「进程启动时间」与「bundle 磁盘 mtime」得出。
+ */
+export interface AppBuildStatus {
+  startedAt: number;
+  bundleMtimeMs?: number;
+  restartRequired: boolean;
+}
+
+/** 只读会话转录（`sessions:read`）：子代理子会话在 `~/.tether/sessions/`，不在项目工作区内。 */
+export interface SessionTranscript {
+  sessionPath: string;
+  /** 会话 JSONL 的 message 条目（与 `agent:start` 的 snapshot.messages 同一形状）。 */
+  messages: unknown[];
+  /** 截断前的消息总数。 */
+  totalMessages: number;
+  truncated: boolean;
+}
+
 export interface ProviderStatus {
   id: ProviderId;
   name: string;
@@ -92,6 +112,8 @@ export interface AgentStartOptions {
   activeTools?: string[];
   /** 子代理的轮数预算：到上限即主动收口（桥接路径由角色定义下发）。 */
   maxTurns?: number;
+  /** 只读命令策略（`readonly` = exec_command 只允许白名单内的只读命令）。 */
+  execPolicy?: import("./subagents").SubagentExecPolicy;
   /** Child workers use depth 1 to disable recursive delegation. */
   delegationDepth?: number;
 }
@@ -181,6 +203,8 @@ export interface DesktopApi {
   platform: NodeJS.Platform;
   app: {
     version(): Promise<string>;
+    /** 运行中的主进程是不是旧构建（本地重建后需要完全重启）。 */
+    buildStatus(): Promise<AppBuildStatus>;
     openExternal(url: string): Promise<void>;
     revealPath(skillName: string, hint?: string): Promise<void>;
     listSkills(): Promise<Array<{ name: string; path: string }>>;
@@ -235,6 +259,8 @@ export interface DesktopApi {
   };
   sessions: {
     list(cwd?: string): Promise<SessionSummary[]>;
+    /** 只读读取某个会话转录（子代理子会话在 `~/.tether/sessions/`）。 */
+    read(sessionPath: string): Promise<SessionTranscript>;
     remove(id: string): Promise<void>;
     pin(id: string, pinned: boolean): Promise<void>;
     rename(id: string, title: string): Promise<void>;

@@ -16,6 +16,8 @@ export interface DelegationRunSources {
   thinkingLevel?: unknown;
   /** 角色定义里的轮数上限，可能是非法值或畸形类型。 */
   maxTurns?: unknown;
+  /** 角色定义里的命令策略（`readonly` 时子 worker 只跑白名单只读命令）。 */
+  execPolicy?: unknown;
 }
 
 /**
@@ -52,10 +54,11 @@ export function delegationTurnLimit(definition: Pick<DelegationRunSources, "maxT
 export function delegationRunOptions(
   payload: DelegationRunSources,
   definition: DelegationRunSources,
-): { effort?: string; maxTurns: number } {
+): { effort?: string; maxTurns: number; execPolicy?: "readonly" } {
   const effort = knownThinkingLevel(payload.thinkingLevel) ?? knownThinkingLevel(definition.thinkingLevel);
   return {
     ...(effort ? { effort } : {}),
     maxTurns: delegationTurnLimit(definition),
+    ...(definition.execPolicy === "readonly" ? { execPolicy: "readonly" as const } : {}),
   };
 }

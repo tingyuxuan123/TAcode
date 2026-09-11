@@ -2214,6 +2214,21 @@ textarea::selection,
 .markdown ol {
   margin: 0 0 0.7em;
 }
+/* 段落与列表项尽量不把末尾 1–2 个字甩成孤行（`text-wrap: pretty` 不支持的版本会自动忽略）。 */
+.markdown p,
+.markdown li {
+  text-wrap: pretty;
+}
+/* 表格滚动容器：长内容列不再把短标签列压成「已核 / 实」两行。 */
+.md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+/* 短标签单元格（completed / 已核实 / :609）禁止折行，宽度由表格让给它们。 */
+.markdown th.is-tight,
+.markdown td.is-tight {
+  white-space: nowrap;
+}
 .markdown li {
   margin: 0.32em 0;
 }
@@ -3096,61 +3111,204 @@ textarea::selection,
 .settings-usage-refresh:disabled {
   opacity: 0.4;
 }
+/* 委托卡（对齐 PI-Desktop 的 subagent 拓扑）：主智能体节点 + 2px 连线 + 子代理节点卡。
+   节点是浮起小块，连线是圆角色条；容器变窄时退化为竖向。 */
 .delegate-tool {
+  min-width: 0;
+  container-type: inline-size;
+  container-name: delegate-card;
+}
+/* 自带连线的卡片：去掉通用 detail 的左侧竖线，换成独立浮起区块 */
+.trace-row-detail.is-delegate {
+  margin: 4px 0 8px;
+  padding: 6px 8px 8px;
+  border-left: 0;
+  border-radius: 10px;
+  background: var(--inset);
+}
+.delegate-topology {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(138px, 0.58fr) 34px minmax(248px, 1.42fr);
+  align-items: center;
+}
+.delegate-root {
   display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  min-height: 72px;
+  padding: 11px;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+}
+.delegate-root-icon {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--inset);
+  color: var(--ink-3);
+}
+.delegate-root-copy,
+.delegate-node-copy {
+  display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 6px;
   min-width: 0;
 }
-/* 聚合委托卡头部：完成比 + 进度条 + 总耗时 */
-.delegate-card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 2px 0;
-  font-size: calc(11px * var(--ui-font-scale));
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-}
-.delegate-card-count {
-  font-weight: 600;
-  color: var(--ink-2);
-}
-.delegate-card-bar {
-  flex: 1;
-  height: 3px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ink) 10%, transparent);
+.delegate-root-copy strong {
   overflow: hidden;
+  color: var(--ink);
+  font-size: calc(12.5px * var(--ui-font-scale));
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.delegate-card-bar-fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--brand);
-  transition: width 0.3s ease;
+.delegate-root-copy > span {
+  margin-top: 4px;
+  color: var(--ink-3);
+  font-size: calc(11px * var(--ui-font-scale));
+  line-height: 1.45;
 }
-/* 子代理节点行：状态环头像 + 元信息 + 任务摘要 + 实时预览 */
-.delegate-task {
+.delegate-connector {
+  height: 2px;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+.delegate-agents {
+  position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: start;
+  gap: 10px;
+  min-width: 0;
+  padding-left: 14px;
+}
+/* 竖向主干：每个子代理的横向短枝都接到这条 2px 条上 */
+.delegate-agents::before {
+  position: absolute;
+  top: 36px;
+  bottom: 36px;
+  left: 0;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  content: "";
+}
+.delegate-node {
+  position: relative;
+  min-width: 0;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+}
+.delegate-node::before {
+  position: absolute;
+  top: 35px;
+  right: 100%;
+  width: 15px;
+  height: 2px;
+  background: var(--line-strong);
+  content: "";
+}
+.delegate-node-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
   width: 100%;
+  min-width: 0;
+  min-height: 70px;
   margin: 0;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--inset);
-  border: 1px solid var(--line);
-  font-size: calc(12px * var(--ui-font-scale));
-  line-height: 1.4;
-  color: inherit;
+  padding: 10px;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--ink-2);
   text-align: left;
   cursor: pointer;
 }
-.delegate-task:hover {
-  background: color-mix(in srgb, var(--ink) 5%, transparent);
+.delegate-node-header:hover {
+  background: var(--hover);
 }
+.delegate-node-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding-right: 20px; /* 给右上角「详情」按钮让位 */
+}
+.delegate-role {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delegate-node-model {
+  max-width: 38%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: calc(10px * var(--ui-font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delegate-status,
+.delegate-node-title-row time {
+  flex: none;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: calc(10px * var(--ui-font-scale));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.delegate-node.running .delegate-status {
+  color: var(--brand);
+}
+.delegate-node.stale .delegate-status {
+  color: #b45309;
+}
+.delegate-node.failed .delegate-status {
+  color: var(--red);
+}
+.delegate-node-task {
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: calc(11px * var(--ui-font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delegate-node.running .delegate-node-task {
+  color: var(--ink-2);
+}
+.delegate-node .delegate-task-meta {
+  margin-top: 3px;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--ui-font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delegate-node-preview {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: calc(10.5px * var(--ui-font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delegate-node-preview.live {
+  color: var(--accent);
+}
+/* 子代理头像（抽屉复用）：状态色底 + 勾/叉，运行/等待叠旋转环 */
 .delegate-avatar {
   position: relative;
   display: inline-flex;
@@ -3191,68 +3349,118 @@ textarea::selection,
 @keyframes delegate-spin {
   to { transform: rotate(360deg); }
 }
-.delegate-node-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.delegate-node-top {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.delegate-node-top time {
-  margin-left: auto;
+/* 拓扑节点头像：Bot 图标 + 右下角状态徽标，不再叠旋转环（状态由徽标承担） */
+.delegate-avatar.node {
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-top: 0;
+  border-radius: 50%;
+  background: var(--inset);
   color: var(--ink-3);
-  font-size: calc(10.5px * var(--ui-font-scale));
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
-.delegate-role {
-  font-weight: 600;
-  color: var(--ink);
+.delegate-avatar.node::after {
+  content: none;
 }
-.delegate-status {
-  color: var(--ink-3);
-  white-space: nowrap;
-}
-.delegate-task.running .delegate-status {
+.delegate-avatar.node.running {
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
   color: var(--brand);
 }
-.delegate-task.stale .delegate-status {
-  color: #b45309;
+.delegate-avatar-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  /* 与节点同色的挖空描边，而不是一条分隔线 */
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--ink-3);
+  color: var(--surface);
 }
-.delegate-task.failed .delegate-status {
-  color: var(--red);
+.delegate-avatar-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
 }
-.delegate-node-task {
+.delegate-avatar.node.completed .delegate-avatar-badge {
+  background: var(--green);
+}
+.delegate-avatar.node.failed .delegate-avatar-badge {
+  background: var(--red);
+}
+.delegate-avatar.node.running .delegate-avatar-dot,
+.delegate-avatar.node.pending .delegate-avatar-dot {
+  animation: delegate-pulse 1.2s ease-in-out infinite;
+}
+@keyframes delegate-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+/* 节点右上「详情」按钮：默认隐形，悬停或键盘聚焦才出现 */
+.delegate-node-details {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.delegate-node:hover .delegate-node-details,
+.delegate-node-details:focus-visible {
+  opacity: 1;
+}
+.delegate-node-details:hover {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
   color: var(--ink-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.delegate-task.pending .delegate-node-task {
-  color: var(--ink-3);
+/* 窄容器：主智能体在上、子代理依次向下，连线改竖向 */
+@container delegate-card (max-width: 520px) {
+  .delegate-topology {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .delegate-connector {
+    width: 2px;
+    height: 18px;
+    /* 与下方主干同一条竖线（left:14px），让连线连成一整条 */
+    margin-left: 14px;
+  }
+  .delegate-agents {
+    padding-left: 28px;
+  }
+  .delegate-agents::before {
+    top: 0;
+    bottom: 36px;
+    left: 14px;
+  }
+  .delegate-node::before {
+    width: 14px;
+  }
 }
-.delegate-task.running .delegate-node-task {
-  color: var(--ink);
-}
-.delegate-node-preview {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-3);
-  font-size: calc(11px * var(--ui-font-scale));
-}
-.delegate-node-preview.live {
-  color: var(--accent, #3b82f6);
-}
-.delegate-chevron {
-  align-self: center;
-  color: var(--ink-3);
+/* 降低动效偏好：不做脉冲与旋转 */
+@media (prefers-reduced-motion: reduce) {
+  .delegate-avatar.node.running .delegate-avatar-dot,
+  .delegate-avatar.node.pending .delegate-avatar-dot,
+  .delegate-avatar.running::after {
+    animation: none;
+  }
 }
 .delegate-task-text {
   margin: 0;
@@ -7287,6 +7495,190 @@ kbd {
   padding: 0;
   gap: 0;
   overflow: hidden;
+}
+
+/* 子代理只读标签：内容区沿用审查面板的滚动/内边距语言 */
+.child-session-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+.child-session-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.child-session-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: calc(11.5px * var(--ui-font-scale));
+}
+.child-session-role {
+  flex: none;
+  font-weight: 600;
+  color: var(--ink);
+}
+.child-session-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-3);
+}
+.child-session-live {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+}
+.child-session-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 24px;
+  overflow: auto;
+}
+.child-session-live-step {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent, var(--link));
+  font-size: calc(12px * var(--ui-font-scale));
+  overflow-wrap: anywhere;
+}
+.child-session-live-step > svg { flex: none; }
+.child-session-task {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: calc(12px * var(--ui-font-scale));
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.child-session-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.child-session-section h4 {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: calc(11px * var(--ui-font-scale));
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+/* 子代理面板的最终报告：抽屉那套 11px / 缩进 40px 的紧凑样式在 460px 面板里既小又散，这里单独一套。 */
+.child-session-report {
+  color: var(--ink-2);
+  font-size: calc(12.5px * var(--chat-font-scale));
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.child-session-report.markdown h1,
+.child-session-report.markdown h2,
+.child-session-report.markdown h3,
+.child-session-report.markdown h4,
+.child-session-report.markdown h5,
+.child-session-report.markdown h6 {
+  margin: 0.9em 0 0.35em;
+  font-weight: 650;
+  color: var(--ink);
+  line-height: 1.35;
+}
+.child-session-report.markdown h1 {
+  font-size: calc(15px * var(--chat-font-scale));
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--line-strong);
+}
+.child-session-report.markdown h2 {
+  font-size: calc(14px * var(--chat-font-scale));
+  padding-bottom: 0.22em;
+  border-bottom: 1px solid var(--line);
+}
+.child-session-report.markdown h3 { font-size: calc(13.5px * var(--chat-font-scale)); }
+.child-session-report.markdown h4,
+.child-session-report.markdown h5,
+.child-session-report.markdown h6 { font-size: calc(12.5px * var(--chat-font-scale)); }
+.child-session-report.markdown p,
+.child-session-report.markdown ul,
+.child-session-report.markdown ol {
+  margin: 0 0 0.65em;
+}
+/* 列表缩进回到正文尺度：继承来的 40px 在窄面板里会把文字推到中线。 */
+.child-session-report.markdown ul,
+.child-session-report.markdown ol {
+  padding-left: 1.35em;
+}
+.child-session-report.markdown li {
+  margin: 0.22em 0;
+  text-wrap: pretty;
+}
+.child-session-report.markdown li::marker {
+  color: var(--ink-3);
+}
+.child-session-report.markdown table {
+  margin: 0.2em 0 0.9em;
+  font-size: calc(12px * var(--chat-font-scale));
+}
+.child-session-report.markdown th,
+.child-session-report.markdown td {
+  padding: 6px 10px;
+}
+/* 行内 code 恢复底色与内边距：路径、`inspect={<InspectPanel />}` 这类不再和正文糊在一起。 */
+.child-session-report.markdown :not(pre) > code {
+  font-size: 0.88em;
+  padding: 0.12em 0.38em;
+  margin: 0 0.06em;
+  border-radius: 5px;
+  background: var(--md-code-bg);
+  color: var(--md-code-ink);
+  overflow-wrap: anywhere;
+}
+.child-session-report.markdown pre,
+.child-session-report.markdown pre code {
+  margin: 0.5em 0;
+  padding: 9px 11px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--md-pre-bg);
+  color: var(--md-pre-ink);
+  font-size: calc(12px * var(--code-font-scale));
+  line-height: 1.5;
+}
+.child-session-report.markdown pre code {
+  padding: 0;
+  background: none;
+}
+.child-session-report.markdown .file-chip {
+  font-size: 0.92em;
+}
+.child-session-report.markdown hr {
+  margin: 0.9em 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.child-session-note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: calc(12px * var(--ui-font-scale));
+}
+.child-session-note.is-error {
+  color: var(--red);
 }
 
 .browser-detached-notice {

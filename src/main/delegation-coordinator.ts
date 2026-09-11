@@ -29,7 +29,7 @@ import {
   TacodeStateStore,
   type DelegatedThreadInput,
 } from "../runtime/state.js";
-import type { SubagentDefinition } from "../shared/subagents.js";
+import { unknownSubagentMessage, type SubagentDefinition } from "../shared/subagents.js";
 import { delegationTurnLimit } from "./delegation-run-options.js";
 import type { AgentHostStartOptions } from "./agent-manager.js";
 import type { DiagnosticSink } from "./local-logger.js";
@@ -86,6 +86,13 @@ const permissions = new Set<PermissionMode>(["plan", "ask", "auto", "full"]);
 const sandboxes = new Set(["read-only", "workspace-write", "danger-full-access"]);
 
 const MAX_RECENT_ACTIVITIES = 60;
+/**
+ * 进程内保留的终态委派上限：`entries` 之前没有删除点，长会话里会随历史线性增长
+ * （`entriesForParent` 每次 O(n) 过滤）。超过上限时淘汰最旧的终态条目，但
+ * **刚结束的**（默认 60s 内）与仍有存活 host 的一律保留，避免打断 `delegate_continue`/对账。
+ */
+const MAX_RETAINED_TERMINAL_ENTRIES = 200;
+const TERMINAL_RETENTION_MS = 60_000;
 const MAX_ACTIVITY_TEXT_CHARS = 200;
 /** 单次委派完成的兜底超时：超时归类 timeout，不再无限等待。 */
 const DEFAULT_COMPLETION_TIMEOUT_MS = 30 * 60_000;
@@ -94,6 +101,10 @@ const TURN_LIMIT_POLL_MS = 500;
 
 export class DelegationCoordinator {
   private readonly entries = new Map<string, DelegationEntry>();
+  /** parentSessionPath → 该父会话的委派 id，避免每次 list/wait 全表扫描。 */
+  private readonly entriesByParent = new Map<string, Set<string>>();
+  /** 已通过上限检查、但尚未建表的同步占位（parentSessionPath → 计数）。 */
+  private readonly reservations = new Map<string, number>();
   private readonly requestCache = new Map<string, DelegationBridgeResponse>();
   private readonly state: TacodeStateStore;
   private readonly ownsState: boolean;
@@ -185,15 +196,33 @@ export class DelegationCoordinator {
     if (this.isDelegatedSession(parentSessionPath)) {
       throw new Error("Delegated sessions cannot create further delegations.");
     }
+    // 上限检查与真正建表之间有 await（读定义/建选项），必须**同步占位**：
+    // 否则并发提交的多次 start 会一起通过检查，突破 DELEGATION_MAX_CONCURRENCY。
+    const reserved = this.reservations.get(parentSessionPath) ?? 0;
     const active = this.entriesForParent(parentSessionPath).filter(
       (entry) => !isDelegationTerminal(entry.record.status),
     ).length;
-    if (active >= DELEGATION_MAX_CONCURRENCY) {
+    if (active + reserved >= DELEGATION_MAX_CONCURRENCY) {
       throw new Error(`Too many concurrent delegations (limit ${DELEGATION_MAX_CONCURRENCY}).`);
     }
+    this.reservations.set(parentSessionPath, reserved + 1);
+    try {
+      return await this.startReserved(parentSessionPath, normalized);
+    } finally {
+      const left = (this.reservations.get(parentSessionPath) ?? 1) - 1;
+      if (left > 0) this.reservations.set(parentSessionPath, left);
+      else this.reservations.delete(parentSessionPath);
+    }
+  }
+
+  private async startReserved(
+    parentSessionPath: string,
+    normalized: ReturnType<DelegationCoordinator["validateStartPayload"]>,
+  ): Promise<DelegationRecordSnapshot> {
     const definitions = await loadEnabledSubagents();
     const definition = definitions.find((item) => item.name === normalized.role);
-    if (!definition) throw new Error(`Unknown subagent: ${normalized.role}`);
+    // 模型看不到子代理目录，报错必须附可用清单 + 最接近的名字，否则它会继续猜角色名。
+    if (!definition) throw new Error(unknownSubagentMessage(normalized.role, definitions));
 
     const delegationId = `delegation-${randomUUID()}`;
     const childSessionPath = path.join(getTacodeSessionsDir(), `${delegationId}.jsonl`);
@@ -398,6 +427,9 @@ export class DelegationCoordinator {
         provider: entry.record.provider,
         model: entry.record.model,
         permission: entry.record.permission,
+        // 定义里的工具集与命令策略：主进程是旧构建时这里会明显不对（真实踩过一次）。
+        tools: definition.tools.join(", "),
+        execPolicy: definition.execPolicy ?? "full",
       });
       const host = this.createDelegationHost(entry.record.delegationId);
       entry.host = host;
@@ -649,6 +681,10 @@ export class DelegationCoordinator {
       recent: [],
     };
     this.entries.set(record.delegationId, entry);
+    const siblings = this.entriesByParent.get(record.parentSessionPath) ?? new Set<string>();
+    siblings.add(record.delegationId);
+    this.entriesByParent.set(record.parentSessionPath, siblings);
+    this.evictTerminalEntries();
     return entry;
   }
 
@@ -757,7 +793,38 @@ export class DelegationCoordinator {
 
   private entriesForParent(parentSessionPath: string): DelegationEntry[] {
     const normalized = path.resolve(parentSessionPath);
-    return [...this.entries.values()].filter((entry) => entry.record.parentSessionPath === normalized);
+    const ids = this.entriesByParent.get(normalized);
+    if (!ids) return [];
+    const found: DelegationEntry[] = [];
+    for (const id of ids) {
+      const entry = this.entries.get(id);
+      if (entry) found.push(entry);
+    }
+    return found;
+  }
+
+  /** 超过上限时淘汰最旧的终态委派（保留最近的与仍持有 host 的）。 */
+  private evictTerminalEntries(): void {
+    if (this.entries.size <= MAX_RETAINED_TERMINAL_ENTRIES) return;
+    const cutoff = Date.now() - TERMINAL_RETENTION_MS;
+    // 终态条目即使还挂着空闲的子 worker 也可淘汰（委派已结束），淘汰时顺手停掉它：
+    // 否则「终态 + host 存活」这个常态会让淘汰永远不生效。
+    const candidates = [...this.entries.values()]
+      .filter((entry) => isDelegationTerminal(entry.record.status))
+      .filter((entry) => (entry.record.completedAt ?? entry.record.startedAt) < cutoff)
+      .sort((left, right) => (left.record.completedAt ?? left.record.startedAt) - (right.record.completedAt ?? right.record.startedAt));
+    let overflow = this.entries.size - MAX_RETAINED_TERMINAL_ENTRIES;
+    for (const entry of candidates) {
+      if (overflow <= 0) break;
+      this.entries.delete(entry.record.delegationId);
+      void entry.host?.stop().catch(() => undefined);
+      const siblings = this.entriesByParent.get(entry.record.parentSessionPath);
+      if (siblings) {
+        siblings.delete(entry.record.delegationId);
+        if (siblings.size === 0) this.entriesByParent.delete(entry.record.parentSessionPath);
+      }
+      overflow -= 1;
+    }
   }
 
   private isDelegatedSession(parentSessionPath: string): boolean {

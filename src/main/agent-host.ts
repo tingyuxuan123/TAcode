@@ -302,6 +302,8 @@ export class AgentHost {
           : {}),
         // 子代理轮数预算：runtime 侧到上限主动 abort（见 runtime/extension.ts 的 turn_end 钩子）。
         ...(options.maxTurns ? { TACODE_MAX_TURNS: String(options.maxTurns) } : {}),
+        // 只读命令策略：子 worker 的 exec_command 只允许白名单只读命令。
+        ...(options.execPolicy ? { TACODE_EXEC_POLICY: options.execPolicy } : {}),
         ...(options.serviceId ? { TACODE_SERVICE_ID: options.serviceId } : {}),
         ...(this.handleDelegation ? { TACODE_DELEGATION_BRIDGE: "1" } : {}),
       },
@@ -415,6 +417,10 @@ export class AgentHost {
   async stop(): Promise<void> {
     this.cancelBrowserRequests();
     this.turnActive = false;
+    // 停 host 也要放行等待者：否则「已退出的 worker 再 stop()」会走下面的早退分支，
+    // 让 waitForIdle 的等待者永久挂起（delegate_stop / 超时收口路径都会踩到）。
+    this.flushStartWaiters(false);
+    this.flushSettledWaiters();
     const child = this.child;
     if (!child) return;
     this.child = undefined;

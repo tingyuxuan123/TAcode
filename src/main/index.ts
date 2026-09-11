@@ -19,6 +19,7 @@ import {
   ensureSessionRuntimeLink,
   getSubagentsDir,
   getTacodeHome,
+  getTacodeSessionsDir,
   getStoredDeepSeekBaseUrl,
   getStoredModelSelection,
   initializeTacodeHome,
@@ -57,6 +58,8 @@ import {
 } from "./atomic-file";
 import { isPathInsideRoot } from "./workspace-path";
 import { LocalLogger } from "./local-logger";
+import { readSessionTranscript } from "./session-transcript";
+import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { apiBaseUrl, listModels } from "../shared/openai-models";
 import {
@@ -148,6 +151,8 @@ const ALLOWED_AGENT_COMMANDS = new Set([
 ]);
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
+/** 本进程的启动时间：与磁盘产物 mtime 比较即可判断「是否在跑旧构建」。 */
+const processStartedAt = Date.now();
 const legacyUserDataPath = path.join(app.getPath("appData"), "DSHarness");
 const userDataPath = path.join(app.getPath("appData"), "Tether");
 
@@ -544,6 +549,18 @@ function registerIpc(): void {
     for (const notice of notices) diagnostics.warn("config", notice);
     return notices;
   });
+  ipcMain.handle(
+    "app:build-status",
+    async () => {
+      // 主进程 bundle 就是当前模块自身：磁盘比进程新 → 本地已重建，需要完全重启。
+      let mtimeMs: number | undefined;
+      try {
+        mtimeMs = (await fsp.stat(fileURLToPath(import.meta.url))).mtimeMs;
+      } catch {
+        mtimeMs = undefined;
+      }
+      return appBuildStatus(processStartedAt, mtimeMs);
+    });
   ipcMain.handle(
     "app:log-diagnostic",
     (event, scope: unknown, message: unknown, details?: unknown) => {
@@ -948,6 +965,9 @@ function registerIpc(): void {
     );
     return mergeLoadedSessions(mapped, cwd);
   });
+  ipcMain.handle("sessions:read", async (_event, rawPath: unknown) =>
+    // 只读转录（含子代理子会话）：不启动 worker、不切换活动会话。
+    readSessionTranscript(getTacodeSessionsDir(), rawPath));
   ipcMain.handle("sessions:remove", async (_event, rawId: unknown) => {
     const id = requireString(rawId, "会话 id", { maxLength: 256 });
     const store = new TacodeStateStore();
@@ -1995,6 +2015,21 @@ async function addSkillManifests(root: string, files: string[]): Promise<void> {
 
 app.whenReady().then(async () => {
   await initializeTacodeHome();
+  // 启动即记录构建身份：与磁盘 mtime 对照，就能判断这个进程是不是在跑旧产物。
+  void (async () => {
+    let bundleMtimeMs: number | undefined;
+    try {
+      bundleMtimeMs = (await fsp.stat(fileURLToPath(import.meta.url))).mtimeMs;
+    } catch {
+      bundleMtimeMs = undefined;
+    }
+    const status = appBuildStatus(processStartedAt, bundleMtimeMs);
+    diagnostics.info("app", "main process started", {
+      startedAt: new Date(status.startedAt).toISOString(),
+      bundleMtime: status.bundleMtimeMs ? new Date(status.bundleMtimeMs).toISOString() : undefined,
+      restartRequired: status.restartRequired,
+    });
+  })();
   delegationCoordinator = new DelegationCoordinator({
     createHost: (runtimeId, delegationId) => createAgentHost(runtimeId, delegationId),
     findParentHost: (sessionPath) => agentManager.findBySession(sessionPath),

@@ -1,5 +1,92 @@
 # 模型供应商管理进度
 
+## 2026-09-11：委托卡改成 PI-Desktop 的子代理拓扑样式（08:53-09:00，Asia/Shanghai）
+
+- 用户贴 PI-Desktop 截图（源码在 /Users/yfdl/Downloads/PI-Desktop-main），要求「把我的也改成这种」：分组卡表头「Subagent 已完成 · N 个 Subagent · 已完成 x/y · 耗时」+ 左侧主 Agent 节点、2px 连线、右侧子代理节点卡（Bot 头像 + 右下状态徽标、role/模型/状态·耗时、任务摘要、步骤数）。
+- 对照实现：apps/desktop/src/components/ChatTranscript.tsx（SubagentTopology + variant="topology" 的 ToolRow）、apps/desktop/src/styles/messages.css 的 .subagent-topology 段、apps/desktop/src/lib/subagent-topology.ts（状态/耗时归并）。
+- `src/renderer/ui.tsx`：DelegateDetail 从「进度条头 + 节点行」改为拓扑网格（.delegate-topology/.delegate-root/.delegate-connector/.delegate-agents）；DelegateTaskRow 改为节点卡（Bot 头像 + 右下状态徽标、标题行 role/模型/状态·耗时、任务摘要、步骤或实时预览、右上 hover「详情」按钮）；trace 表头对委托行改用新文案 + 「N 个子代理 · 已完成 x/y」，并在有子代理运行时自动展开一次（用户手动收起后不再弹）；新增 delegateHeadLabel，节点卡沿用原有「点卡身开右侧子会话标签 / 详情按钮开抽屉」交互。
+- `src/shared/i18n.ts`：新增 delegate.coordinator/coordinating/headRunning/headDone/headIssues/headCount/headRatio/agentsLabel（中英各 8 条），删除已无引用的 delegate.cardLabel。
+- `src/renderer/styles.css`：新增整套拓扑样式（含 @container delegate-card ≤520px 的竖向回退、prefers-reduced-motion 关闭脉冲/旋转），删除失效的 .delegate-card-*/.delegate-task-row/.delegate-task-details/.delegate-node-main/.delegate-node-top/.delegate-chevron；颜色全部走现有 token（--surface/--inset/--line-strong/--green/--red/--brand/--shadow-raised），明暗主题均已验。
+- 与 PI-Desktop 的有意差异：根节点文案沿用仓库既有称呼「主智能体 / 子代理」（PI 用「主 Agent / Subagent」）；窄容器时连线与主干对齐成同一条竖线（PI 的 connector 在 28px、rail 在 14px，会错开一格）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 71 文件 619 用例全通过（未改 conversation.ts，故既有「委托 0/3」等断言保持不动）。视觉用静态预览验证（会话工作台 plan/preview/index.html + 项目 styles.css 副本，受管浏览器截图）：宽/窄容器、完成/进行中/失败/单委派四类卡片、浅色与深色主题。未提交、未发布、未改 AGENTS.md。
+
+## 2026-09-11：按用户实测结果排查（主进程旧构建）+ 加「旧构建」自查
+
+用户跑了一轮「子代理只读审计」并贴回报告，暴露一个问题：**子代理 A 没有 shell 工具**（它自己说「环境未提供 shell/exec，不是被权限拒绝，而是工具不存在」），因此只读命令白名单没被验证到。
+
+排查（用那次运行的真实落盘数据，不靠猜）：
+- 子会话 `delegation-4fb55629….jsonl` 的首条任务写着 `Use only these tools: read_file, list_files, search_files.` —— 这段文案由**主进程**协调器的 `composeChildTask(definition)` 生成；
+- 同一个父会话里却有我新加的 `tacode-subagent-catalog` 自定义消息，且目录里写着 `explorer … (tools: read_file, list_files, search_files, exec_command; maxTurns 40)` —— 这段由**新起的 worker** 生成；
+- 结论：**父 worker 是新代码、主进程还是旧代码**（进程启动早于 20:44 的重建）。不是白名单失效。
+
+防呆（本轮新增）：
+1. `src/main/build-status.ts` + `app:build-status` IPC：主进程比较「自己的启动时间」与「主进程 bundle 的磁盘 mtime」，得出 `restartRequired`；启动时把 `main process started {startedAt, bundleMtime, restartRequired}` 写进本地诊断日志。
+2. 渲染层挂载时查一次，`restartRequired` 就弹一次 toast：「检测到本地已重新构建（主进程仍是旧代码）。请完全退出并重启 TACode 后生效。」（中英 i18n 已补）
+3. `delegation launching` 日志新增 `tools` 与 `execPolicy` 字段：主进程是旧定义时，日志里立刻能看出来。
+
+验证：`pnpm typecheck` 通过；`pnpm test` 71 文件 619 用例通过（新增 `build-status.test.ts` 3 条）；产物已重建（08:42）。
+
+## 2026-09-11：拍板落地（沙箱信号 / 只读命令白名单 / entries 回收 / 报告骨架）
+
+用户把待决策项交给我拍板，逐项按我判断最优的方案落地：
+
+1. **沙箱放行「对自己后代进程发信号」**（根因修复，影响最大）：`src/runtime/tools/sandbox.ts:76` 原本 `(deny signal)` + `(allow signal (target self))`，子代理里 `pnpm test` 一收尾就 `kill EPERM`，test-runner 角色在沙箱内形同虚设。用 scratch 探针实测三种规则后选**最窄但够用**的一条：新增 `(allow signal (target children))`。实测：`(target self)` 连直接子进程都杀不掉；加 `children` 后能杀自己的子进程**与孙进程**（pnpm → vitest → worker），且无关进程（Electron 主进程/开发服务器）的 `kill`/`pkill` 仍全部被拒；再加 `pgrp` 会连带放行同进程组的无关进程（隔离被破坏），故不采用。规则抽成可测的 `seatbeltRules()`（`sandbox.test.ts` 3 条回归）。端到端：新规则下沙箱内 `node` 杀子进程 `killed true`、**`vitest run` 跑通（1 文件 3 用例，exit 0）**。
+2. **只读命令白名单**（explorer 能跑只读命令）：新增 `src/shared/readonly-commands.ts`（`checkReadOnlyCommand` + `READONLY_EXEC_HINT`）：白名单（wc/ls/cat/head/tail/find/rg/grep/sort/uniq/cut/tr/stat/du/df/file/basename/dirname/realpath/diff/tree/git）+ 只读 git 子命令；管道/`&&`/`;` 允许但**每段**都要命中白名单；重定向、命令替换、后台执行、解释器（node/python/sh）、写盘类命令、以及每命令的危险参数（`find -exec/-delete`、`sort -o`、`rg --pre`、`git -c`）一律拒绝，拒绝信息里附可用清单。子代理定义新增 `execPolicy: readonly`（frontmatter 可写、渲染可回写）；内置 explorer 改为 `tools: […, exec_command]` + `execPolicy: readonly`；`CommandToolOptions.readOnly` 在 `exec_command` 入口校验（进程内子代理直接传，桥接子 worker 走 `TACODE_EXEC_POLICY`，由 `delegationRunOptions` → `AgentStartOptions.execPolicy` → `agent-host` 下发）。explorer 的提示词同步为「可以跑只读命令、但不能改文件」那一档（`subagentEditsFiles` 仍为 false）。
+3. **`entries` 终态回收 + 按 parent 索引**：原来 `entries` 全仓无删除点、`entriesForParent` 每次 O(n) 扫描。新增 `entriesByParent` 索引（`createEntry` 维护）与 `evictTerminalEntries()`：超过 `MAX_RETAINED_TERMINAL_ENTRIES = 200` 时淘汰最旧的终态条目（保留最近 `TERMINAL_RETENTION_MS = 60s` 内结束的，保护 `delegate_continue`）；淘汰时顺手 `host.stop()`——「终态但 host 仍存活」是生产线上的常态，不处理的话淘汰永远不生效。
+4. **报告结构化**：四个内置角色（explorer / code-reviewer / test-runner / fixer）的 prompt 统一要求固定骨架 `## 结论` → `## 证据`（每条 = path:line + 1-3 行原文 + 已核实/推断/未确认）→ `## 未确认`。选**结构化 markdown 而不是 JSON**：报告既要回灌父上下文、也显示在右侧面板里，JSON 会牺牲可读性；固定小节 + 置信标签已足够父代理聚合与抽查。
+5. **`.agents/features.json`：决定不补、也不改 AGENTS.md**。理由：它是一份「任务清单」，伪造空清单比缺失更糟；AGENTS.md 描述的约定在采用长任务工作流（`/skill:init-long-run` 生成清单）时才成立，而现有代码对「文件缺失」本来就容错（读失败 → 空列表，不报错不崩溃）。要让本仓库清单可见，应按真实任务生成，而不是塞占位内容。
+
+- 验证：`pnpm typecheck` 通过；`pnpm test` 69 文件 611 用例通过（新增 `runtime/tools/sandbox.test.ts` 3 条、`shared/readonly-commands.test.ts` 3 条、定义 `execPolicy` 解析/渲染 1 条、内置角色策略 2 条、`entries` 回收与索引 2 条）；沙箱端到端探针（沙箱内 vitest 跑通）见上；`dist/` 与 `dist-electron/` 已重建。
+
+## 2026-09-10：学 Proma —— 创建子代理时自动开右侧标签并实时看执行过程
+
+- 参考：Proma 的 `useGlobalAgentListeners.ts:759-777`（收到「子会话已启动」事件 → 父会话在前台就写 `Map<父,子>` + 展开右侧面板 + 激活 `delegation` 标签）、`SidePanel.tsx:1611-1617`（标签内嵌完整 AgentView 看执行过程）、`agent-completion-presence.ts:80-100`（未查看完成徽标）。要点：**不是前端轮询发现，而是创建时推送即打开**；只有一条闸门「父会话必须是当前激活会话」；首次打开抢焦点、标签完成后保留；无开关。
+- TACode 落地（对齐到既有架构）：
+  1. 新增 `src/renderer/browser/delegation-tabs.ts`（纯函数）：`collectDelegations(messages)` 从当前会话抽出委派子任务（复用 `sessionTools` + `delegateProgress`），`planDelegationTabs()` 决定「开哪些 / 刷哪些」——**只在首次出现且正在执行（pending/running）时自动开标签并抢焦点**；历史已完成委派不弹标签；已开的标签只做实时刷新（`activate:false`，不抢用户正在看的标签）；用户手动关掉后不再自动重开；进程内委派（无子会话文件）不自动开面板。
+  2. 新增 `src/renderer/browser/use-delegation-tabs.ts`：`App.tsx` 里 `useDelegationTabs(messages, browserPanels)`；用签名挡掉流式期间每帧的重复派发。TACode 天然满足 Proma 那条闸门——后台会话的事件本来就不会进入当前 `messages`。
+  3. `panel-state.ts`：`open-child-session` 支持 `activate:false`（后台刷新不切标签）；`ChildSessionPanelInfo` 增加 `live`，面板表头新增「正在读取 …」实时步骤条；`use-browser-panels.openChildSession(key, info, { activate })`。
+  4. 面板内容仍是只读转录 + 运行期 2s 轮询（TACode 子会话事件不回渲染层，所以内容靠轮询、表头状态靠推送）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 67 文件 600 用例通过（新增 `browser/delegation-tabs.test.ts` 8 条：自动开/历史不弹/只刷不抢焦点/关掉不重开/进程内不开/路径归一）；真实 Electron 探针新增 `AUTO-OPEN PROBE PASSED`（模拟委派开始 → 自动开标签并抢焦点、面板显示「正在读取 src/main/index.ts」与「2 个步骤」；切到审查标签后委派完成 → 焦点仍在审查、表头刷新为「已完成 · 7 个步骤」）；`scripts/workbench-smoke.ts` 新增同款阶段。
+- 与 Proma 的差异（有意的）：Proma 是「每父会话单槽位、后启动者覆盖」；TACode 每个委派各一个标签（并发子代理可同时看），并在首次出现时抢一次焦点。
+
+## 2026-09-10：按「子代理测试汇总」优化（P0/P1 可发现性与报告可信度 + 3 个真实缺陷）
+
+- 背景：用户拿 AI 跑完子代理后给出汇总（含逐条核对、5 条派发层问题、4 条执行层问题、P0–P3 建议）。我先逐条核实再动手：**报告的并发竞态、`entries` 不回收、`_tmp_shiki_probe.test.ts`、`features.json` 假设、`agent-host.stop()` 未放行等待者均成立**；另外我找到了它没定位的根因——沙箱 profile `src/runtime/tools/sandbox.ts:76` 的 `(deny signal)` + `(allow signal (target self))` 正是子代理里 `pnpm test` 报 `kill EPERM` 的原因（vitest 收尾要杀 worker）。
+- 本轮已修（低风险 + 带回归用例）：
+  1. **未知角色可纠错**：新增 `unknownSubagentMessage()` / `closestSubagentName()`（`shared/subagents.ts`，编辑距离 ≤2 + 包含匹配），主进程协调器（`delegation-coordinator.ts` 的 `Unknown subagent` 分支）与 runtime 工具（`tools/delegate.ts` 的 unknown 分支）改成共用同一份提示：附「你是不是想找 explorer?」+ 完整可用清单（模型看不到 `~/.tether/subagents/`，原来只报一句名字）。
+  2. **子代理目录注入模型上下文**：新增 `subagentCatalogText()`；`runtime/extension.ts` 在 `before_agent_start`（仅 `childDepth < 1`）注入 `tacode-subagent-catalog` 自定义消息，列出每个角色的 description / tools / maxTurns / thinkingLevel，并提示「要 path:line 证据 + 原文片段」。这样不必改 AGENTS.md 也能让模型知道有哪些角色。
+  3. **报告可信度**：explorer / code-reviewer 的内置 prompt 硬性要求每条结论附 1–3 行**原文片段**并标注 `已核实 / 推断 / 未确认`；explorer 明确「没有 shell，读不到的行数/大小必须标未确认」。
+  4. **`agent-host.stop()` 放行等待者**（真实泄漏）：原来只 reject pending 请求，`waitForIdle` 的等待者在「worker 已退出再 stop()」的早退分支会永久挂起；现在 stop() 开头统一 `flushStartWaiters(false)` + `flushSettledWaiters()`。
+  5. **并发上限加同步占位**：`start()` 的上限检查与 `createEntry` 之间有 await，并发提交能一起通过检查（实测 9 个并发全部放行）；新增 `reservations` 计数同步占位 + try/finally 释放，`start()` 主体抽到 `startReserved()`。
+  6. **删掉 `src/renderer/_tmp_shiki_probe.test.ts`**（无断言、`console.log` 噪音，却被 `src/**/*.test.ts` 命中，每次 `pnpm test` 白跑）。
+- 新增回归用例：`shared/subagents.test.ts`（纠错提示 / 空目录指引 / 目录文本 3 条）、`main/agent-host-wait.test.ts`（stop() 放行等待者，修复前 5s 超时）、`main/delegation-coordinator.test.ts`（并发占位：修复前 9 个全过、修复后恰好 8 个）、`main/agent-subagents.test.ts`（真实 RPC worker 断言父会话请求里带目录）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 66 文件 592 用例通过；`dist/`（渲染层）与 `dist-electron/` 均已重建。
+- 待用户拍板（未动）：沙箱 `(deny signal)` 是否放宽（否则 test-runner 子代理在本沙箱永远跑不了测试）；explorer 只读命令白名单（`wc`/`git log|diff`/`rg -c`）；`entries` 终态淘汰 + 按 parent 索引；`.agents/features.json` 是补文件还是改 AGENTS.md/docs；报告是否改成结构化 JSON。
+
+## 2026-09-10：子代理会话改为右侧面板标签（不再抢占中间主会话区）
+
+- 背景：用户点侧栏里的委派子代理行后，子会话被挂到**中间主会话区**（`App.tsx` 的 `onOpen={() => openSession(child)}` 复用了「打开会话」路径，还会改掉 `activeSession`）。期望与参考实现 Proma 一致：中间主区仍是父会话，右侧工作面板多一个标签展示子代理。Proma 的做法见 `LeftSidebar.tsx:1711-1745` + `SidePanel.tsx:1316-1321`（固定单例 `delegation` 标签 + `Map<父→子>` 决定内容）。
+- 主进程：新增 `src/main/session-transcript.ts`（`assertReadableSessionPath` / `parseSessionTranscript` / `readSessionTranscript`）：只允许读会话目录内 `.jsonl`，逐行取 `type:"message"` 条目，文件 >4MB 读尾部、消息 >2000 条保留最后 N 条并标记截断。新增 IPC `sessions:read`（`main/index.ts`）+ preload `sessions.read` + `shared/types.ts` 的 `SessionTranscript` 契约。子会话在 `~/.tether/sessions/`，不在工作区内，`workspace:read` 的 `resolveInWorkspace` 夹不到，所以需要这条专用只读通道。
+- 渲染层：`panel-state.ts` 新增 `ChildSessionPanelTab`（`{id,type:"child-session",path,info}`）与 `open-child-session` reducer 分支（同一 path 复用标签）+ `childSessionPanelLabel`；`use-browser-panels` 暴露 `openChildSession(path, info)`；`workbench-panels.tsx` 加标签文案与内容分支（多实例挂载、非活动 `display:none`）；新增 `child-session-panel.tsx`：头部 `role · 状态 · 耗时 · 步骤数 · tokens`，正文复用 `groupConversation` + `UserTurn`/`AssistantTurn` 渲染**只读转录**，运行中按 2s 轮询、连续 3 次长度不变即停止（桥接缺失/同步抛错降级为错误提示，不炸界面）。
+- 入口（用户指定两处）：① 侧栏委派行点击 → 开标签（`openDelegatedSession`）；② 主会话里 delegate 卡片的子代理行点击 → 开标签（经新增 `panel-actions.tsx` 的 `PanelActionsProvider`/`usePanelActions` 透传，避免改动 `renderTool` 深链），行尾新增 ⓘ 按钮保留原「详情抽屉」（活动流 + 最终报告）；侧栏行右键菜单新增「在主会话中打开」作为逃生口。
+- 未动：`+` 菜单 / 空态选择器（新类型带不了 sessionPath，且会让「+」从直接开网页变成弹菜单，打断既有 GUI 断言）；独立窗口路径。
+- 新增测试：`main/session-transcript.test.ts`（7 条：路径越界/非 jsonl/畸形输入、解析与跳过损坏行、超限截断、真实读文件）；`browser/panel-state.test.ts` 新增 4 条（开标签/去重刷新/多标签关闭回落/标题回落与截断）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 67 文件 585 用例全部通过；真实 Electron 探针（scratch：加载生产 fixture + 真 preload + `sessions:read` 桩）验证「侧栏行 → 标签标题、主会话未被切换、面板角色/头部/转录、卡片 context 入口、同一子会话只开一个标签」全部通过；真实数据探针用 `~/.tether/sessions/delegation-*.jsonl`（10 个文件）确认解析正常。
+- 说明：仓库自带 GUI 冒烟（`pnpm test:browser`）本机仍在**既有**的漂移阶段失败（composer 工具栏弹层 / adaptive width / panel resize，三次不同位置）；已用 stash 在干净树复现同一 composer 失败，确认与本次改动无关，故新增阶段改用上述专用探针验证。
+- 未提交、未发布、未改 AGENTS.md。
+
+### 2026-09-10 补充：按用户反馈修正两处展示/入口问题
+
+用户反馈：① 主会话里点子代理卡片弹出的还是抽屉（不是标签页），展示的东西也不对；② 侧栏子会话点开的标签页展示有问题；③ 主会话卡片与侧栏子会话明明是同一个委派，点进去却是两个不同的页面。修正：
+
+1. **面板改全出血（直接原因）**：`PanelTabs` 把 children 塞进 `.inspect-body`（`padding: 4px 10px 24px` + `overflow: auto`），子代理面板之前继承了审查面板的内边距，形成「外层 padding + 内外双滚动」。`WorkbenchPanels` 的 `flush` 现在按「活动标签不是 inspect 即为全出血」判定（网页与子代理同一形态），内边距与滚动全部交给面板自己。
+2. **卡片点击一律开标签**：去掉 `DelegateDetail` 主点击里「没有子会话文件就回退抽屉」的分支——没有 `childSessionPath`（进程内委派）时用 `delegation:<id>` 当标签身份，内容用卡片上已有的最终报告 + 活动流渲染；详情抽屉只保留在行尾 ⓘ。这样无论桥接还是进程内，点卡片都只开标签。
+3. **内容更可读**：面板顶部单独展示委派任务原文，并从转录里过滤掉运行时注入的超长 prompt（`You are the <role> subagent inside TACode…`）。`ChildSessionPanelInfo` 增加 `task` / `report` / `activity` 字段承载这些内容；`Markdown` 从 `ui.tsx` 导出，报告复用抽屉的 `.delegate-task-output.markdown` 样式。
+4. **两个入口统一成同一个标签**（③）：卡片与侧栏本来就是同一个委派——卡片里叫 `task.id`、侧栏里叫 `sourceDelegationId`，值相同。标签身份因此从「子会话文件路径 / `delegation:<id>`」改为**委派 id**（`ChildSessionPanelTab.key`），`sessionPath` 收进 `info`；重复打开时**合并**两边的信息（不再互相覆盖），标签标题优先用委派任务摘要，保证两处点进去是同一个标签、同一份内容（有子会话文件就渲染转录，没有才退回报告/活动）。
+4. **标签身份归一（用户追问「两边点进去不一样」）**：先用真实数据核对——卡片 details 里的 `delegationId`（如 `delegation-ce24c804-…`）与子会话文件名、state 库的 `source_delegation_id` 是同一个值；但只要有入口只拿到路径（或都拿不到），两边就会算出不同身份 → 开出两个标签。新增 `delegationPanelKey(id, sessionPath)`：有委派 id 用它，否则用子会话文件名去掉 `.jsonl`（就是委派 id），两边因此必然归一到同一个 key；拿不到任何身份才回退详情抽屉。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 67 文件 587 用例通过（新增 `delegationPanelKey` 用例）；真实 Electron 探针扩展为「三个入口 + 全出血 + 注入 prompt 隐藏 + 报告/活动回退 + ⓘ 抽屉仍在 + 卡片与侧栏同委派只出一个标签且内容一致」全部通过；`scripts/workbench-smoke.ts` 里对应的三段断言与探针保持一致。
+- 排障记录：本机 `dist/`（渲染层产物）时间戳早于这两轮渲染层修复（17:22 vs 19:40+），说明「跑构建产物」时会看到旧界面（表现为两个入口行为/展示不一致）。已执行 `pnpm build:renderer` 重建；确认运行方式为 `pnpm dev`（源码热更）或重建后完整重启。
+
 ## 2026-09-10：子代理 B1 —— `maxTurns` 全链生效，到上限算 truncated
 
 - 背景：A 批之后用户拍定语义「到轮数上限算 `truncated`（保留已产出报告），不算失败」，据此落地 B1。

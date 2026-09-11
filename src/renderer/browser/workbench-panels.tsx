@@ -3,7 +3,8 @@ import { FilePlus2, Globe } from "lucide-react";
 import { PanelPicker, PanelTabs } from "../ui";
 import { useI18n } from "../i18n";
 import { BrowserPanel } from "./browser-panel";
-import { browserPanelLabel } from "./panel-state";
+import { ChildSessionPanel } from "./child-session-panel";
+import { browserPanelLabel, childSessionPanelLabel } from "./panel-state";
 import type { useBrowserPanels } from "./use-browser-panels";
 
 /** 网页与审查共用顶部标签栏，切换标签时所有网页保持挂载。 */
@@ -14,6 +15,9 @@ export function WorkbenchPanels({ panels, inspect, onError }: {
 }) {
   const { t } = useI18n();
   const { tabs, active, dispatch, openPanel, openBrowser, closePanel, selectPanel } = panels;
+  const activeTab = tabs.find((tab) => tab.id === active);
+  // 网页与子代理面板走全出血（自己管滚动/内边距）；审查面板沿用带内边距的常规形态。
+  const flush = activeTab !== undefined && activeTab.type !== "inspect";
   if (tabs.length === 0) {
     return <PanelPicker
       title={t("picker.title")}
@@ -28,7 +32,9 @@ export function WorkbenchPanels({ panels, inspect, onError }: {
   return <PanelTabs
     tabs={tabs.map((tab) => tab.type === "inspect"
       ? { id: tab.id, label: t("inspect.title") }
-      : { id: tab.id, label: browserPanelLabel(tab.page, t("browser.newTab")), title: [tab.page?.title, tab.page?.url].filter(Boolean).join("\n") })}
+      : tab.type === "child-session"
+        ? { id: tab.id, label: childSessionPanelLabel(tab.info, t("delegate.detailChildSession")), title: tab.info.sessionPath ?? tab.info.task ?? "" }
+        : { id: tab.id, label: browserPanelLabel(tab.page, t("browser.newTab")), title: [tab.page?.title, tab.page?.url].filter(Boolean).join("\n") })}
     active={active}
     onSelect={selectPanel}
     onCloseTab={closePanel}
@@ -39,9 +45,14 @@ export function WorkbenchPanels({ panels, inspect, onError }: {
       { type: "browser", label: t("browser.newTab"), icon: <Globe size={15} strokeWidth={1.8} /> },
     ]}
     onPickType={openPanel}
-    flush={tabs.find((tab) => tab.id === active)?.type === "browser"}
+    flush={flush}
   >
-    {tabs.find((tab) => tab.id === active)?.type === "inspect" ? inspect : null}
+    {activeTab?.type === "inspect" ? inspect : null}
+    {tabs.filter((tab) => tab.type === "child-session").map((tab) => (
+      <div key={tab.id} className="child-session-host" style={{ display: tab.id === active ? "flex" : "none" }}>
+        <ChildSessionPanel info={tab.info} isActive={tab.id === active} />
+      </div>
+    ))}
     {tabs.filter((tab) => tab.type === "browser").map((tab) => (
       <div key={tab.id} data-browser-instance={tab.id} style={{ display: tab.id === active ? "flex" : "none", flex: 1, minWidth: 0, minHeight: 0 }}>
         {tab.detached ? (

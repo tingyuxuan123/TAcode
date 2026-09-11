@@ -51,7 +51,7 @@ afterEach(() => vi.unstubAllEnvs());
 describe("subagent delegation through the real RPC worker", () => {
   it("runs a subagent and returns its report to the parent turn", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tacode-subagent-runtime-"));
-    const requests: Array<{ system: string; messages: number }> = [];
+    const requests: Array<{ system: string; messages: number; body: string }> = [];
     let parentRequests = 0;
     const server = createServer(async (request, response) => {
       let body = "";
@@ -59,7 +59,7 @@ describe("subagent delegation through the real RPC worker", () => {
       const parsed = JSON.parse(body) as { messages?: Array<{ role?: string; content?: unknown }> };
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const system = String(messages.find((message) => message.role === "system")?.content ?? "");
-      requests.push({ system, messages: messages.length });
+      requests.push({ system, messages: messages.length, body });
       response.writeHead(200, { "Content-Type": "text/event-stream" });
       if (system.includes("subagent inside TACode")) {
         response.end(textStream("subagent-report-ok"));
@@ -140,6 +140,9 @@ describe("subagent delegation through the real RPC worker", () => {
       // 父代理先委派、子代理请求、父代理收尾：至少 3 次模型请求。
       expect(requests.length).toBeGreaterThanOrEqual(3);
       expect(requests.some((item) => item.system.includes("subagent inside TACode"))).toBe(true);
+      // 子代理目录注入系统上下文：模型看不到 ~/.tether/subagents 目录，只能猜角色名。
+      expect(requests.some((item) => item.body.includes("Subagent catalog for the `delegate` tool"))).toBe(true);
+      expect(requests.some((item) => item.body.includes("- explorer:") && item.body.includes("maxTurns 40"))).toBe(true);
     } finally {
       await host.stop();
       await new Promise<void>((done) => server.close(() => done()));

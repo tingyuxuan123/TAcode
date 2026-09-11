@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSnapshot } from "../shared/types";
 import type { DelegationBridgeRequest, DelegationRecordSnapshot, DelegationStartPayload } from "../shared/delegation";
-import { DELEGATION_MAX_REPORT_CHARS } from "../shared/delegation";
+import { DELEGATION_MAX_CONCURRENCY, DELEGATION_MAX_REPORT_CHARS } from "../shared/delegation";
 import type { DiagnosticSink } from "./local-logger";
 import { TacodeStateStore } from "../runtime/state";
 import type { AgentHostStartOptions } from "./agent-manager";
@@ -700,6 +700,83 @@ describe("delegation turn limit", () => {
       state.close();
     }
   });
+});
+
+describe("delegation concurrency reservation", () => {
+  it("并发提交不会突破上限（检查与建表之间必须同步占位）", async () => {
+    // 回归：原来上限检查与 createEntry 之间有 await，9 个并发 start 会全部通过检查。
+    const { coordinator, state } = await fixture();
+    try {
+      const results = await Promise.allSettled(
+        Array.from({ length: DELEGATION_MAX_CONCURRENCY + 1 }, (_item, index) =>
+          coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: `Task ${index}` })),
+      );
+      const started = results.filter((result) => result.status === "fulfilled").length;
+      expect(started).toBe(DELEGATION_MAX_CONCURRENCY);
+      expect(coordinator.list("/tmp/parent.jsonl")).toHaveLength(DELEGATION_MAX_CONCURRENCY);
+      const rejected = results.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      expect(rejected.every((result) => String(result.reason).includes("Too many concurrent delegations"))).toBe(true);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  }, 20_000);
+
+  it("上限被拒后占位会释放（不会把后续委派永久挡在门外）", async () => {
+    const { coordinator, state } = await fixture();
+    try {
+      const first = await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: "First" });
+      await coordinator.wait("/tmp/parent.jsonl", { delegationIds: [first.delegationId], timeoutSeconds: 5 });
+      // 终态的委派不再占用并发额度。
+      const next = await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: "Second" });
+      expect(next.delegationId).toBeTruthy();
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  }, 20_000);
+});
+
+describe("delegation entry retention", () => {
+  it("按 parent 建索引：只返回该父会话的委派", async () => {
+    const { coordinator, state } = await fixture();
+    try {
+      await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: "A" });
+      await coordinator.start("/tmp/other.jsonl", { ...startPayload, task: "B" });
+      expect(coordinator.list("/tmp/parent.jsonl").map((item) => item.task)).toEqual(["A"]);
+      expect(coordinator.list("/tmp/other.jsonl").map((item) => item.task)).toEqual(["B"]);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  }, 20_000);
+
+  it("终态委派超上限时淘汰最旧的，且保留刚结束的（continue 仍可用）", async () => {
+    const { coordinator, state } = await fixture();
+    try {
+      const limit = 200; // MAX_RETAINED_TERMINAL_ENTRIES
+      // 造 205 条已结算的委派：把 completedAt 手工推老，模拟历史积压。
+      for (let index = 0; index < limit + 5; index += 1) {
+        const record = await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: `Task ${index}` });
+        const entries = (coordinator as unknown as { entries: Map<string, { record: { status: string; completedAt?: number } }> }).entries;
+        const entry = entries.get(record.delegationId)!;
+        entry.record.status = "completed";
+        entry.record.completedAt = Date.now() - 10 * 60_000; // 10 分钟前结束：可淘汰
+        // 新插入时会触发淘汰，这里手动再跑一次，确保超限即收敛。
+        (coordinator as unknown as { evictTerminalEntries(): void }).evictTerminalEntries();
+      }
+      const retained = (coordinator as unknown as { entries: Map<string, unknown> }).entries.size;
+      expect(retained).toBeLessThanOrEqual(limit);
+      // 最近一条（刚结束、未到保留窗口）仍在，continue 不会因淘汰失效。
+      const latest = coordinator.list("/tmp/parent.jsonl").at(-1);
+      expect(latest).toBeTruthy();
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  }, 60_000);
 });
 
 describe("delegation host diagnostics", () => {

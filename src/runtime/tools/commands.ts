@@ -16,6 +16,7 @@ import {
   type EffectiveAccess,
   type SessionAccessController,
 } from "./policy.js";
+import { READONLY_EXEC_HINT, checkReadOnlyCommand } from "../../shared/readonly-commands.js";
 import type { SandboxOptions } from "./sandbox.js";
 import { Workspace } from "./workspace.js";
 import type { PermissionMode } from "../options.js";
@@ -46,6 +47,8 @@ const writeStdinParameters = Type.Object({
 });
 
 export interface CommandToolOptions {
+  /** 只读策略：非空时 exec_command 只允许白名单内的只读命令（见 shared/readonly-commands）。 */
+  readOnly?: boolean;
   registry: ManagedProcessRegistry;
   getPermission: () => PermissionMode;
   access: SessionAccessController;
@@ -64,7 +67,7 @@ export function registerCommandTools(pi: ExtensionAPI, options: CommandToolOptio
  * 让子代理的 exec_command 走与父会话相同的沙箱与权限路径。
  */
 export function createCommandTools(options: CommandToolOptions) {
-  const { registry, getPermission, access, sandboxFor, onAccessChanged, onCheckpoint } = options;
+  const { registry, getPermission, access, sandboxFor, onAccessChanged, onCheckpoint, readOnly } = options;
 
   const execTool: ToolDefinition<typeof execCommandParameters, ManagedResult> = {
     name: "exec_command",
@@ -84,6 +87,19 @@ export function createCommandTools(options: CommandToolOptions) {
     renderShell: "self",
     executionMode: "sequential",
     async execute(_id, params, signal, onUpdate, ctx) {
+      if (readOnly) {
+        // 只读子代理：白名单外一律拒绝，并把可用命令回给模型（避免反复重试）。
+        const verdict = checkReadOnlyCommand(params.cmd);
+        if (!verdict.ok) {
+          const text = `Read-only subagent: ${verdict.reason}.\n${READONLY_EXEC_HINT}`;
+          return {
+            content: [{ type: "text", text }],
+            // 形状必须与 ManagedResult 一致（工具结果类型），拒绝信息进 output。
+            details: { processId: "", running: false, output: text, sandbox: "rejected (read-only)", exitCode: 126 },
+            isError: true,
+          };
+        }
+      }
       let commandAccess: EffectiveAccess = access.forCommand(getPermission(), params.cmd);
       if (!commandAccess.network && commandNeedsNetwork(params.cmd)) {
         commandAccess = await requestCommandAccess(

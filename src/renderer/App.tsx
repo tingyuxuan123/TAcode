@@ -70,9 +70,12 @@ import {
 } from "./ui";
 import { WorkbenchPanels } from "./browser/workbench-panels";
 import { useBrowserPanels } from "./browser/use-browser-panels";
+import { useDelegationTabs } from "./browser/use-delegation-tabs";
 import { useSidebarLayout } from "./sidebar-layout";
 import { branchAutoExpanded, groupDelegatedSessions } from "./session-tree";
 import { ProgressOverlay } from "./progress-overlay";
+import { PanelActionsProvider } from "./panel-actions";
+import { delegationPanelKey } from "./browser/panel-state";
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
 import logo from "./logo.svg";
@@ -134,6 +137,7 @@ export function SessionRow({
   branchExpanded,
   onToggleBranch,
   onOpen,
+  onOpenInMain,
   onPin,
   onRename,
   onRemove,
@@ -146,6 +150,8 @@ export function SessionRow({
   branchExpanded?: boolean;
   onToggleBranch?(): void;
   onOpen(): void;
+  /** 委派子会话专用：在中间主会话区打开（默认改为在右侧面板开只读标签）。 */
+  onOpenInMain?(): void;
   onPin(): void;
   onRename(title: string): void;
   onRemove(): void;
@@ -264,6 +270,12 @@ export function SessionRow({
             <Icon path={PIN_ICON} size={16} />
             <span>{session.pinned ? t("common.unpin") : t("common.pin")}</span>
           </button>
+          {onOpenInMain && (
+            <button type="button" role="menuitem" onClick={() => action(onOpenInMain)}>
+              <Icon path="M4 6h16v12H4zM9 10l3 3 3-3" size={16} />
+              <span>{t("nav.openDelegatedInMain")}</span>
+            </button>
+          )}
           <button type="button" role="menuitem" onClick={() => action(() => setEditing(true))}>
             <Icon path={PENCIL_ICON} size={16} />
             <span>{t("common.rename")}</span>
@@ -495,7 +507,26 @@ export function App() {
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FileChange>();
   const browserPanels = useBrowserPanels();
+  // 供深链组件（委派卡片）打开子代理标签：卡片在 ui.tsx 的模块级 renderTool 里渲染，拿不到这里的 props。
+  const panelActions = useMemo(
+    () => ({ openChildSession: browserPanels.openChildSession }),
+    [browserPanels.openChildSession],
+  );
   const sidebarLayout = useSidebarLayout();
+  // 父代理创建子代理时自动开右侧标签（对齐 Proma 的 delegation 面板），并实时刷新状态。
+  useDelegationTabs(messages, browserPanels);
+
+  // 主进程是旧构建（本地重建过但没完全重启）时提示一次：否则会出现「worker 已是新代码、
+  // 主进程还是旧定义」这类很难自查的现象。
+  useEffect(() => {
+    let gone = false;
+    void window.harness.app.buildStatus().then((status) => {
+      if (!gone && status.restartRequired) setToast(t("toast.restartRequired"));
+    }).catch(() => undefined);
+    return () => {
+      gone = true;
+    };
+  }, [t]);
   const [featureTodos, setFeatureTodos] = useState<SessionTodo[]>([]);
   const [agentSkills, setAgentSkills] = useState<AgentSkillCommand[]>([]);
   const [stoppedJobs, setStoppedJobs] = useState<string[]>([]);
@@ -888,6 +919,30 @@ export function App() {
       if (seq === startSeq.current) setLoading(false);
     }
   }, [applyThinkingForModel, permission, refreshAgentSkills, resolveSandbox, syncAgentThinking, t]);
+
+  /**
+   * 委派子会话：默认在右侧面板开一个只读标签（不再抢占中间主会话区）。
+   * 需要把子会话放进主区时走 SessionRow 右键菜单的「在主会话中打开」。
+   */
+  const openDelegatedSession = useCallback((session: SessionSummary) => {
+    if (!session.path) return;
+    const startedAt = Date.parse(session.createdAt);
+    const updatedAt = Date.parse(session.updatedAt);
+    const running = session.delegationStatus === "pending" || session.delegationStatus === "running";
+    // 身份与主会话里的委派卡片一致（委派 id 或子会话文件名同源），点哪边都是同一个标签页。
+    const key = delegationPanelKey(session.sourceDelegationId, session.path);
+    if (!key) return;
+    browserPanels.openChildSession(key, {
+      role: session.delegationRole ?? "subagent",
+      sessionPath: session.path,
+      ...(session.title ? { title: session.title } : {}),
+      ...(session.delegationStatus ? { status: session.delegationStatus } : {}),
+      ...(Number.isFinite(startedAt) ? { startedAt } : {}),
+      ...(!running && Number.isFinite(updatedAt) ? { completedAt: updatedAt } : {}),
+      ...(session.messageCount ? { turns: session.messageCount } : {}),
+      ...(session.delegationReport ? { report: session.delegationReport } : {}),
+    });
+  }, [browserPanels]);
 
   const openSession = useCallback((session: SessionSummary) => {
     // Allow re-open when the row is highlighted but the transcript failed to load.
@@ -1686,7 +1741,8 @@ export function App() {
                                 session={child}
                                 active={isSameSession(child, activeSession)}
                                 running={runningSessionIds.has(child.path)}
-                                onOpen={() => openSession(child)}
+                                onOpen={() => openDelegatedSession(child)}
+                                onOpenInMain={() => openSession(child)}
                                 onPin={() => void pinSession(child)}
                                 onRename={(title) => void renameSession(child, title)}
                                 onRemove={() => void removeSession(child)}
@@ -1704,6 +1760,7 @@ export function App() {
         })}
       </SidebarNav>
 
+      <PanelActionsProvider actions={panelActions}>
       <Chat
         onSidebarAutoCollapse={sidebarLayout.collapseAutomatically}
         home={home}
@@ -1888,6 +1945,7 @@ export function App() {
           </button>
         )}
       </Chat>
+      </PanelActionsProvider>
       {preview && <FileDrawer file={preview} workspace={workspace} onClose={() => setPreview(undefined)} />}
 
       {sandboxAsk && (

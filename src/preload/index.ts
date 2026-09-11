@@ -19,6 +19,8 @@ let startToken = 0;
 const api: DesktopApi = {
   platform: process.platform,
   app: {
+    /** 运行中的主进程是不是旧构建（本地重建后需要完全重启）。 */
+    buildStatus: () => ipcRenderer.invoke("app:build-status"),
     version: () => ipcRenderer.invoke("app:version"),
     openExternal: (url) => ipcRenderer.invoke("app:open-external", url),
     revealPath: (skillName, hint) => ipcRenderer.invoke("app:reveal-path", skillName, hint),
@@ -60,6 +62,8 @@ const api: DesktopApi = {
   },
   sessions: {
     list: (cwd) => ipcRenderer.invoke("sessions:list", cwd),
+    /** 只读读取某个会话转录（含子代理子会话），不启动 worker、不切活动会话。 */
+    read: (sessionPath) => ipcRenderer.invoke("sessions:read", sessionPath),
     remove: (id) => ipcRenderer.invoke("sessions:remove", id),
     pin: (id, pinned) => ipcRenderer.invoke("sessions:pin", id, pinned),
     rename: (id, title) => ipcRenderer.invoke("sessions:rename", id, title),

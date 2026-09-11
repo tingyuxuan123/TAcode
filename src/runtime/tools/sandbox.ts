@@ -63,24 +63,9 @@ export function sandboxCommand(
       options.mode === "workspace-write"
         ? [...new Set([workspace, temporary, "/dev/null", "/dev/tty", ...extra])]
         : ["/dev/null", "/dev/tty"];
-    const rules = [
-      "(version 1)",
-      "(allow default)",
-      writable.length === 0
-        ? "(deny file-write*)"
-        : `(deny file-write* (require-not (require-any ${writable
-            .map((directory) => `(subpath "${escapeSeatbelt(directory)}")`)
-            .join(" ")})))`,
-      options.network ? "" : '(deny network*) (allow network* (local ip "localhost:*"))',
-      // 防止 kill/pkill 波及 Electron 主进程或开发服务器。
-      "(deny signal)",
-      "(allow signal (target self))",
-    ]
-      .filter(Boolean)
-      .join(" ");
     return {
       command: "/usr/bin/sandbox-exec",
-      args: ["-p", rules, shell, "-lc", shellCommand],
+      args: ["-p", seatbeltRules(options.mode, writable, options.network), shell, "-lc", shellCommand],
       description: `macOS Seatbelt (${options.mode}${options.network ? ", network" : ", no network"})`,
     };
   }
@@ -130,6 +115,31 @@ export function sandboxCommand(
       "Install macOS sandbox-exec, or set TACODE_SANDBOX_IMAGE to a trusted Docker image. " +
       "Use --sandbox danger-full-access only for a trusted workspace.",
   );
+}
+
+/**
+ * macOS Seatbelt 规则。
+ *
+ * `signal`：默认拒绝，只放行「自己的后代进程」（实测 `target children` 覆盖孙进程，如
+ * pnpm → vitest → worker），这样测试/构建能在沙箱里正常收尾；主进程与开发服务器仍受保护。
+ * 别改成 `(target pgrp)`：实测那会连带放行同进程组的**无关进程**（隔离被破坏）。
+ */
+export function seatbeltRules(mode: SandboxOptions["mode"], writable: string[], network: boolean): string {
+  return [
+    "(version 1)",
+    "(allow default)",
+    writable.length === 0
+      ? "(deny file-write*)"
+      : `(deny file-write* (require-not (require-any ${writable
+          .map((directory) => `(subpath "${escapeSeatbelt(directory)}")`)
+          .join(" ")})))`,
+    network ? "" : '(deny network*) (allow network* (local ip "localhost:*"))',
+    "(deny signal)",
+    "(allow signal (target self))",
+    "(allow signal (target children))",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function sandboxDescription(options: SandboxOptions): string {

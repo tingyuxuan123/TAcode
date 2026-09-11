@@ -66,6 +66,24 @@ describe("AgentHost.waitForIdle", () => {
     expect(settled).toBe(true);
   });
 
+  it("releases waiters when the host is stopped (even if the worker already exited)", async () => {
+    // 回归：stop() 之前只 reject pending 请求，没有放行 waitForIdle 等待者——
+    // delegate_stop / 超时收口后等待者会永久挂起（worker 已退出时走早退分支更明显）。
+    const { host, emit } = harness();
+    emit({ type: "agent_start" });
+    let settled = false;
+    const waiting = host.waitForIdle().then(() => {
+      settled = true;
+    });
+    await new Promise((done) => setTimeout(done, 30));
+    expect(settled).toBe(false);
+    // worker 已退出：stop() 会走「child 已结束」的早退分支，仍必须放行等待者。
+    (host as unknown as { child: { exitCode: number } }).child.exitCode = 0;
+    await host.stop();
+    await waiting;
+    expect(settled).toBe(true);
+  });
+
   it("releases waiters when the worker exits mid-turn", async () => {
     const { host, emit } = harness();
     emit({ type: "agent_start" });

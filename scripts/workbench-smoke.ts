@@ -80,6 +80,16 @@ async function smoke() {
     ipcMain.handle("browser:downloads-list", () => []);
     ipcMain.handle("app:get-locale", () => "zh-CN");
     ipcMain.handle("workspace:list", () => []);
+    // 子代理子会话转录：面板只读展示，桩掉主进程读盘通道。
+    ipcMain.handle("sessions:read", (_event, sessionPath: string) => ({
+      sessionPath,
+      messages: [
+        { role: "user", content: [{ type: "text", text: "子代理转录内容：分析委派链路" }] },
+        { role: "assistant", content: [{ type: "text", text: "报告：委派链路与状态机已核对" }] },
+      ],
+      totalMessages: 2,
+      truncated: false,
+    }));
     ipcMain.handle("browser-passwords:find", () => null);
     ipcMain.handle("browser-passwords:save", () => null);
     ipcMain.on("browser:presentation-ready", (event, id: string) => automation.presentationReady(event.sender, id));
@@ -187,6 +197,98 @@ async function smoke() {
     await run("browser_new_tab", { url });
     const sidebarScreenshot = await verifySidebar(main);
     if (process.env.TETHER_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "collapsed-sidebar-electron.png"), sidebarScreenshot);
+
+    stage = "subagent session opens as a side-panel tab and the main conversation stays put";
+    await host("document.querySelector('[data-fixture-child-session] .session-row').click()");
+    await wait(async () => (await labels()).includes("分析子代理链路"));
+    assert.equal(await host("document.querySelector('.inspect-tab.active .inspect-tab-label').textContent"), "分析子代理链路");
+    assert(await host("document.querySelector('.conversation').textContent.includes('对话区保持可用')"), "main conversation must stay");
+    assert.equal(await host("document.querySelector('.conversation [role=status]').textContent"), "已打开子代理标签");
+    // 全出血形态：不再套审查面板的内边距，滚动交给面板自己
+    assert.equal(await host("getComputedStyle(document.querySelector('.inspect-body')).paddingTop"), "0px");
+    assert.equal(await host("getComputedStyle(document.querySelector('.inspect-body')).overflowY"), "hidden");
+    await wait(async () => host("document.querySelector('.child-session-body').textContent.includes('子代理转录内容')"));
+    assert.equal(await host("document.querySelector('.child-session-role').textContent"), "explorer");
+    assert(await host("document.querySelector('.child-session-head').textContent.includes('48 个步骤')"), "header meta");
+
+    stage = "delegation card in the main conversation opens the same kind of tab";
+    await host("document.querySelector('[data-fixture-delegate-turn] .flow-tool-line').click()");
+    await wait(async () => host("!!document.querySelector('[data-fixture-delegate-turn] .delegate-task')"));
+    await host("document.querySelector('[data-fixture-delegate-turn] .delegate-task').click()");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(await host("!!document.querySelector('.delegate-drawer')"), false, "card click must not open the drawer");
+    assert((await labels()).includes("分析委派链路"), "card click must open the child-session tab");
+    await host("document.querySelector('[data-fixture-delegate-turn] .delegate-task-details').click()");
+    await wait(async () => host("!!document.querySelector('.delegate-drawer')"), "info button still opens the drawer");
+    await host("document.querySelector('.delegate-drawer .drawer-close').click()");
+
+    stage = "in-process delegation without a session file still opens a tab with its report";
+    await host("document.querySelector('[data-fixture-inline-turn] .flow-tool-line').click()");
+    await wait(async () => host("!!document.querySelector('[data-fixture-inline-turn] .delegate-task')"));
+    await host("document.querySelector('[data-fixture-inline-turn] .delegate-task').click()");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(await host("!!document.querySelector('.delegate-drawer')"), false, "in-process delegation must not open the drawer");
+    assert((await labels()).includes("跑一遍聚焦测试"), "in-process card must open a tab");
+    const visibleHost = "Array.from(document.querySelectorAll('.child-session-host')).filter(el => getComputedStyle(el).display !== 'none')[0]";
+    assert(await host(`${visibleHost}.textContent.includes('WorkbenchPanelTab')`), "report fallback");
+    assert(await host(`${visibleHost}.textContent.includes('pnpm test')`), "activity fallback");
+    // 卡片与侧栏是同一个委派（delegation-1）→ 标签栏只应出现一次，且内容仍是子会话转录。
+    assert.equal(await host("Array.from(document.querySelectorAll('.child-session-host')).length"), 2, "两个委派各一个标签（含进程内那张卡片）");
+    assert.equal(await host("Array.from(document.querySelectorAll('.inspect-tab-label')).filter(el => el.textContent === '分析委派链路').length"), 1, "同一个委派只出现一次");
+    assert(await host(`${visibleHost}.textContent.includes('子代理转录内容')`), "同一标签内容保持一致");
+
+    stage = "report markdown wraps short table labels on one line and keeps a readable scale";
+    const layout = await host(`(() => {
+      const panel = ${visibleHost};
+      const report = panel.querySelector('.child-session-report');
+      const cs = (el) => getComputedStyle(el);
+      const lineBoxes = (el) => { const r = document.createRange(); r.selectNodeContents(el); return r.getClientRects().length; };
+      const wrap = report.querySelector('.md-table-wrap');
+      const tight = Array.from(report.querySelectorAll('th.is-tight, td.is-tight'));
+      const chip = report.querySelector('.file-chip-name');
+      const code = report.querySelector('p code');
+      return {
+        tightCount: tight.length,
+        tightLines: tight.map(lineBoxes),
+        tightText: tight.map((el) => el.textContent),
+        wrapOverflow: wrap ? wrap.scrollWidth - wrap.clientWidth : null,
+        fontSize: parseFloat(cs(report).fontSize),
+        lineHeight: parseFloat(cs(report).lineHeight),
+        listIndent: parseFloat(cs(report.querySelector('ul')).paddingLeft),
+        chipFont: chip ? parseFloat(cs(chip).fontSize) : null,
+        codeBg: code ? cs(code).backgroundColor : null,
+      };
+    })()`);
+    assert(layout.tightCount >= 4, `short table labels must be marked: ${JSON.stringify(layout)}`);
+    assert(layout.tightLines.every((count: number) => count === 1), `short labels must stay on one line: ${JSON.stringify(layout)}`);
+    assert(layout.wrapOverflow !== null && layout.wrapOverflow <= 1, `table must not overflow: ${JSON.stringify(layout)}`);
+    assert(layout.fontSize >= 12.5, `report body font too small: ${JSON.stringify(layout)}`);
+    assert(layout.lineHeight / layout.fontSize >= 1.5, `report line height too tight: ${JSON.stringify(layout)}`);
+    assert(layout.listIndent <= 22, `list indent too deep: ${JSON.stringify(layout)}`);
+    assert(layout.chipFont !== null && layout.chipFont >= 11, `file chip too small: ${JSON.stringify(layout)}`);
+    assert(layout.codeBg !== null && layout.codeBg !== "rgba(0, 0, 0, 0)", `inline code must keep a background: ${JSON.stringify(layout)}`);
+    if (process.env.TETHER_BROWSER_ARTIFACTS) {
+      await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "report-layout.json"), `${JSON.stringify(layout, null, 2)}\n`);
+      await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "report-layout-electron.png"), (await main.webContents.capturePage()).toPNG());
+    }
+    console.log(`Report layout passed: ${layout.tightCount} short labels on one line each, table fits, body ${layout.fontSize}px/${layout.lineHeight}px, list indent ${layout.listIndent}px, chip ${layout.chipFont}px.`);
+    console.log("Subagent panel passed: sidebar row and card context open one read-only transcript tab per delegation, main conversation untouched.");
+
+    stage = "creating a subagent auto-opens its session tab and keeps it live";
+    const autoBefore = await host("document.querySelectorAll('.child-session-host').length");
+    await host("document.querySelector('[data-fixture-start-delegation]').click()");
+    await wait(async () => (await host("document.querySelectorAll('.child-session-host').length")) === autoBefore + 1);
+    // 首次出现抢焦点（与 Proma 一致）
+    assert.equal(await host("document.querySelector('.inspect-tab.active .inspect-tab-label').textContent"), "动态委派：统计行数");
+    assert(await host("Array.from(document.querySelectorAll('.child-session-host')).some(el => el.textContent.includes('正在读取 src/main/index.ts'))"), "running step must be visible");
+    // 运行期刷新不抢焦点：切到审查标签后让委派完成，焦点必须留在审查
+    await host("Array.from(document.querySelectorAll('.inspect-tab')).find(el => el.textContent.includes('审查')).click()");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await host("document.querySelector('[data-fixture-advance-delegation]').click()");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(await host("document.querySelector('.inspect-tab.active .inspect-tab-label').textContent"), "审查", "live refresh must not steal focus");
+    assert(await host("Array.from(document.querySelectorAll('.child-session-host')).some(el => el.textContent.includes('已完成') && el.textContent.includes('7 个步骤'))"), "header must follow the delegation status");
+    console.log("Subagent auto-open passed: creation opens the child-session tab, live header updates never steal focus.");
     }
 
     stage = "responsive composer controls and all options in the overflow menu";

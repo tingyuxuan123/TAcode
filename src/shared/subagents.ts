@@ -84,6 +84,14 @@ export interface SubagentModelPin {
   modelId: string;
 }
 
+export const SUBAGENT_EXEC_POLICIES = ["readonly"] as const;
+
+export type SubagentExecPolicy = (typeof SUBAGENT_EXEC_POLICIES)[number];
+
+export function isSubagentExecPolicy(value: string): value is SubagentExecPolicy {
+  return (SUBAGENT_EXEC_POLICIES as readonly string[]).includes(value);
+}
+
 export interface SubagentDefinition {
   /** `delegate` 的 role/handle，slug 形式。 */
   name: string;
@@ -96,6 +104,11 @@ export interface SubagentDefinition {
   permission?: SubagentPermission;
   /** 轮次硬上限；省略表示默认上限。 */
   maxTurns?: number;
+  /**
+   * 命令执行策略：`readonly` 表示这个子代理只能跑只读命令（见 `shared/readonly-commands.ts`）。
+   * 让 explorer 这类只读角色能跑 `wc -l` / `git log`，同时挡住一切写盘与间接执行。
+   */
+  execPolicy?: SubagentExecPolicy;
   /** Markdown body，作为子代理 system prompt。 */
   prompt: string;
   source: SubagentSource;
@@ -124,6 +137,84 @@ export function subagentEditsFiles(definition: Pick<SubagentDefinition, "tools">
   return definition.tools.some((tool) =>
     (SUBAGENT_FILE_WRITE_TOOLS as readonly string[]).includes(tool),
   );
+}
+
+/** 两个名字的编辑距离（用于「你是不是想找 explorer?」这类纠错提示）。 */
+function editDistance(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  let previous = Array.from({ length: cols }, (_item, index) => index);
+  for (let row = 1; row < rows; row += 1) {
+    const current = [row];
+    for (let col = 1; col < cols; col += 1) {
+      const cost = a[row - 1] === b[col - 1] ? 0 : 1;
+      current[col] = Math.min(
+        (previous[col] ?? 0) + 1,
+        (current[col - 1] ?? 0) + 1,
+        (previous[col - 1] ?? 0) + cost,
+      );
+    }
+    previous = current;
+  }
+  return previous[cols - 1] ?? 0;
+}
+
+/** 在已知名字里找最接近的一个：归一化相同 → 包含关系 → 编辑距离 ≤ 2。 */
+export function closestSubagentName(role: string, names: readonly string[]): string | undefined {
+  const want = role.trim().toLowerCase();
+  if (!want) return undefined;
+  const exact = names.find((name) => name.toLowerCase() === want);
+  if (exact) return exact;
+  const contains = names.find((name) => {
+    const candidate = name.toLowerCase();
+    return candidate.includes(want) || want.includes(candidate);
+  });
+  if (contains) return contains;
+  let best: { name: string; distance: number } | undefined;
+  for (const name of names) {
+    const distance = editDistance(want, name.toLowerCase());
+    if (distance <= 2 && (!best || distance < best.distance)) best = { name, distance };
+  }
+  return best?.name;
+}
+
+/**
+ * 未知子代理时的提示：附上可用清单 + 最接近的名字。
+ * 模型看不到 `~/.tether/subagents/` 目录，只回一句 "Unknown subagent" 会让它继续瞎猜角色名。
+ */
+export function unknownSubagentMessage(
+  role: string,
+  definitions: Array<{ name: string; description?: string }>,
+): string {
+  const suggestion = closestSubagentName(role, definitions.map((item) => item.name));
+  const head = suggestion
+    ? `Unknown subagent: ${role}. Did you mean "${suggestion}"?`
+    : `Unknown subagent: ${role}.`;
+  if (definitions.length === 0) {
+    return `${head}\nNo subagents are enabled. Configure them in Settings → Subagents.`;
+  }
+  const list = definitions
+    .map((item) => `- ${item.name}${item.description ? `: ${item.description}` : ""}`)
+    .join("\n");
+  return `${head}\nAvailable:\n${list}`;
+}
+
+/** 模型可见的子代理目录（注入系统上下文；与设置页/源码里的目录保持一致）。 */
+export function subagentCatalogText(
+  definitions: Array<Pick<SubagentDefinition, "name" | "description" | "tools" | "maxTurns" | "thinkingLevel">>,
+): string {
+  if (definitions.length === 0) return "";
+  const lines = definitions.map((item) => {
+    const tools = item.tools.join(", ") || "none";
+    const turns = item.maxTurns ?? MAX_SUBAGENT_MAX_TURNS;
+    const thinking = item.thinkingLevel ? `; thinking ${item.thinkingLevel}` : "";
+    return `- ${item.name}: ${item.description} (tools: ${tools}; maxTurns ${turns}${thinking})`;
+  });
+  return [
+    "Subagent catalog for the `delegate` tool (roles are fixed; subagents cannot delegate further):",
+    ...lines,
+    "Give each subagent one self-contained task, and ask for `path:line` evidence with short verbatim quotes.",
+  ].join("\n");
 }
 
 export function normalizeSubagentName(value: string): string {
@@ -267,6 +358,13 @@ export function parseSubagentDocument(input: {
     }
   }
 
+  let execPolicy: SubagentExecPolicy | undefined;
+  const rawExecPolicy = field("execpolicy");
+  if (rawExecPolicy) {
+    if (isSubagentExecPolicy(rawExecPolicy.toLowerCase())) execPolicy = rawExecPolicy.toLowerCase() as SubagentExecPolicy;
+    else warnings.push(`execPolicy 非法，已忽略：${rawExecPolicy}（可用：${SUBAGENT_EXEC_POLICIES.join("/")}）`);
+  }
+
   return {
     definition: {
       name,
@@ -276,6 +374,7 @@ export function parseSubagentDocument(input: {
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(permission ? { permission } : {}),
       ...(maxTurns ? { maxTurns } : {}),
+      ...(execPolicy ? { execPolicy } : {}),
       prompt: body,
       source: input.source,
       ...(input.filePath ? { filePath: input.filePath } : {}),
@@ -292,6 +391,7 @@ export function renderSubagentDocument(definition: SubagentDefinition): string {
   if (definition.thinkingLevel) lines.push(`thinkingLevel: ${definition.thinkingLevel}`);
   if (definition.permission && definition.permission !== "inherit") lines.push(`permission: ${definition.permission}`);
   if (definition.maxTurns) lines.push(`maxTurns: ${definition.maxTurns}`);
+  if (definition.execPolicy) lines.push(`execPolicy: ${definition.execPolicy}`);
   lines.push("---", "", definition.prompt.trim(), "");
   return lines.join("\n");
 }

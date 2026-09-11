@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useReducer } from "react";
-import { createBrowserPanel, createBrowserPanelId, initialPanelState, panelReducer } from "./panel-state";
+import {
+  createBrowserPanel,
+  createBrowserPanelId,
+  createChildSessionPanel,
+  initialPanelState,
+  panelReducer,
+  type ChildSessionPanelInfo,
+} from "./panel-state";
 
 /** 主窗口统一管理网页标签；独立窗口仍由 BrowserPanel 管理内部标签。 */
 export function useBrowserPanels() {
@@ -13,6 +20,14 @@ export function useBrowserPanels() {
   }, [openBrowser]);
   const closePanel = useCallback((id: string) => dispatch({ type: "close", id }), []);
   const selectPanel = useCallback((id: string) => dispatch({ type: "select", id }), []);
+  /**
+   * 打开/刷新某个委派的只读标签；key 由 `delegationPanelKey()` 推导，同一委派复用同一个标签。
+   * `activate: false` 用于运行期的实时刷新（不抢用户正在看的标签）。
+   */
+  const openChildSession = useCallback((key: string, info: ChildSessionPanelInfo, options?: { activate?: boolean }) => {
+    if (!key.trim()) return;
+    dispatch({ type: "open-child-session", panel: createChildSessionPanel(key, info), ...(options?.activate === false ? { activate: false } : {}) });
+  }, []);
 
   useEffect(() => {
     const offRestore = window.harness.browser.onRestoreToMain(({ instanceId, tabs }) => {
@@ -38,5 +53,5 @@ export function useBrowserPanels() {
     return () => { offRestore(); offClosed(); offPresentation(); };
   }, []);
 
-  return { ...state, dispatch, openPanel, openBrowser, closePanel, selectPanel };
+  return { ...state, dispatch, openPanel, openBrowser, openChildSession, closePanel, selectPanel };
 }

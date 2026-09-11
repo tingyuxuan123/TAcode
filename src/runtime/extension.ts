@@ -20,6 +20,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   SUBAGENT_MUTATING_TOOLS,
+  subagentCatalogText,
   type SubagentDefinition,
   type SubagentPermission,
 } from "../shared/subagents.js";
@@ -154,7 +155,10 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
 
       registerDeepSeekProvider(pi, options);
       registerReadTools(pi);
+      // 桥接子 worker 的只读命令策略由主进程经 TACODE_EXEC_POLICY 下发（角色定义 → start options）。
+      const workerReadOnly = tacodeEnv("EXEC_POLICY") === "readonly";
       registerCommandTools(pi, {
+        ...(workerReadOnly ? { readOnly: true } : {}),
         registry,
         getPermission: () => permission,
         access,
@@ -236,6 +240,23 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
         applyPermissionTools();
         updateStatus(ctx);
       });
+
+      // 子代理目录注入系统上下文：模型看不到 ~/.tether/subagents 目录，没有目录就只能猜角色名。
+      // 只在能委派的会话里注入（子 worker 不能再委派）。
+      if (childDepth < 1) {
+        pi.on("before_agent_start", async () => {
+          const definitions = await loadEnabledSubagents().catch(() => []);
+          const catalog = subagentCatalogText(definitions);
+          if (!catalog) return;
+          return {
+            message: {
+              customType: "tacode-subagent-catalog",
+              display: false,
+              content: catalog,
+            },
+          };
+        });
+      }
 
       pi.on("before_agent_start", (event) => {
         if (permission !== "plan") return;
@@ -551,6 +572,7 @@ function createSubagentTools(
   const childCommandOptions: CommandToolOptions = {
     ...commandOptions,
     getPermission: () => childPermission,
+    ...(definition.execPolicy === "readonly" ? { readOnly: true } : {}),
   };
 
   const available = new Map<string, ToolDefinition<any, any, any>>();

@@ -1,6 +1,6 @@
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { Download, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { Bot, Check, Download, Info, PanelLeftClose, PanelLeftOpen, Target, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PREVIEW_HOST, PREVIEW_SCHEME, type AgentSessionStats, type ExtensionUiRequest, type PermissionMode } from "../shared/types";
@@ -17,9 +17,12 @@ import { EffortPicker, ModelPicker, usePickerPopover } from "./composer-pickers"
 import { PromptToolbar } from "./prompt-toolbar";
 import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolPath, toolSummary, toolWritePreview, toolWriteSource, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type DelegateTaskState, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
 import { tokenizeCode } from "./highlight";
+import { isTightTableCell } from "./markdown-table";
 import type { AgentSkillCommand } from "../shared/skills";
 import { PROJECT_SKILL_ROOTS, USER_SKILL_ROOTS, skillSlashCommand } from "../shared/skills";
 import { useI18n } from "./i18n";
+import { usePanelActions } from "./panel-actions";
+import { delegationPanelKey } from "./browser/panel-state";
 import type { MessageKey } from "../shared/i18n";
 import { ExecutionFlow } from "./execution-flow";
 import { startPanelResize } from "./panel-resize";
@@ -762,10 +765,25 @@ const TRACE_GLYPHS: Record<TraceRow["kind"], string> = {
 };
 
 function TraceRowView({ row }: { row: TraceRow }) {
+  const { t } = useI18n();
   const isDelegate = row.tool?.name === "delegate";
+  const progress = isDelegate && row.tool ? delegateProgress(row.tool, row.tools) : undefined;
+  // total=0 说明还没解析出子任务，此时沿用原来的行文案（不要显示「0 个子代理」）。
+  const delegate = progress && progress.total > 0 ? progress : undefined;
   const [open, setOpen] = useState(false);
   const detail = traceDetail(row);
-  const chip = row.tool?.name === "vision" ? visionToolChips(row.tool.details).join(" · ") : row.chip;
+  // 委托行运行中自动展开一次，让拓扑直接出现在对话里；用户手动收起后不再自动弹。
+  const delegateRunning = Boolean(delegate?.tasks.some((task) => task.status === "running" || task.status === "pending"));
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (!delegateRunning || autoOpened.current) return;
+    autoOpened.current = true;
+    setOpen(true);
+  }, [delegateRunning]);
+  const label = delegate ? delegateHeadLabel(t, delegate.tasks) : row.label;
+  const chip = delegate
+    ? `${t("delegate.headCount", { n: delegate.total })} · ${t("delegate.headRatio", { done: delegate.done, total: delegate.total })}`
+    : row.tool?.name === "vision" ? visionToolChips(row.tool.details).join(" · ") : row.chip;
   return (
     <div className={`trace-row-wrap ${row.status ?? ""}${open ? " open" : ""}`}>
       <button
@@ -778,13 +796,23 @@ function TraceRowView({ row }: { row: TraceRow }) {
         <span className="trace-row-mark">
           <Icon className="trace-row-glyph" path={TRACE_GLYPHS[row.kind]} size={13} />
         </span>
-        <span className="trace-row-label">{row.label}</span>
-        {chip && <span className={row.mono ? "trace-row-chip mono" : "trace-row-chip"}>{chip}</span>}
+        <span className="trace-row-label">{label}</span>
+        {chip && <span className={row.mono || isDelegate ? "trace-row-chip mono" : "trace-row-chip"}>{chip}</span>}
         {detail ? <Icon className="trace-row-chevron chevron" path="M6 9l6 6 6-6" size={12} /> : null}
       </button>
-      {open && detail && <div className="trace-row-detail">{detail}</div>}
+      {open && detail && <div className={isDelegate ? "trace-row-detail is-delegate" : "trace-row-detail"}>{detail}</div>}
     </div>
   );
+}
+
+/** 委托行表头文案：运行中 / 完成但有失败 / 全部完成（对齐 PI-Desktop 的 subagent 分组表头）。 */
+function delegateHeadLabel(
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string,
+  tasks: readonly DelegateTaskState[],
+): string {
+  if (tasks.some((task) => task.status === "running" || task.status === "pending")) return t("delegate.headRunning");
+  if (tasks.some((task) => task.status === "failed")) return t("delegate.headIssues");
+  return t("delegate.headDone");
 }
 
 function traceDetail(row: TraceRow): ReactNode {
@@ -919,7 +947,8 @@ function writeDiffTokens(text: string, path: string): ReactNode {
     : <span key={spot}>{token.text}</span>);
 }
 
-/** 聚合委托卡：头部总进度 + 每个子代理一条节点行；点击行打开右侧详情抽屉。 */
+/** 聚合委托卡：主智能体节点 + 连线 + 每个子代理一张节点卡（对齐 PI-Desktop 的 subagent 拓扑）；
+ * 点击节点在右侧面板打开该子会话，节点右上「详情」按钮打开抽屉。 */
 function DelegateDetail({ tool, tools }: { tool: ToolActivity; tools?: ToolActivity[] }) {
   const { t } = useI18n();
   const progress = delegateProgress(tool, tools);
@@ -929,17 +958,10 @@ function DelegateDetail({ tool, tools }: { tool: ToolActivity; tools?: ToolActiv
   if (progress.tasks.length === 0) return null;
   const tasks = progress.tasks;
   const total = progress.total || tasks.length;
-  const allSettled = tasks.every((item) => item.status !== "running" && item.status !== "pending");
   const startedAt = tasks.reduce<number | undefined>((min, item) => {
     if (item.startedAt === undefined) return min;
     return min === undefined ? item.startedAt : Math.min(min, item.startedAt);
   }, undefined) ?? tool.startedAt;
-  const completedAt = allSettled
-    ? tool.endedAt ?? tasks.reduce<number | undefined>((max, item) => {
-      if (item.completedAt === undefined) return max;
-      return max === undefined ? item.completedAt : Math.max(max, item.completedAt);
-    }, undefined)
-    : undefined;
   const outputOf = (item: DelegateTaskState) => {
     const result = results.find((entry) => (
       entry
@@ -952,24 +974,59 @@ function DelegateDetail({ tool, tools }: { tool: ToolActivity; tools?: ToolActiv
     return diff ? [output, "```diff", diff, "```"].filter(Boolean).join("\n\n") : output;
   };
   const selectedTask = selected !== null ? tasks[selected] : undefined;
+  const panelActions = usePanelActions();
+  // 点击子代理行 = 在右侧面板打开它的标签（只读转录；没有子会话文件时展示卡片上的报告/活动流）。
+  // 详情抽屉保留在行尾 ⓘ 按钮上；只有在桥接不可用（无 context）时才回退到抽屉。
+  const openTask = (item: DelegateTaskState, index: number): void => {
+    if (!panelActions.openChildSession) {
+      setSelected(index);
+      return;
+    }
+    // 身份由「委派 id 或子会话文件名」推导，保证与侧栏点到同一个标签页。
+    const key = delegationPanelKey(item.id, item.childSessionPath);
+    if (!key) {
+      setSelected(index);
+      return;
+    }
+    panelActions.openChildSession(key, {
+      role: item.role,
+      title: item.task.replace(/\s+/g, " ").trim().slice(0, 60),
+      task: item.task,
+      ...(item.childSessionPath ? { sessionPath: item.childSessionPath } : {}),
+      status: item.status,
+      ...(item.startedAt !== undefined ? { startedAt: item.startedAt } : {}),
+      ...(item.completedAt !== undefined ? { completedAt: item.completedAt } : {}),
+      ...(item.toolCalls !== undefined ? { toolCalls: item.toolCalls } : {}),
+      ...(item.turns !== undefined ? { turns: item.turns } : {}),
+      ...(item.usage?.totalTokens !== undefined ? { totalTokens: item.usage.totalTokens } : {}),
+      ...(item.recent?.length ? { activity: item.recent } : {}),
+      ...(outputOf(item) ? { report: outputOf(item) } : {}),
+    });
+  };
   return (
     <div className="delegate-tool">
-      <div className="delegate-card-head">
-        <span className="delegate-card-count">{progress.done}/{total}</span>
-        <span className="delegate-card-bar" role="progressbar" aria-label={t("delegate.cardLabel")} aria-valuemin={0} aria-valuemax={total} aria-valuenow={progress.done}>
-          <span className="delegate-card-bar-fill" style={{ width: `${total > 0 ? Math.min(100, (progress.done / total) * 100) : 0}%` }} />
-        </span>
-        <Elapsed start={startedAt} end={completedAt} live={!allSettled} />
+      <div className="delegate-topology">
+        <div className="delegate-root">
+          <span className="delegate-root-icon" aria-hidden="true"><Target size={16} /></span>
+          <span className="delegate-root-copy">
+            <strong>{t("delegate.coordinator")}</strong>
+            <span>{t("delegate.coordinating", { n: total })}</span>
+          </span>
+        </div>
+        <span className="delegate-connector" aria-hidden="true" />
+        <div className="delegate-agents" role="list" aria-label={t("delegate.agentsLabel")}>
+          {tasks.map((item, index) => (
+            <DelegateTaskRow
+              key={`${item.role}-${index}`}
+              task={item}
+              fallbackStart={startedAt}
+              output={outputOf(item)}
+              onOpen={() => openTask(item, index)}
+              onDetails={() => setSelected(index)}
+            />
+          ))}
+        </div>
       </div>
-      {tasks.map((item, index) => (
-        <DelegateTaskRow
-          key={`${item.role}-${index}`}
-          task={item}
-          fallbackStart={startedAt}
-          output={outputOf(item)}
-          onOpen={() => setSelected(index)}
-        />
-      ))}
       {selectedTask && (
         <SubagentDrawer
           task={selectedTask}
@@ -982,7 +1039,20 @@ function DelegateDetail({ tool, tools }: { tool: ToolActivity; tools?: ToolActiv
   );
 }
 
-function DelegateAvatar({ status, large }: { status: string; large?: boolean }) {
+function DelegateAvatar({ status, large, node }: { status: string; large?: boolean; node?: boolean }) {
+  if (node) {
+    // 节点头像：Bot 图标 + 右下角状态徽标（完成打勾 / 失败叉 / 进行中亮点），对齐 PI-Desktop。
+    return (
+      <span className={`delegate-avatar node ${status}`} aria-hidden="true">
+        <Bot size={15} />
+        <span className="delegate-avatar-badge">
+          {status === "completed" ? <Check size={8} />
+            : status === "failed" ? <X size={8} />
+              : <span className="delegate-avatar-dot" />}
+        </span>
+      </span>
+    );
+  }
   return (
     <span className={`delegate-avatar${large ? " lg" : ""} ${status}`} aria-hidden="true">
       {status === "completed" ? <Icon path="M4 12l5 5 11-11" size={large ? 13 : 11} />
@@ -992,17 +1062,22 @@ function DelegateAvatar({ status, large }: { status: string; large?: boolean }) 
   );
 }
 
-/** 单个子代理节点行：状态环头像 + 元信息 + 任务摘要 + 实时步骤/结果预览；点击打开详情抽屉。 */
+/** 单个子代理节点卡：状态徽标头像 + 标题行（角色 / 模型 / 状态·耗时）+ 任务摘要 + 步骤或实时预览。
+ * 点击卡身 = 在右侧面板打开该子会话的只读转录；右上「详情」按钮 = 打开详情抽屉（活动流 + 最终报告）。 */
 function DelegateTaskRow({
   task,
   output,
   fallbackStart,
   onOpen,
+  onDetails,
 }: {
   task: DelegateTaskState;
   output?: string;
   fallbackStart?: number;
+  /** 主操作：打开该子代理的只读转录标签（没有子会话时回落到详情抽屉）。 */
   onOpen(): void;
+  /** 打开详情抽屉（活动流 + 最终报告）。 */
+  onDetails(): void;
 }) {
   const { t } = useI18n();
   const summary = task.task.replace(/\s+/g, " ").trim();
@@ -1030,30 +1105,47 @@ function DelegateTaskRow({
     ? task.live
     : !running && output ? output.replace(/\s+/g, " ").trim().slice(0, 160) : "";
   const meta = [
-    task.model ? `${task.model.providerId}/${task.model.modelId}` : "",
     task.toolCalls ? t("delegate.steps", { n: task.toolCalls }) : "",
     task.usage?.totalTokens ? `${task.usage.totalTokens.toLocaleString()} tokens` : "",
   ].filter(Boolean).join(" · ");
   return (
-    <button
-      type="button"
-      className={`delegate-task ${task.status}${stale ? " stale" : ""}`}
-      aria-haspopup="dialog"
-      onClick={onOpen}
-    >
-      <DelegateAvatar status={task.status} />
-      <span className="delegate-node-main">
-        <span className="delegate-node-top">
-          <span className="delegate-role">{task.role}</span>
-          <span className="delegate-status">{stale ? t("trace.delegateStale") : delegateStatusLabel(task.status)}</span>
-          <Elapsed start={task.startedAt ?? fallbackStart} end={task.completedAt} live={running} />
+    <div className={`delegate-node ${task.status}${stale ? " stale" : ""}`} role="listitem">
+      <button
+        type="button"
+        className="delegate-node-header"
+        title={task.childSessionPath ? t("delegate.openTab") : t("delegate.detailTitle")}
+        onClick={onOpen}
+      >
+        <DelegateAvatar status={task.status} node />
+        <span className="delegate-node-copy">
+          <span className="delegate-node-title-row">
+            <span className="delegate-role">{task.role}</span>
+            {task.model && (
+              <span className="delegate-node-model" title={`${task.model.providerId}/${task.model.modelId}`}>
+                {task.model.modelId}
+              </span>
+            )}
+            <span className="delegate-status">{stale ? t("trace.delegateStale") : delegateStatusLabel(task.status)}</span>
+            <Elapsed start={task.startedAt ?? fallbackStart} end={task.completedAt} live={running} />
+          </span>
+          {summary && <span className="delegate-node-task">{summary}</span>}
+          {showLive
+            ? <span className="delegate-node-preview live">{preview}</span>
+            : meta ? <span className="delegate-task-meta">{meta}</span>
+              : preview ? <span className="delegate-node-preview">{preview}</span> : null}
         </span>
-        {summary && <span className="delegate-node-task">{summary}</span>}
-        {meta && <span className="delegate-task-meta">{meta}</span>}
-        {preview && <span className={`delegate-node-preview${showLive ? " live" : ""}`}>{preview}</span>}
-      </span>
-      <Icon className="delegate-chevron chevron" path="M9 6l6 6-6 6" size={12} />
-    </button>
+      </button>
+      <button
+        type="button"
+        className="delegate-node-details"
+        aria-haspopup="dialog"
+        aria-label={t("delegate.detailTitle")}
+        title={t("delegate.detailTitle")}
+        onClick={onDetails}
+      >
+        <Info size={13} />
+      </button>
+    </div>
   );
 }
 
@@ -1239,7 +1331,7 @@ function copyMarkdownPlain(event: { preventDefault(): void; clipboardData: DataT
   event.clipboardData?.setData("text/plain", selected);
 }
 
-function Markdown({ children, streaming }: { children: string; streaming?: boolean }) {
+export function Markdown({ children, streaming }: { children: string; streaming?: boolean }) {
   const source = compactFencedCode(
     stripEmptyMarkdown(repairMarkdownTables(streaming ? closeOpenFences(children) : children)),
   );
@@ -1263,11 +1355,33 @@ function Markdown({ children, streaming }: { children: string; streaming?: boole
           if (isFilePath(plain)) return <FilePathChip filePath={plain} />;
           return <code {...props}>{children}</code>;
         },
+        // 宽表格改为横向滚动容器：否则长内容列会把短标签列压到每行只剩一个字。
+        table({ node: _node, children, ...props }) {
+          return <div className="md-table-wrap"><table {...props}>{children}</table></div>;
+        },
+        th({ node: _node, children, ...props }) {
+          return <th {...tightCellProps(children, props)}>{children}</th>;
+        },
+        td({ node: _node, children, ...props }) {
+          return <td {...tightCellProps(children, props)}>{children}</td>;
+        },
       }}
     >
       {source}
     </ReactMarkdown>
   );
+}
+
+/**
+ * 给「短标签」单元格加 `is-tight`（CSS 侧 `white-space: nowrap`）。
+ * 只透传 react-markdown 给的 DOM 属性（`style` 承载 GFM 对齐），`node` 不落到 DOM 上。
+ */
+function tightCellProps(
+  children: ReactNode,
+  props: { style?: CSSProperties; className?: string },
+): { style?: CSSProperties; className?: string } {
+  const tight = isTightTableCell(extractNodeText(children));
+  return { ...props, className: tight ? "is-tight" : props.className };
 }
 
 /** Drop blank lines inside fenced code so SVG/XML dumps don't look double-spaced. */
