@@ -3,7 +3,7 @@
  *
  * 壳层参数（权限、沙箱、harness、transport、网络）由本模块消费；
  * 其余参数原样转发给 Pi 的 `main()`。转发前补齐 Pi 需要的
- * `--provider` / `--model` / `--thinking`，保证模型选择与 Tether 时代一致。
+ * `--provider` / `--model` / `--thinking`，保证模型选择与改名前的版本一致。
  */
 
 import { createRequire } from "node:module";

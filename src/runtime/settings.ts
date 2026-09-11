@@ -1,8 +1,8 @@
 /**
  * TACode Runtime 本地设置（baseUrl / maxTokens / 凭据存储模式 / 历史持久化）。
  *
- * 设置文件与 Tether 时代同构（`<home>/config.json`），因此可以直接沿用
- * 已有 `~/.tether` 数据；读写走原子替换并保持 0600 权限。
+ * 设置文件与改名前的版本同构（`<home>/config.json`），因此可以直接沿用
+ * 旧数据；读写走原子替换并保持 0600 权限。
  */
 
 import { randomUUID } from "node:crypto";

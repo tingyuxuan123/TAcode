@@ -1,9 +1,9 @@
 /**
  * TACode 自研 Runtime 扩展。
  *
- * 这是替代 `tether-agent-core` 的 `createTetherExtension` 的实现：Pi 只提供
+ * 这是自持的实现（取代早期依赖的第三方运行时包）：Pi 只提供
  * Agent 循环、RPC、会话与模型协议；工具、权限、沙箱与计划语义由本扩展承载，
- * 并保持 Tether 时代的工具名（read_file / exec_command / apply_patch / update_plan …），
+ * 并沿用改名前的旧工具名（read_file / exec_command / apply_patch / update_plan …），
  * 使渲染层无需改动。
  */
 
@@ -49,8 +49,8 @@ import { createRuntimeDelegationClient } from "./delegation-bridge.js";
 import { Workspace } from "./tools/workspace.js";
 import { Type } from "@earendil-works/pi-ai";
 
-const PERMISSION_ENTRY = "tether-permission";
-const CHECKPOINT_ENTRY = "tether-checkpoint";
+const PERMISSION_ENTRY = "tacode-permission";
+const CHECKPOINT_ENTRY = "tacode-checkpoint";
 
 const planAllowedTools = new Set<string>([
   "read_file",
@@ -123,7 +123,7 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
       const updateStatus = (ctx: ExtensionContext): void => {
         const current = effectiveAccess();
         const status = `TACode Runtime · ${permission} · ${sandboxDescription(sandboxFor(current.sandbox, current.network))}`;
-        ctx.ui.setStatus("tether", permission === "plan" ? ctx.ui.theme.fg("warning", status) : status);
+        ctx.ui.setStatus("tacode", permission === "plan" ? ctx.ui.theme.fg("warning", status) : status);
         ctx.ui.setTitle(`TACode Runtime — ${ctx.cwd}`);
       };
 
@@ -241,7 +241,7 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
         updateStatus(ctx);
       });
 
-      // 子代理目录注入系统上下文：模型看不到 ~/.tether/subagents 目录，没有目录就只能猜角色名。
+      // 子代理目录注入系统上下文：模型看不到 ~/.tacode/subagents 目录，没有目录就只能猜角色名。
       // 只在能委派的会话里注入（子 worker 不能再委派）。
       if (childDepth < 1) {
         pi.on("before_agent_start", async () => {

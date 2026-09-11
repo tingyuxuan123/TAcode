@@ -153,20 +153,26 @@ const ALLOWED_AGENT_COMMANDS = new Set([
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 /** 本进程的启动时间：与磁盘产物 mtime 比较即可判断「是否在跑旧构建」。 */
 const processStartedAt = Date.now();
-const legacyUserDataPath = path.join(app.getPath("appData"), "DSHarness");
-const userDataPath = path.join(app.getPath("appData"), "Tether");
+/** 改名前的历史产品名；userData 迁移时优先取最近一个还存在的旧目录。 */
+const legacyUserDataNames = ["DSHarness", "Tether"] as const;
+const userDataPath = path.join(app.getPath("appData"), "TACode");
 
-// Preserve existing sessions and credentials across the product rename.
-if (!fs.existsSync(userDataPath) && fs.existsSync(legacyUserDataPath)) {
-  try {
-    fs.renameSync(legacyUserDataPath, userDataPath);
-  } catch {
-    // The old directory remains usable only by older builds; start clean if migration is unavailable.
+// Preserve existing sessions, sign-ins and credentials across the product renames.
+if (!fs.existsSync(userDataPath)) {
+  for (const name of [...legacyUserDataNames].reverse()) {
+    const legacy = path.join(app.getPath("appData"), name);
+    if (!fs.existsSync(legacy)) continue;
+    try {
+      fs.renameSync(legacy, userDataPath);
+      break;
+    } catch {
+      // The old directory remains usable only by older builds; start clean if migration is unavailable.
+    }
   }
 }
 
 // Desktop distribution favors a quiet first run; the owner-only file avoids OS keyring prompts.
-process.env.TETHER_CREDENTIALS_STORE = "file";
+process.env.TACODE_CREDENTIALS_STORE = "file";
 
 let mainWindow: BrowserWindow | undefined;
 // 第二个参数把当前工作区交给浏览器自动化：browser_navigate 传 path 时直接预览工作区文件。
@@ -256,7 +262,7 @@ const loadedSessions = new Map<string, LoadedSessionEntry>();
 const deletedSessionPaths = new Set<string>();
 
 // 持久化运行中会话注册表，供崩溃/重启后恢复侧边栏条目（配合 Phase 2 受保护消息
-// 实现“首轮未落盘、崩溃后仍能找回”）。文件：~/.tether/loaded-sessions.json。
+// 实现“首轮未落盘、崩溃后仍能找回”）。文件：~/.tacode/loaded-sessions.json。
 function loadedSessionsPath(): string {
   return path.join(getTacodeHome(), "loaded-sessions.json");
 }
@@ -1862,7 +1868,7 @@ const SKIP_DIRS = new Set([
   ".turbo",
   ".vite",
   ".cache",
-  ".tether",
+  ".tacode",
   ".build",
   "DerivedData",
   "Pods",

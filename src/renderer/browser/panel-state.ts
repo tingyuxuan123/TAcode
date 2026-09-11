@@ -21,7 +21,7 @@ export type WorkbenchPanelTab =
 export interface ChildSessionPanelInfo {
   role: string;
   /**
-   * 子会话转录文件（`~/.tether/sessions/<delegationId>.jsonl`）。
+   * 子会话转录文件（`~/.tacode/sessions/<delegationId>.jsonl`）。
    * 卡片入口与侧栏入口都会带上它；进程内委派没有文件，此时只有报告/活动流可看。
    */
   sessionPath?: string;

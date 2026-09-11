@@ -91,7 +91,7 @@ function Fixture() {
   const [sessionTitles, setSessionTitles] = useState<Record<string, string>>({});
   const projects = [
     { name: "xc-app", sessions: [{ id: "web-1", title: "打开项目Web端" }, { id: "web-2", title: "高级查询" }] },
-    { name: "TAcode", sessions: [{ id: "tether-1", title: "修复浏览器" }, { id: "tether-2", title: "文档整理" }] },
+    { name: "TAcode", sessions: [{ id: "tacode-1", title: "修复浏览器" }, { id: "tacode-2", title: "文档整理" }] },
   ];
   const withChat = new URLSearchParams(location.search).has("chat");
   if (new URLSearchParams(location.search).has("composer")) {

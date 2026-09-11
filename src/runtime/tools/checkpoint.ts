@@ -1,7 +1,7 @@
 /**
  * 文件改动 checkpoint。
  *
- * 每次成功的 `apply_patch` 或 `exec_command` 都会写一条 `tether-checkpoint`
+ * 每次成功的 `apply_patch` 或 `exec_command` 都会写一条 `tacode-checkpoint`
  * custom entry，渲染层的 `/undo` 依据它恢复最近一轮的文件内容。
  */
 

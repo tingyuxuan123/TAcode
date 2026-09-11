@@ -1,5 +1,5 @@
 /**
- * 文件读写与搜索工具（Tether 时代的工具名，界面按这些名字识别工具活动）。
+ * 文件读写与搜索工具（沿用改名前的旧工具名，界面按这些名字识别工具活动）。
  *
  * 所有路径都经 `Workspace.resolve()` 校验；写入使用同目录临时文件 + rename。
  */
@@ -20,7 +20,7 @@ const DEFAULT_IGNORES = [
   "**/build/**",
   "**/coverage/**",
   "**/.next/**",
-  "**/.tether/**",
+  "**/.tacode/**",
 ];
 
 export function clipForModel(text: string, limit = MODEL_TEXT_LIMIT): string {

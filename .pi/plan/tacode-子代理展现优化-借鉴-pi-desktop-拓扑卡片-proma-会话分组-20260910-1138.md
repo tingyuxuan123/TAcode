@@ -39,7 +39,7 @@
 ### P1 子代理详情抽屉（对齐 PI-Desktop「子智能体」面板）
 
 4. **运行时：`src/runtime/tools/delegate.ts`**
-   - `DelegationRunner` 订阅里维护**有界活动缓冲**（最近 60 条）：`tool_execution_start` → `{kind:"tool", name, target}`（复用 `describeToolCall`）；`message_end` → 助手文本长度/最终报告标记；maxTurns 等通知 → `{kind:"notice"}`。若 tether-agent-core 提供 `tool_execution_end` 则记录失败标记，否则降级只记 start；
+   - `DelegationRunner` 订阅里维护**有界活动缓冲**（最近 60 条）：`tool_execution_start` → `{kind:"tool", name, target}`（复用 `describeToolCall`）；`message_end` → 助手文本长度/最终报告标记；maxTurns 等通知 → `{kind:"notice"}`。若运行时提供 `tool_execution_end` 则记录失败标记，否则降级只记 start；
    - 缓冲随 `details.tasks[].recent` 下发（复用 `scheduleDelivery` 节流）。
 5. **渲染层：`src/renderer/ui.tsx` / `App.tsx` / `styles.css`**
    - 点击任务行打开**右侧抽屉**（App 级 overlay，复用 `.panel` 对话框样式）：

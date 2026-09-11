@@ -1,4 +1,4 @@
-const LATEST_RELEASE_API = "https://api.github.com/repos/tt-11-dd/tether-ai/releases/latest";
+const LATEST_RELEASE_API = "https://api.github.com/repos/tingyuxuan123/TAcode/releases/latest";
 /** 更新检查是后台尽力而为的操作，网络挂起时不能拖住调用方。 */
 const UPDATE_CHECK_TIMEOUT_MS = 10_000;
 

@@ -13,6 +13,8 @@ export interface StreamTextAnimatorOptions {
   now?: () => number;
   paused?: boolean;
   reducedMotion?: boolean;
+  /** 覆盖落字间隔推导（测试注入用），默认 `streamEmitInterval`。 */
+  emitInterval?(chars: number): number;
 }
 
 export interface StreamTextAnimator {
@@ -30,10 +32,27 @@ export function nextStreamText(displayed: string, target: string, elapsed: numbe
 }
 
 /**
+ * 落字最短间隔（毫秒）：文本越长，单次 Markdown 解析越贵（整段重解析 + 整棵子树
+ * diff + 样式布局），而流式期间目标文本每帧都在变，逐帧落字就等于逐帧重解析。
+ * 按长度分档限制落字频率，把解析次数从 60Hz 降到与文本长度相称的量级；
+ * 短文本单次解析很便宜，保持逐帧，不做任何节流。
+ */
+export function streamEmitInterval(chars: number): number {
+  if (chars <= 1200) return 0;
+  if (chars <= 3000) return 24;
+  if (chars <= 8000) return 48;
+  if (chars <= 20000) return 80;
+  return 120;
+}
+
+/**
  * Keep one animation loop per streamed text block. Incoming snapshots only
  * replace `target`; they never cancel and recreate the RAF that is already
  * advancing `current`. This prevents a high-frequency stream from constantly
  * resetting its animation clock and gives the renderer one stable cadence.
+ *
+ * 落字按 `emitInterval` 限频：帧循环仍在跑，但冷却帧不做分词、不落字，
+ * 因而不会引发 React 渲染与 Markdown 重解析。
  */
 export function createStreamTextAnimator(options: StreamTextAnimatorOptions): StreamTextAnimator {
   let current = options.initial;
@@ -45,14 +64,17 @@ export function createStreamTextAnimator(options: StreamTextAnimatorOptions): St
   let queuedAt: number | undefined;
   let disposed = false;
   const now = options.now ?? (() => performance.now());
+  const emitInterval = options.emitInterval ?? streamEmitInterval;
+  let lastEmitAt = 0;
 
   const cancel = () => {
     if (frame !== undefined) options.cancelFrame(frame);
     frame = undefined;
   };
 
-  const emit = (value: StreamTextValue) => {
+  const emit = (value: StreamTextValue, at = now()) => {
     current = value;
+    lastEmitAt = at;
     options.onChange(value);
   };
 
@@ -78,10 +100,15 @@ export function createStreamTextAnimator(options: StreamTextAnimatorOptions): St
       if (!paused && !reducedMotion && current.identity !== target.identity) syncToTarget();
       return;
     }
+    // 冷却帧：只比一次时间，不做分词、不改状态，因此也不触发 React 渲染。
+    if (timestamp - lastEmitAt < emitInterval(target.text.length)) {
+      frame = options.requestFrame(advance);
+      return;
+    }
     const elapsed = timestamp - (queuedAt ?? timestamp);
     const text = nextStreamText(current.text, target.text, elapsed);
-    if (text !== current.text) emit({ identity: current.identity, text });
-    if (text === target.text) {
+    if (text !== current.text) emit({ identity: current.identity, text }, timestamp);
+    if (current.text === target.text) {
       queuedAt = undefined;
       return;
     }

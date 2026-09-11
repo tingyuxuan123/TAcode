@@ -12,10 +12,10 @@ interface ProviderExtensionApi {
 
 /** Loaded only for desktop-managed services; config and key never enter CLI args or files. */
 export default function desktopProviderExtension(pi: ProviderExtensionApi) {
-  const raw = process.env.TETHER_DESKTOP_PROVIDER_CONFIG;
+  const raw = process.env.TACODE_DESKTOP_PROVIDER_CONFIG;
   if (!raw) return;
   const config = JSON.parse(raw) as ReturnType<typeof serviceRuntimeConfig>;
-  const key = process.env.TETHER_DESKTOP_PROVIDER_KEY || "local-no-key";
+  const key = process.env.TACODE_DESKTOP_PROVIDER_KEY || "local-no-key";
   pi.registerProvider("openai", { ...config, apiKey: "desktop-session-key" });
   // Native auth deliberately ignores any global OpenAI credential. A literal
   // user key must also never be interpreted as a !command or $ENV expression.
@@ -29,6 +29,6 @@ export default function desktopProviderExtension(pi: ProviderExtensionApi) {
     } } });
   });
   // Avoid leaking the credential through unrelated shell tools spawned by the agent.
-  delete process.env.TETHER_DESKTOP_PROVIDER_KEY;
-  delete process.env.TETHER_DESKTOP_PROVIDER_CONFIG;
+  delete process.env.TACODE_DESKTOP_PROVIDER_KEY;
+  delete process.env.TACODE_DESKTOP_PROVIDER_CONFIG;
 }

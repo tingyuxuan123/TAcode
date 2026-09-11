@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer } from "react";
 
-const SIDEBAR_COLLAPSED_KEY = "tether.sidebarCollapsed";
+const SIDEBAR_COLLAPSED_KEY = "tacode.sidebarCollapsed";
 
 interface SidebarLayoutState {
   manualCollapsed: boolean;

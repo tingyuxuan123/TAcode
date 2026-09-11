@@ -1,7 +1,7 @@
 /**
  * 只读读取某个会话（含子代理子会话）的转录。
  *
- * 子代理子会话文件在 `~/.tether/sessions/<delegationId>.jsonl`（见
+ * 子代理子会话文件在 `~/.tacode/sessions/<delegationId>.jsonl`（见
  * `runtime/home.ts` 的 `getTacodeSessionsDir`），**不在项目工作区内**——因此
  * `workspace:read` 的 `resolveInWorkspace` 读不到它，需要这条专用通道。
  * 只允许读会话目录里的 `.jsonl`，不接受任意路径。

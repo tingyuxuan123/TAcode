@@ -8,7 +8,7 @@ import { join } from "node:path";
  * 内置浏览器密码保险库（Password Vault）。
  *
  * 移植自 Snow App（MIT）browserPasswordManager.ts，落盘目录改为
- * ~/.tether/browser-passwords/（对齐 Tether 本地数据约定）。
+ * ~/.tacode/browser-passwords/（对齐 TACode 本地数据约定）。
  *
  * 加密方案（两层结构）：
  * 1. 首次使用生成随机 32 字节 AES-256 主密钥，用 Electron `safeStorage`

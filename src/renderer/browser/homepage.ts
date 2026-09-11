@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { DEFAULT_BROWSER_HOMEPAGE, normalizeBrowserHomepage } from "./url";
 
-const HOMEPAGE_KEY = "tether.browserHomepage";
-const HOMEPAGE_CHANGED_EVENT = "tether:browser-homepage-changed";
+const HOMEPAGE_KEY = "tacode.browserHomepage";
+const HOMEPAGE_CHANGED_EVENT = "tacode:browser-homepage-changed";
 
 // 模块级共享状态：所有浏览器实例共用同一份 homepage 缓存与全局监听，
 // 多个实例不会各自重复读写 localStorage。

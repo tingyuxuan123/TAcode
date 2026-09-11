@@ -509,7 +509,7 @@ describe("conversation events", () => {
               role: "explorer",
               task: "scan repo",
               status: "failed",
-              childSessionPath: "/home/user/.tether/sessions/delegation-bridge-1.jsonl",
+              childSessionPath: "/home/user/.tacode/sessions/delegation-bridge-1.jsonl",
               error: "The delegated worker exited before finishing. [reason=worker_exit; ...]",
               recent: [
                 { at: 1_000, kind: "notice", text: "Launching worker (explorer)." },
@@ -529,7 +529,7 @@ describe("conversation events", () => {
     const task = delegateProgress(messages[0]!.tools[0]!).tasks[0]!;
     // 失败态不再是只有一句占位文案：子会话标识与活动缓冲都必须可达。
     expect(task.status).toBe("failed");
-    expect(task.childSessionPath).toBe("/home/user/.tether/sessions/delegation-bridge-1.jsonl");
+    expect(task.childSessionPath).toBe("/home/user/.tacode/sessions/delegation-bridge-1.jsonl");
     expect(task.recent?.map((entry) => entry.text)).toEqual([
       "Launching worker (explorer).",
       "Prompt accepted; waiting for the worker to settle.",
@@ -1264,15 +1264,15 @@ describe("conversation events", () => {
   });
 
   it("turns a finished http(s) URL into a chip label", () => {
-    expect(isHttpUrl("https://github.com/tt-11-dd/tether-ai")).toBe(true);
-    expect(urlChipLabel("https://github.com/tt-11-dd/tether-ai")).toBe("github.com/tt-11-dd/tether-ai");
+    expect(isHttpUrl("https://github.com/tingyuxuan123/TAcode")).toBe(true);
+    expect(urlChipLabel("https://github.com/tingyuxuan123/TAcode")).toBe("github.com/tingyuxuan123/TAcode");
     const typed = "see https://example.com/a.";
     expect(takeTrailingUrl(typed, typed.length)).toEqual({
       url: "https://example.com/a",
       next: "see ",
     });
-    expect(splitHttpUrls("https://github.com/tt-11-dd/tether-ai 这是什么")).toEqual([
-      { type: "url", value: "https://github.com/tt-11-dd/tether-ai" },
+    expect(splitHttpUrls("https://github.com/tingyuxuan123/TAcode 这是什么")).toEqual([
+      { type: "url", value: "https://github.com/tingyuxuan123/TAcode" },
       { type: "text", value: " 这是什么" },
     ]);
     expect(splitPromptChips("看 @src/App.tsx 和 https://example.com/a")).toEqual([
@@ -1308,10 +1308,10 @@ describe("conversation events", () => {
   it("restores every last-turn checkpoint, keeping the earliest before per file", () => {
     expect(lastTurnRestoreFiles([
       { type: "message", message: { role: "user", content: "先改 html" } },
-      { type: "custom", customType: "tether-checkpoint", data: { id: "old", before: [{ path: "stale.html", content: "no" }] } },
+      { type: "custom", customType: "tacode-checkpoint", data: { id: "old", before: [{ path: "stale.html", content: "no" }] } },
       { type: "message", message: { role: "user", content: "再改 css" } },
-      { type: "custom", customType: "tether-checkpoint", data: { id: "html", before: [{ path: "index.html", content: "<old>" }] } },
-      { type: "custom", customType: "tether-checkpoint", data: { id: "css", before: [{ path: "style.css", content: "body{}" }, { path: "index.html", content: "<mid>" }] } },
+      { type: "custom", customType: "tacode-checkpoint", data: { id: "html", before: [{ path: "index.html", content: "<old>" }] } },
+      { type: "custom", customType: "tacode-checkpoint", data: { id: "css", before: [{ path: "style.css", content: "body{}" }, { path: "index.html", content: "<mid>" }] } },
     ])).toEqual([
       { path: "index.html", content: "<old>" },
       { path: "style.css", content: "body{}" },
@@ -1321,17 +1321,17 @@ describe("conversation events", () => {
   it("skips undone checkpoints and does not treat /undo as a new turn", () => {
     expect(lastTurnRestoreFiles([
       { type: "message", message: { role: "user", content: "改" } },
-      { type: "custom", customType: "tether-checkpoint", data: { id: "c1", before: [{ path: "a.css", content: "x" }] } },
-      { type: "custom", customType: "tether-checkpoint-undone", data: { checkpointId: "c1" } },
+      { type: "custom", customType: "tacode-checkpoint", data: { id: "c1", before: [{ path: "a.css", content: "x" }] } },
+      { type: "custom", customType: "tacode-checkpoint-undone", data: { checkpointId: "c1" } },
       { type: "message", message: { role: "user", content: [{ type: "text", text: "/undo" }] } },
     ])).toEqual([]);
   });
 
   it("only treats a new checkpoint-undone entry as a successful undo", () => {
-    const before = [{ id: "a", type: "message" }, { id: "b", type: "custom", customType: "tether-checkpoint" }];
+    const before = [{ id: "a", type: "message" }, { id: "b", type: "custom", customType: "tacode-checkpoint" }];
     expect(hasNewCheckpointUndo(before, before)).toBe(false);
-    expect(hasNewCheckpointUndo(before, [...before, { id: "c", type: "custom", customType: "tether-checkpoint-undone" }])).toBe(true);
-    expect(hasNewCheckpointUndo(before, [...before, { id: "c", type: "custom", customType: "tether-checkpoint" }])).toBe(false);
+    expect(hasNewCheckpointUndo(before, [...before, { id: "c", type: "custom", customType: "tacode-checkpoint-undone" }])).toBe(true);
+    expect(hasNewCheckpointUndo(before, [...before, { id: "c", type: "custom", customType: "tacode-checkpoint" }])).toBe(false);
   });
 
   it("rewrites undo confirm titles to the last user turn", () => {
@@ -1396,7 +1396,7 @@ describe("conversation events", () => {
   });
 
   it("reads the folder name from both posix and windows paths", () => {
-    expect(baseName("/Users/code/tether-ai")).toBe("tether-ai");
+    expect(baseName("/Users/code/TAcode")).toBe("TAcode");
     expect(baseName("D:\\code\\agnes-images")).toBe("agnes-images");
     expect(baseName("D:\\code\\agnes-images\\")).toBe("agnes-images");
     expect(baseName("src/renderer/ui.tsx")).toBe("ui.tsx");
@@ -1418,8 +1418,8 @@ describe("upsertSessionSummary", () => {
   });
 
   it("prepends a placeholder row for a just-started thread", () => {
-    const seed = { path: "/repo/.tether/2026-09-08T08-00-00Z_abc.jsonl", cwd: "/repo", title: "当前项目你觉得现在最该优化的是什么" };
-    const next = upsertSessionSummary([existing("old", "/repo/.tether/old.jsonl")], seed, 1_752_000_000_000);
+    const seed = { path: "/repo/.tacode/2026-09-08T08-00-00Z_abc.jsonl", cwd: "/repo", title: "当前项目你觉得现在最该优化的是什么" };
+    const next = upsertSessionSummary([existing("old", "/repo/.tacode/old.jsonl")], seed, 1_752_000_000_000);
     expect(next).toHaveLength(2);
     expect(next[0]?.id).toBe("2026-09-08T08-00-00Z_abc");
     expect(next[0]?.path).toBe(seed.path);
@@ -1431,7 +1431,7 @@ describe("upsertSessionSummary", () => {
   });
 
   it("replaces an existing row that already carries the same thread path", () => {
-    const path = "/repo/.tether/2026-09-08T08-00-00Z_abc.jsonl";
+    const path = "/repo/.tacode/2026-09-08T08-00-00Z_abc.jsonl";
     const dup = existing("2026-09-08T08-00-00Z_abc", path);
     const next = upsertSessionSummary([dup], { path, cwd: "/repo", title: "new title" }, 1_752_000_000_000);
     expect(next).toHaveLength(1);
@@ -1440,15 +1440,15 @@ describe("upsertSessionSummary", () => {
   });
 
   it("keeps the other rows in order", () => {
-    const a = existing("a", "/repo/.tether/a.jsonl");
-    const b = existing("b", "/repo/.tether/b.jsonl");
-    const next = upsertSessionSummary([a, b], { path: "/repo/.tether/c.jsonl", cwd: "/repo", title: "c" });
+    const a = existing("a", "/repo/.tacode/a.jsonl");
+    const b = existing("b", "/repo/.tacode/b.jsonl");
+    const next = upsertSessionSummary([a, b], { path: "/repo/.tacode/c.jsonl", cwd: "/repo", title: "c" });
     expect(next.map((item) => item.id)).toEqual(["c", "a", "b"]);
   });
 
   it("crops a long title to keep the row compact", () => {
     const longTitle = "x".repeat(200);
-    const [row] = upsertSessionSummary([], { path: "/repo/.tether/a.jsonl", cwd: "/repo", title: longTitle });
+    const [row] = upsertSessionSummary([], { path: "/repo/.tacode/a.jsonl", cwd: "/repo", title: longTitle });
     expect(row?.title.length).toBeLessThanOrEqual(96);
   });
 

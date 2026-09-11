@@ -8,10 +8,10 @@
 
 Let DeepSeek and OpenAI-compatible models inspect, edit, and verify your repositories with explicit safety boundaries.
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Download latest](https://github.com/tt-11-dd/tether-ai/releases/latest)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Download latest](https://github.com/tingyuxuan123/TAcode/releases/latest)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%20arm64%20%7C%20Windows%20x64-lightgrey)](https://github.com/tt-11-dd/tether-ai/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%20arm64%20%7C%20Windows%20x64-lightgrey)](https://github.com/tingyuxuan123/TAcode/releases/latest)
 
 </div>on desktop agent for real codebases. It brings model calls, workspace tools, terminal commands, permission prompts, session history, and diff review into one local workbench. The UI and session data stay on your machine; model requests go directly to the provider or local gateway you configure, without a TACode relay.
 
@@ -21,7 +21,7 @@ Let DeepSeek and OpenAI-compatible models inspect, edit, and verify your reposit
 - **Visible and controllable** — inspect tool calls, command output, file changes, and context usage as work happens.
 - **Permission boundaries** — Plan, Ask, Workspace, and Full Access modes.
 - **Recoverable edits** — patch checkpoints let `/undo` restore the previous turn's file changes.
-- **Local-first state** — settings, credentials, and sessions live under `~/.tether`; no telemetry or TACode-hosted model proxy.
+- **Local-first state** — settings, credentials, and sessions live under `~/.tacode`; no telemetry or TACode-hosted model proxy. A pre-rename data directory is copied over once on first launch and kept as a fallback.
 - **Desktop workflow** — project threads, `@` file mentions, steer-while-generating, image input, themes (white / paper / dark), diff previews, and Chinese/English UI.
 
 ## What TACode uses from Pi
@@ -41,7 +41,7 @@ TACode adds:
 - Four permission modes, macOS Seatbelt, and an experimental Windows sandbox helper (install + enable)
 - Workspace-scoped tools, managed commands, file patches, and durable checkpoints
 - MCP, Hooks, Skills, planning, and subagent integration
-- The `~/.tether` local data conventions and Electron/React desktop workbench
+- The `~/.tacode` local data conventions and Electron/React desktop workbench
 
 Pi provides the runtime foundations; TACode defines the product boundary, safety policy, and desktop experience. We are grateful to the Pi maintainers for the open-source foundation.
 
@@ -115,7 +115,7 @@ Skills are loaded by the Pi runtime (TACode does not ship a separate loader). St
 | Scope | Path |
 | --- | --- |
 | Project (trusted) | `.agents/skills/<name>/SKILL.md`, `.pi/skills/<name>/SKILL.md` |
-| User-global | `~/.tether/skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md` |
+| User-global | `~/.tacode/skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md` |
 
 Each skill is a directory with a `SKILL.md` file. Frontmatter must include `name` and `description` (Pi validates; invalid skills are skipped).
 
@@ -125,7 +125,7 @@ Each skill is a directory with a `SKILL.md` file. Frontmatter must include `name
 
 ## Use TACode
 
-Download from [GitHub Releases](https://github.com/tt-11-dd/tether-ai/releases/latest):
+Download from [GitHub Releases](https://github.com/tingyuxuan123/TAcode/releases/latest):
 
 - macOS: Apple Silicon / arm64
 - Windows: Windows 10/11 x64
@@ -151,8 +151,8 @@ xattr -cr /Applications/TACode.app
 Requires Node.js `>=22.19` and pnpm.
 
 ```bash
-git clone https://github.com/tt-11-dd/tether-ai.git
-cd tether-ai
+git clone https://github.com/tingyuxuan123/TAcode.git
+cd TAcode
 pnpm install
 pnpm dev
 ```
@@ -178,7 +178,7 @@ TACode's agent runtime is built on the open-source [Pi ecosystem](https://github
 
 TACode runs no telemetry or model relay service. Sessions, settings, and credentials stay local. To perform a task, prompts, relevant code context, and images are still sent to the model, gateway, or OCR service you choose. Review third-party privacy policies; sensitive projects can use a compatible local endpoint.
 
-Diagnostics stay on this machine too: `~/.tether/logs/tether.log` records startup failures, worker exits, request timeouts, renderer crashes and config recovery, with a size cap and rotation. Known credentials are redacted before writing, and prompt text and full file contents are never logged.
+Diagnostics stay on this machine too: `~/.tacode/logs/tacode.log` records startup failures, worker exits, request timeouts, renderer crashes and config recovery, with a size cap and rotation. Known credentials are redacted before writing, and prompt text and full file contents are never logged.
 
 ## License
 

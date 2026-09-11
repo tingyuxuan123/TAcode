@@ -19,14 +19,14 @@ app.on("window-all-closed", () => {});
 let failed = false;
 let lastTool = "startup";
 const root = process.cwd();
-const profile = await mkdtemp(path.join(tmpdir(), "tether-browser-smoke-"));
+const profile = await mkdtemp(path.join(tmpdir(), "tacode-browser-smoke-"));
 app.setPath("userData", profile);
 const preload = path.join(profile, "preload.cjs");
-await writeFile(preload, `require(${JSON.stringify(path.join(root, "dist-electron/preload/index.cjs"))});\nconst { ipcRenderer } = require('electron');\ntry { localStorage.setItem('tether.browserHomepage', JSON.stringify('about:blank')); } catch {}\nipcRenderer.on('browser:agent-presentation', (_event, value) => { if (value.action === 'open') ipcRenderer.send('smoke:open', value); });`);
+await writeFile(preload, `require(${JSON.stringify(path.join(root, "dist-electron/preload/index.cjs"))});\nconst { ipcRenderer } = require('electron');\ntry { localStorage.setItem('tacode.browserHomepage', JSON.stringify('about:blank')); } catch {}\nipcRenderer.on('browser:agent-presentation', (_event, value) => { if (value.action === 'open') ipcRenderer.send('smoke:open', value); });`);
 const windows: BrowserWindow[] = [];
 let main: BrowserWindow;
 // 本地预览夹具：一个临时工作区，验证不启动静态服务器也能在面板里看到页面。
-const previewRoot = await mkdtemp(path.join(tmpdir(), "tether-browser-preview-"));
+const previewRoot = await mkdtemp(path.join(tmpdir(), "tacode-browser-preview-"));
 await mkdir(path.join(previewRoot, "demo"), { recursive: true });
 const previewPage = (heading: string): string => `<!doctype html><meta charset="utf-8"><title>预览页面</title>
 <h1 id="heading">${heading}</h1><p id="asset">资源未加载</p><script src="./app.js"></script>`;

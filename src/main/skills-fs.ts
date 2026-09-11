@@ -5,7 +5,7 @@ import { shell } from "electron";
 
 const SKILL_ROOTS = [
   ".agents/skills",
-  ".tether/skills",
+  ".tacode/skills",
   ".cursor/skills",
   ".cursor/skills-cursor",
 ] as const;

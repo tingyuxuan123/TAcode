@@ -4,6 +4,8 @@
 再汇总「子代理使用过程中出现的问题 + 优化建议」。第一轮报告见
 `docs/subagent-analysis-2026-09-10.md`。
 
+> 成稿于 2026-09-10。文中日志与数据目录路径已按改名后的现状（`~/.tacode`）更新；当时的路径为 `~/.tether`。
+
 ## 1. 测试方法
 
 | 项 | 值 |
@@ -18,7 +20,7 @@
 
 ### 2.1 委派本身：成功（第一轮的回传缺陷已修复）
 
-数据来自 `~/.tether/logs/tether.log` 的 `scope=delegation` 记录：
+数据来自 `~/.tacode/logs/tacode.log` 的 `scope=delegation` 记录：
 
 | delegationId | role | status | elapsedMs | turns | toolCalls | reportChars |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -46,7 +48,7 @@
 
 环境说明：本次父代理运行在 TACode 沙箱（macOS Seatbelt，workspace-write）内，vitest 收尾阶段
 报 `Unhandled Rejection: kill EPERM`（沙箱禁止终止子进程），且 `/tmp` 写入被拒。
-`agent-subagents.test.ts` 需要 spawn 真实 RPC worker 并写 `TETHER_HOME`，其红灯**根因待非沙箱环境复跑确认**；
+`agent-subagents.test.ts` 需要 spawn 真实 RPC worker 并写 `TACODE_HOME`，其红灯**根因待非沙箱环境复跑确认**；
 但第一轮报告（在相同断言上）也观察到同样的红灯，两轮独立观察一致，回归基线仍未建立。
 
 ## 3. 本次暴露的问题

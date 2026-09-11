@@ -75,10 +75,10 @@ export async function verifyAdaptivePanelWidth(win: BrowserWindow): Promise<Buff
       available: body.clientWidth, panel: panel.getBoundingClientRect().width,
       chat: document.querySelector('.chat-main').getBoundingClientRect().width,
       bodyX: body.getBoundingClientRect().x, dividerX: divider.x + divider.width / 2,
-      dividerY: divider.y + 120, stored: Number(localStorage.getItem('tether.inspectWidth')),
+      dividerY: divider.y + 120, stored: Number(localStorage.getItem('tacode.inspectWidth')),
       sidebar: document.querySelector('.sidebar').getBoundingClientRect().width,
       collapsed: document.querySelector('.sidebar').classList.contains('is-collapsed'),
-      manualCollapsed: localStorage.getItem('tether.sidebarCollapsed'),
+      manualCollapsed: localStorage.getItem('tacode.sidebarCollapsed'),
       resizing: document.documentElement.classList.contains('is-resizing-panel'),
       guest: document.querySelector('webview')?.getWebContentsId()
     };

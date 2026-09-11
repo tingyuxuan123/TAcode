@@ -11,7 +11,7 @@ export async function verifySidebar(win: BrowserWindow): Promise<Buffer> {
       width: sidebar.getBoundingClientRect().width,
       available: document.querySelector('.chat-body').clientWidth,
       panel: document.querySelector('.inspect-shell').getBoundingClientRect().width,
-      stored: localStorage.getItem('tether.sidebarCollapsed'),
+      stored: localStorage.getItem('tacode.sidebarCollapsed'),
       projectsVisible: getComputedStyle(document.querySelector('.thread-list')).display !== 'none',
       guest: document.querySelector('webview')?.getWebContentsId(),
       resizing: document.documentElement.classList.contains('is-resizing-panel'),

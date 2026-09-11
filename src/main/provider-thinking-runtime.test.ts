@@ -22,7 +22,7 @@ function reply(model: string): string {
 afterEach(() => vi.unstubAllEnvs());
 
 it("keeps configured Anthropic reasoning tiers consistent through model switches and actual requests", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tether-thinking-runtime-"));
+  const dir = await mkdtemp(join(tmpdir(), "tacode-thinking-runtime-"));
   const requests: Array<Record<string, unknown>> = [];
   const events: AgentEvent[] = [];
   const errors: string[] = [];
@@ -39,7 +39,7 @@ it("keeps configured Anthropic reasoning tiers consistent through model switches
     await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
     const { port } = server.address() as { port: number };
     await writeFile(join(dir, "settings.json"), JSON.stringify({ credentialStore: "file" }));
-    vi.stubEnv("TETHER_HOME", dir);
+    vi.stubEnv("TACODE_HOME", dir);
     vi.stubEnv("OPENAI_API_KEY", undefined);
     const screenshotModel = "deepseek-v4-flash-vision-exp";
     const configured = ["low", "medium", "high", "max"];

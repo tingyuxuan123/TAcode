@@ -58,7 +58,7 @@ TACode Runtime（src/runtime，RPC worker 进程）
 │   ├── ensure-electron.mjs    # postinstall：补齐 Electron 二进制、写 path.txt、改 Info.plist 名称
 │   └── make-icon.py           # 图标生成脚本
 ├── build/                     # 图标资源（icon.png / icon-win.png / icon.svg）
-├── .agents/skills/            # 项目内置技能（init-long-run / continue-long-run / plan-then-act / tether-ui）
+├── .agents/skills/            # 项目内置技能（init-long-run / continue-long-run / plan-then-act / tacode-ui）
 ├── .github/workflows/release.yml
 └── src/
     ├── main/                  # Electron 主进程
@@ -304,14 +304,14 @@ agent 事件通过 `agent:event` 推送，`App.tsx` 里先做副作用处理（`
 - **设置**：`Login`（多 pane：chat / vision / skills / shortcuts / about）。
 - **通用**：`Icon`（内联 SVG path）/ `CopyButton` / `ApprovalCard` / `PermissionPicker` / `EffortPicker` / `Combo`（组合输入框）/ `ContextStats`。
 
-样式全部在 `styles.css`（手写 CSS，无 UI 框架）。改 UI 气质前先读 `.agents/skills/tether-ui/SKILL.md` 与 `tokens.md`（界面气质规范）。
+样式全部在 `styles.css`（手写 CSS，无 UI 框架）。改 UI 气质前先读 `.agents/skills/tacode-ui/SKILL.md` 与 `tokens.md`（界面气质规范）。
 
 ### 6.6 国际化
 
 - 文案集中在 `src/shared/i18n.ts`：`zh` / `en` 两个扁平 key 表，`t(locale, key, vars)` 做 `{var}` 插值。
 - `i18n.tsx` 提供 `LocaleProvider` / `useI18n()`，首次从 `app:get-locale` 加载，切换时同步 `setConversationLocale`（让 conversation.ts 的纯函数文案也跟随语言）。
 - 渲染进程内不直接写死用户可见文案；新增文案必须同时加 `zh` 与 `en` 两个 key。
-- 语言解析：`resolveLocale` 优先存储值（`~/.tether/settings.json` 的 `locale`），否则跟随系统语言列表；默认 `zh`。
+- 语言解析：`resolveLocale` 优先存储值（`~/.tacode/settings.json` 的 `locale`），否则跟随系统语言列表；默认 `zh`。
 
 ## 7. 会话、恢复与编辑安全
 
@@ -323,9 +323,9 @@ agent 事件通过 `agent:event` 推送，`App.tsx` 里先做副作用处理（`
 
 ### 7.2 /undo 与 checkpoint
 
-运行时在 `apply_patch` / `exec_command` 成功后落 `tether-checkpoint` 条目（含每个文件的 `before` 内容）。`/undo` 流程：
+运行时在 `apply_patch` / `exec_command` 成功后落 `tacode-checkpoint` 条目（含每个文件的 `before` 内容）。`/undo` 流程：
 
-1. `get_entries` 拉会话条目，`lastTurnRestoreFiles` 解析**最后一个真实用户轮之后**、未被 `tether-checkpoint-undone` 撤销过的最新 checkpoint 的 before 文件集。
+1. `get_entries` 拉会话条目，`lastTurnRestoreFiles` 解析**最后一个真实用户轮之后**、未被 `tacode-checkpoint-undone` 撤销过的最新 checkpoint 的 before 文件集。
 2. 弹 `ApprovalCard` 确认（`harness:undo` 特殊 id）。
 3. 确认后 `workspace:restore(files)` 写回文件（`content: null` 表示删除），并 `dropLastTurn` 移除 UI 上该轮消息。
 
@@ -369,7 +369,7 @@ agent 事件通过 `agent:event` 推送，`App.tsx` 里先做副作用处理（`
 - **MinerU OCR**：免费 OCR，异步上传 + 轮询（45s 超时），失败静默降级。
 - 工具在**本回合用户粘贴了图片**或消息含图片 handoff 时才启用（`before_agent_start` 里粘性决定，会话内不中途摘除，避免模型回退到 shell OCR 花招）。
 - 系统提示注入两条工程约定：`NO_CAPTURE`（除非用户本轮明确要截图，否则不用 Chrome/headless 截图验收）与语言旁白规则（按可见用户文本是否含 CJK 选择中/英文）。
-- 扩展 API 来自 agent-core 的 `ExtensionAPI`：`registerTool` / `getActiveTools` / `setActiveTools` / `on`。
+- 扩展 API 来自 Pi 的 `ExtensionAPI`：`registerTool` / `getActiveTools` / `setActiveTools` / `on`。
 
 shared 层 `vision-api.ts` 提供纯函数：请求构造、响应解析、结果合并（GLM + OCR 分段）、`visionHandoffPaths` / `visibleUserText`（从 handoff 消息还原用户原文与图片路径）。图片粘贴后 base64 经 `vision:stage` 落盘到 `userData/uploads`（限制 4 张），会话文件里只存暂存路径。
 
@@ -377,20 +377,20 @@ shared 层 `vision-api.ts` 提供纯函数：请求构造、响应解析、结�
 
 | 位置                                                                        | 内容                                                                                                                                   |
 | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `appData/Tether`（userData，旧的 `appData/DSHarness` 首次启动自动改名迁移） | `recent-workspaces.json`（最近工作区）、`vision-config.json`、`chat-profiles.json`、`uploads/`（暂存图片）、`tasks/`（无项目时的 cwd） |
-| `~/.tether`（getTacodeHome，src/runtime 管理）                        | `settings.json`（locale / 默认 provider+model）、会话索引与线程存储、凭据（`TETHER_CREDENTIALS_STORE=file` 时落文件而非系统钥匙串）    |
+| `appData/TACode`（userData，旧的 `appData/Tether` / `appData/DSHarness` 首次启动自动改名迁移） | `recent-workspaces.json`（最近工作区）、`vision-config.json`、`chat-profiles.json`、`uploads/`（暂存图片）、`tasks/`（无项目时的 cwd） |
+| `~/.tacode`（getTacodeHome，src/runtime 管理；首次启动从改名前的 `~/.tether` 整目录拷贝一次，旧目录保留） | `settings.json`（locale / 默认 provider+model）、会话索引与线程存储、凭据（`TACODE_CREDENTIALS_STORE=file` 时落文件而非系统钥匙串）    |
 | 项目内 `.agents/`                                                           | `features.json`（跨会话任务清单）、`progress.md`（进度）——由技能约定维护                                                               |
 
-环境变量约定：`TETHER_CREDENTIALS_STORE=file`（分发版避免钥匙串弹窗）；`PI_TELEMETRY=0`；`PI_SKIP_VERSION_CHECK=1`；`HARNESS_EXTRA_MODELS` / `HARNESS_VISION_CONFIG` / `HARNESS_VISION_UPLOADS` 传给 agent 子进程。
+环境变量约定：`TACODE_CREDENTIALS_STORE=file`（分发版避免钥匙串弹窗）；`PI_TELEMETRY=0`；`PI_SKIP_VERSION_CHECK=1`；`HARNESS_EXTRA_MODELS` / `HARNESS_VISION_CONFIG` / `HARNESS_VISION_UPLOADS` 传给 agent 子进程。
 
 ## 11. 技能（Skills）系统
 
 技能由 Pi 运行时加载（TACode 不另写 loader），本仓库只做 UI 与文件系统辅助：
 
-- **扫描**：`src/main/skills-fs.ts` 扫用户级（`~/.tether/skills`、`~/.agents/skills`）与项目级（`.agents/skills`、`.pi/skills`，需信任项目）；`app:list-skills` 供设置页展示。
+- **扫描**：`src/main/skills-fs.ts` 扫用户级（`~/.tacode/skills`、`~/.agents/skills`）与项目级（`.agents/skills`、`.pi/skills`，需信任项目）；`app:list-skills` 供设置页展示。
 - **运行时命令**：agent 侧 `get_commands` 返回 `source === "skill"` 的命令，`src/shared/skills.ts` 的 `parseSkillCommands` 解析出 `AgentSkillCommand[]`（name / description / path），供 `/` 补全与设置页。
 - **输入归一**：`skillUserDisplay` 把 `/skill:xxx` 或展开的 `<skill>` 块折叠成统一命令；`sameUserSkillTurn` 用于消息去重。
-- **项目内技能**：`.agents/skills/` 下有 `init-long-run` / `continue-long-run` / `plan-then-act` / `tether-ui`（界面气质）。技能文件必须含 frontmatter `name` + `description`，缺项不加载。
+- **项目内技能**：`.agents/skills/` 下有 `init-long-run` / `continue-long-run` / `plan-then-act` / `tacode-ui`（界面气质）。技能文件必须含 frontmatter `name` + `description`，缺项不加载。
 - 技能目录文件会被 `listWorkspaceFiles` 的 `addSkillManifests` 额外收录进工作区文件树，`@` 选择器可引用。
 
 ## 12. 构建与打包
@@ -444,19 +444,19 @@ postinstall / predev 执行：检查 Electron 发行二进制是否完整，缺�
 ### 14.3 加一个 UI 组件 / 改界面气质
 
 - 组件放 `src/renderer/ui.tsx`（或拆到新文件），样式进 `styles.css`。
-- 先读 `.agents/skills/tether-ui/SKILL.md` 与 `tokens.md`，保持配色、圆角、间距令牌一致。
+- 先读 `.agents/skills/tacode-ui/SKILL.md` 与 `tokens.md`，保持配色、圆角、间距令牌一致。
 - 视觉验收：按仓库约定**不要用 Chrome/headless/截图**做验收（除非用户本轮明确要求截图），写完 HTML/CSS 即可。
 
 ### 14.4 加一个 agent 工具或 RPC 命令
 
-1. 命令：加入 `ALLOWED_AGENT_COMMANDS` 白名单；`agent:command` 入参透传给 agent-core。
+1. 命令：加入 `ALLOWED_AGENT_COMMANDS` 白名单；`agent:command` 入参透传给 agent 进程。
 2. 事件：工具的执行事件由 `conversation.ts` 的 `toolFromEvent` / `upsertLastAssistantTool` 归并，若有新工具类型需在 `toolTitle` / `traceRows` / `liveStatus` 增加标题与图标分支。
 3. 若新工具产出文件变更，确保 `collectFileChanges` 能解析（patch 参数 / details.files / output 正则）。
 4. 长请求记得加入 `LONG_RUNNING_REQUESTS` 超时集合。
 
 ### 14.5 修改会话持久化格式
 
-先看 Pi 的会话条目类型（`SessionEntryLike`：`message` / `custom` 条目）；`conversation.ts` 的解析函数与 `lastTurnRestoreFiles` 依赖 `tether-checkpoint` / `tether-checkpoint-undone` 的 customType 约定，改动需同步。
+先看 Pi 的会话条目类型（`SessionEntryLike`：`message` / `custom` 条目）；`conversation.ts` 的解析函数与 `lastTurnRestoreFiles` 依赖 `tacode-checkpoint` / `tacode-checkpoint-undone` 的 customType 约定，改动需同步。
 
 ## 15. 工程约定（AGENTS.md 摘要）
 
@@ -474,8 +474,8 @@ postinstall / predev 执行：检查 Electron 发行二进制是否完整，缺�
 | agent 卡住无响应      | 查看 `AgentHost` 的请求超时（普通 45s / 长请求 30min）；子进程 stderr 会拼进错误消息             |
 | 测试报 kill EPERM     | 沙箱环境限制 tinypool 清理子进程；用 `vitest run --pool=threads`                                 |
 | skills 不加载         | frontmatter 缺 `name`/`description`；项目技能需先信任项目；路径要在标准 skill 根                 |
-| /undo 无效果          | 该轮没有写入类工具；或 checkpoint 已被撤销；`get_entries` 里应有 `tether-checkpoint` 条目        |
-| 打开旧版本会话数据    | 首次启动会尝试把 `DSHarness` 改名迁移到 `Tether`；迁移不可用时旧目录仅老版本可用                 |
+| /undo 无效果          | 该轮没有写入类工具；或 checkpoint 已被撤销；`get_entries` 里应有 `tacode-checkpoint` 条目        |
+| 打开旧版本会话数据    | 首次启动会把 `Tether` / `DSHarness` 改名迁移到 `TACode`；迁移不可用时旧目录仅老版本可用        |
 
 ---
 

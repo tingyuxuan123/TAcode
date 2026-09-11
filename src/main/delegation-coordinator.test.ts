@@ -239,7 +239,7 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 8_000): Promise<voi
 };
 
 beforeEach(() => {
-  vi.stubEnv("TETHER_HOME", "");
+  vi.stubEnv("TACODE_HOME", "");
 });
 
 afterEach(() => {

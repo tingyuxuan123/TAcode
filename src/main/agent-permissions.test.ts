@@ -24,9 +24,9 @@ describe("permission mode commands", () => {
       (error) => errors.push(error),
     );
     try {
-      // 隔离凭据与数据目录，避免读写真实 ~/.tether。
+      // 隔离凭据与数据目录，避免读写真实 ~/.tacode。
       await writeFile(join(dir, "settings.json"), JSON.stringify({ credentialStore: "file" }));
-      vi.stubEnv("TETHER_HOME", dir);
+      vi.stubEnv("TACODE_HOME", dir);
       vi.stubEnv("OPENAI_API_KEY", "sk-test-dummy");
       await host.start({ cwd: dir, provider: "openai", permission: "auto", sandbox: "read-only" });
       // 斜杠命令在 preflight 阶段执行：请求返回即代表命令处理器已跑完。

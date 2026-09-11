@@ -98,6 +98,9 @@ export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockPro
 
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastUpdateRef = useRef(Date.now());
+  // 延迟到期的补算要拿「最新一行」，不能拿调度那次渲染捕获的旧文本（否则流式末尾会停在旧高亮）。
+  const latestRef = useRef({ text: trimmed, lang: langOrText });
+  latestRef.current = { text: trimmed, lang: langOrText };
 
   // 高亮器未就绪（tokenResult 为 null）：订阅就绪事件，首次出 token。
   // 未就绪期间 ShikiLines 收到空 token，按纯文本渲染，颜色继承 --code-screen-ink。
@@ -108,22 +111,25 @@ export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockPro
   }, [tokenResult, trimmed, langOrText]);
 
   // 节流刷新：流式输出时重算 token。
+  // 注意：先判节流再分词——整段代码的 token 化与代码长度成正比，流式期间每帧都算一遍
+  // 就等于每帧跑一次高亮器（WASM oniguruma），而节流只限制了 setState。
   useEffect(() => {
     const now = Date.now();
-    const sync = highlightToTokens(trimmed, langOrText, CODE_APP_THEME);
-    if (!sync) return;
     const elapsed = now - lastUpdateRef.current;
     if (elapsed >= THROTTLE_MS) {
       lastUpdateRef.current = now;
-      setTokenResult(sync);
-    } else if (!timeoutRef.current) {
-      timeoutRef.current = setTimeout(() => {
-        timeoutRef.current = null;
-        lastUpdateRef.current = Date.now();
-        const latest = highlightToTokens(trimmed, langOrText, CODE_APP_THEME);
-        if (latest) setTokenResult(latest);
-      }, THROTTLE_MS - elapsed);
+      const sync = highlightToTokens(trimmed, langOrText, CODE_APP_THEME);
+      if (sync) setTokenResult(sync);
+      return;
     }
+    if (timeoutRef.current) return;
+    timeoutRef.current = setTimeout(() => {
+      timeoutRef.current = null;
+      lastUpdateRef.current = Date.now();
+      const latest = latestRef.current;
+      const tokens = highlightToTokens(latest.text, latest.lang, CODE_APP_THEME);
+      if (tokens) setTokenResult(tokens);
+    }, THROTTLE_MS - elapsed);
   }, [trimmed, langOrText]);
 
   useEffect(() => () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); }, []);

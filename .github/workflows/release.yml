@@ -37,7 +37,7 @@ jobs:
         shell: bash
 
     steps:
-      - name: Check out tether-ai
+      - name: Check out TAcode
         uses: actions/checkout@v4
 
       - name: Set up pnpm
@@ -96,4 +96,4 @@ jobs:
             - If macOS says the app can't be opened, right-click → Open, or run:
               `xattr -cr /Applications/TACode.app`
 
-            Feedback: https://github.com/tt-11-dd/tether-ai/issues
+            Feedback: https://github.com/tingyuxuan123/TAcode/issues

@@ -1,7 +1,7 @@
 export const THEMES = ["white", "paper", "green", "blue", "dark"] as const;
 export type ThemeId = (typeof THEMES)[number];
 export const DEFAULT_THEME: ThemeId = "paper";
-export const THEME_STORAGE_KEY = "tether.theme";
+export const THEME_STORAGE_KEY = "tacode.theme";
 
 export function parseTheme(value: unknown): ThemeId {
   return THEMES.includes(value as ThemeId) ? (value as ThemeId) : DEFAULT_THEME;

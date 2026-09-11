@@ -8,8 +8,8 @@ export interface BrowserRegistration { tabId: string; instanceId: string; webCon
 export type BrowserPresentation =
   | { action: "open"; instanceId: string; url: string }
   | { action: "select" | "close"; instanceId: string; tabId: string; requestId?: string };
-export interface BrowserRequest { type: "tether:browser:request"; id: string; tool: string; params: BrowserParams }
-export interface BrowserResponse { type: "tether:browser:response"; id: string; result?: BrowserToolResult; error?: string }
+export interface BrowserRequest { type: "tacode:browser:request"; id: string; tool: string; params: BrowserParams }
+export interface BrowserResponse { type: "tacode:browser:response"; id: string; result?: BrowserToolResult; error?: string }
 
 const text = (description: string) => ({ type: "string", description });
 const integer = (description: string, minimum: number, maximum: number) => ({ type: "integer", description, minimum, maximum });

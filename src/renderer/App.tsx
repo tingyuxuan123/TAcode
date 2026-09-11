@@ -1047,7 +1047,9 @@ export function App() {
 
   const newThread = useCallback(async () => {
     live.current = false;
-    setWorkspace(undefined);
+    // 已绑定项目时，在当前项目内直接新开一条空白会话；只有未选项目才停在首页选择项目。
+    // 首页（home）会据 workspace 自动切换成「项目名 + 输入框」，因此不清空 workspace。
+    if (workspace) setOpenProjects((current) => ({ ...current, [workspace]: true }));
     setMessages([]);
     setStats(undefined);
     fillPrompt("");
@@ -1063,7 +1065,7 @@ export function App() {
     agentCwd.current = undefined;
     await window.harness.agent.command("abort").catch(() => undefined);
     await window.harness.agent.stop().catch(() => undefined);
-  }, [fillPrompt]);
+  }, [fillPrompt, workspace]);
 
   const removeSession = useCallback(async (session: SessionSummary) => {
     if (isSameSession(session, activeSession)) {
@@ -1808,7 +1810,7 @@ export function App() {
           {home && (
             <div className="empty">
               <div className="empty-hero">
-                <img className="empty-logo" src={logo} alt="" width={30} height={17} />
+                <img className="empty-logo" src={logo} alt="" width={30} height={19} />
                 <h1>{workspace ? baseName(workspace) : t("home.greeting")}</h1>
               </div>
               {composer}

@@ -2,7 +2,7 @@
  * TACode Runtime 凭据读写（桌面端所需子集）。
  *
  * Pi 的登录/登出 CLI 流程由终端负责，桌面壳只需要保存与移除 API Key，
- * 因此这里不移植 Tether 的交互式登录实现。
+ * 因此这里不移植旧运行时的交互式登录实现。
  */
 
 import path from "node:path";
@@ -92,7 +92,7 @@ export async function ensureProviderConfigured(providerId: SupportedProviderId):
 function desktopProviderConfigured(): boolean {
   return Boolean(
     process.env.TACODE_DESKTOP_PROVIDER_CONFIG?.trim() ??
-      process.env.TETHER_DESKTOP_PROVIDER_CONFIG?.trim(),
+      process.env.TACODE_DESKTOP_PROVIDER_CONFIG?.trim(),
   );
 }
 

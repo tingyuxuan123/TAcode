@@ -73,7 +73,7 @@ describe("subagent delegation through the real RPC worker", () => {
     const home = join(dir, "runtime-home");
     await mkdir(home);
     await writeFile(join(home, "settings.json"), JSON.stringify({ credentialStore: "file" }));
-    vi.stubEnv("TETHER_HOME", home);
+    vi.stubEnv("TACODE_HOME", home);
     vi.stubEnv("OPENAI_API_KEY", "sk-test-dummy");
     const config = serviceRuntimeConfig({
       id: "test",
@@ -140,7 +140,7 @@ describe("subagent delegation through the real RPC worker", () => {
       // 父代理先委派、子代理请求、父代理收尾：至少 3 次模型请求。
       expect(requests.length).toBeGreaterThanOrEqual(3);
       expect(requests.some((item) => item.system.includes("subagent inside TACode"))).toBe(true);
-      // 子代理目录注入系统上下文：模型看不到 ~/.tether/subagents 目录，只能猜角色名。
+      // 子代理目录注入系统上下文：模型看不到 ~/.tacode/subagents 目录，只能猜角色名。
       expect(requests.some((item) => item.body.includes("Subagent catalog for the `delegate` tool"))).toBe(true);
       expect(requests.some((item) => item.body.includes("- explorer:") && item.body.includes("maxTurns 40"))).toBe(true);
     } finally {

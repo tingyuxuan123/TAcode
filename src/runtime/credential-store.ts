@@ -8,10 +8,10 @@
  * - `auto`：优先钥匙串，不可用时回退文件。
  *
  * 注意：`auto` 模式**不会**把文件凭据搬到钥匙串并删除文件条目。桌面壳用
- * `TETHER_CREDENTIALS_STORE=file` 固定走文件存储（避免钥匙串弹窗），一旦自动迁移
+ * `TACODE_CREDENTIALS_STORE=file` 固定走文件存储（避免钥匙串弹窗），一旦自动迁移
  * 清空 `auth.json`，应用侧就会读到空密钥并报 401。
  *
- * 钥匙串服务名保持 `tether-agent-core`，以便继续读到历史安装写入的凭据。
+ * 钥匙串服务名已随产品改名；早期版本写入旧服务名的凭据读不到，需要重新输入。
  */
 
 import { randomUUID } from "node:crypto";
@@ -23,8 +23,8 @@ import { tacodeEnv } from "./env.js";
 import { getTacodeHome } from "./home.js";
 import { getTacodeStorageSettings, type CredentialStoreMode } from "./settings.js";
 
-/** 历史服务名；改名会导致已存于系统钥匙串的凭据读不到。 */
-const KEYRING_SERVICE = "tether-agent-core";
+/** 钥匙串服务名。 */
+const KEYRING_SERVICE = "tacode-agent-core";
 const STORE_PATCH = Symbol.for("tacode.runtime.credential-store-installed");
 const LOCK_STALE_MS = 30_000;
 const LOCK_TIMEOUT_MS = 15_000;

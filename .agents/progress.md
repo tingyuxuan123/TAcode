@@ -1,5 +1,39 @@
 # 模型供应商管理进度
 
+## 2026-09-11：修「会话运行中很卡」——流式渲染每帧重建 Markdown 子树（11:00-11:25，Asia/Shanghai）
+
+- 起因：用户贴活动监视器截图——`Electron Helper (Renderer)` 101% CPU、常驻内存 ~975MB，父进程是 TACode，说「会话运行中很卡」。
+- 量化先行：新增真实渲染探针 `scripts/stream-perf.mjs`（+ `scripts/stream-perf-main.mjs`、`scripts/fixtures/stream-perf.{html,tsx}`）。用生产组件 `AssistantTurn` → `ExecutionFlow` → `useStreamText` → `Markdown` → `CodeBlock` 复现流式，采帧率/长任务/DOM 增删/代码块重建次数/落字延迟，主进程侧采 `app.getAppMetrics().cpu.cumulativeCPUUsage` 对齐活动监视器口径，并用 CDP `Profiler` 抓真实 CPU profile 做自耗时归因。用法：`node scripts/stream-perf.mjs reply,reply-code,thinking,long,huge <label> [turns]`（场景内容由 fixture 生成，五次重复同源文本，前后可直接对比）。基线用 HEAD 的临时 worktree 跑同一套探针（fixture 与驱动是 untracked，复制过去即可），保证 A/B 内容完全一致。
+- 基线复现（生产 React 构建，用户日常 dev 下 StrictMode 还会再翻倍）：12.2k 字符长回复 `122% CPU`、流式 38.9s（16ms/块应约 19.5s，说明主线程已饱和）、51.4fps；7.5k 字符 81%；7.3k 字符带代码块 102%。与截图 101% 同一量级。
+- 根因（profile + DOM 计数双向取证）：`ui.tsx` 的 `Markdown` 把 `components` 对象写在渲染函数里，`pre/code/table/th/td` 都是内联箭头函数。`hast-util-to-jsx-runtime` 直接拿 `components[tagName]` 当元素类型，于是**每帧都是新类型** → React 判定「换了类型」→ 卸载并重建整棵 Markdown 子树。866→756 次/733 帧的 `code-block-wrapper` 增删即为此（代码块连同 shiki 高亮状态每帧重挂）。附带两个放大器：`Markdown` 每帧重跑 `repairMarkdownTables`/`compactFencedCode` 等预处理；`CodeBlock` 的 80ms 节流只挡 `setState`，**分词在判断节流之前**，等于每帧跑一次 oniguruma 全量高亮。
+- 改动（三处，均为最小改动）：① `ui.tsx`：`components`、`remarkPlugins`/`rehypePlugins` 提到模块级常量（类型引用稳定），并把预处理与 `ReactMarkdown` 元素按 `source` memo（文本不变时元素引用不变，父组件因其他状态重渲染时整棵子树直接 bail out）。② `codeblock.tsx`：先判 80ms 节流再分词，新增 `latestRef` 让延迟补算拿最新代码（原实现用的是调度那次渲染捕获的旧文本，会停在旧高亮）。③ `stream-text.ts`：新增 `streamEmitInterval(chars)` 分档（≤1.2k 不节流 / 24 / 48 / 80 / 120ms），动画器冷却帧只比一次时间、不分词不落字；`emit(value, at)` 用 rAF 时间戳计时，避免与注入时钟混用时间基。把「Markdown 解析次数」从 60Hz 解耦到与文本长度相称的量级，长文本不再随长度线性压满单核。
+- 复测（同一 fixture、同一文本，baseline = HEAD worktree / fixed = 工作区）：`reply` 7500 字符 81%→30%、`reply-code` 7330 字符 102%→29%（代码块重建 782→1）、`thinking` 5481 字符 70%→31%、`long`（40 轮历史）65%→22%、`huge` 12217 字符 **122%→19%**（流式 38.9s→20.8s，DOM 增删 21591/21201→530/97）。各档 CPU 占比从此随长度发散变成基本持平。
+- 已知剩余：`long` 换 200 轮历史时固定开销 22%→33%，即每帧仍有与历史轮数成正比的 React 遍历成本（探针只量渲染层，真实 App 每帧还重算 `groups`/`recoverableStreaks`，比探针更重）。用户侧暂未报长会话卡顿，未处理，需要时再做窗口化/切片渲染。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 74 文件 655 用例通过（`stream-text.test.ts` 新增节流与分档 4 条）；探针 5 场景各跑两遍取第二轮。未提交、未发布、未改 AGENTS.md。
+
+## 2026-09-11：清掉全部 tether 命名（标识符 / 对外身份 / 注释 / 文档）（10:26-11:00，Asia/Shanghai）
+
+- 起因：上一条（10:13）改完数据目录后我列了「有意保留的 tether」，用户回「这个不要了」。追问边界后确认：持久化标识符只写新名、接受旧数据不兼容；对外身份一起改（官网换成仓库地址）；历史记录只把路径改现状、叙述中性化、不动结论与日期。
+- 标识符（只写新名，无回退）：localStorage `tether.theme` / `.typography` / `.effort` / `.sidebarCollapsed` / `.inspectWidth` / `.browserHomepage` → `tacode.*`；会话 JSONL 的 `customType` `tether-checkpoint` / `-undone` / `-plan-state` / `-permission` → `tacode-*`；子进程 IPC `tether:browser:request|response|cancel` → `tacode:*`；拖拽 MIME `text/tether-path` → `text/tacode-path`；状态槽 `setStatus("tether")` → `"tacode"`；guest preload 的 `tetherPasswordBridge` → `tacodePasswordBridge`；`dataset.tetherFilled` → `dataset.tacodeFilled`。
+- 兼容面明确移除：`tacodeEnv()` 不再读 `TETHER_*` 别名；`TETHER_DESKTOP_PROVIDER_CONFIG/KEY`、`TETHER_WRITABLE_ROOTS`、脚本用的 `TETHER_WORKBENCH_FIXTURE` / `TETHER_COMPOSER_ONLY` / `TETHER_BROWSER_ARTIFACTS` 一并改 `TACODE_*`；用户级 skill 根不再扫 `~/.tether/skills`；工作区忽略/跳过集合去掉 `.tether`；迁移标记改 `~/.tacode/.migrated.json`。钥匙串服务名 `tether-agent-core` → `tacode-agent-core`，历史钥匙串凭据需重输（桌面壳固定 file 存储，实际影响面小）。
+- 对外身份：`update-check` 的 releases API、`ui.tsx` 的官网按钮与反馈链接、`release.yml` 的 checkout 名与 Feedback、README 徽章与克隆地址，统一到 `github.com/tingyuxuan123/TAcode`；关于页官网改成仓库地址（原 tether-code.xyz 无新域名可指）。
+- skill：`.agents/skills/tether-ui` → `tacode-ui`（`.cursor/skills` 同步改名），SKILL.md / tokens.md 里的产品名与 `tether-ai` / `tether-site` 引用改为「本仓库」「营销站仓库（不在本仓库内）」。
+- AGENTS.md（用户授权）：第 3 行「Agent 循环、沙箱、会话在 npm 包 `tether-agent-core`」已过时（已自持 `src/runtime`、直接依赖 Pi），改为自持运行时的描述并在「地图」补一行 `src/runtime/index.ts`；用户全局 skill 路径与 skill 路径同步。
+- 注释：`Tether 时代` / `Tether Runtime` / `Tether 的` 共 7 处改成「改名前的版本 / 自持实现 / 旧运行时」等中性表述；`docs/DEVELOPMENT*.md` 的 checkpoint 约定、userData 迁移说明、扫描根一并同步。
+- 历史记录：两份 `docs/subagent-*-2026-09-10.md` 顶部各加一行「成稿于 2026-09-10，路径已按现状更新」；本档旧条目里指向同一物件的路径改现状、产品名改陈述口径，写明「当时仍为 …」的地方保留时间事实；`.pi/plan/tether-使用稳定性加固方案-…md` 改名为 `tacode-…`。
+- 未动（不是命名残留）：代码里必须知道旧目录名的地方——`LEGACY_HOME_DIR_NAME = ".tether"` 与 userData 迁移链 `["DSHarness","Tether"]`，它们是迁移来源本身。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 74 文件 652 用例通过；全仓 `grep -i tether` 只剩上述迁移来源引用。未提交、未发布。
+
+## 2026-09-11：数据目录改名（~/.tether → ~/.tacode）+ userData 改名（10:13-10:25，Asia/Shanghai）
+
+- 起因：用户指出子代理定义存在 `~/.tether/subagents/*.md`，「这个子代理存的位置不对，我现在不叫 tether 了」。根因是 `getTacodeHome()` 默认仍是 `~/.tether`（home.ts 注释里留的「迁移 `~/.tacode` 未做」一直没做），子代理只是最显眼的一处。
+- `src/runtime/home.ts`：默认目录改 `~/.tacode`（`HOME_DIR_NAME` 常量）；新增 `getLegacyTacodeHome()` 与 `migrateLegacyHome(home, legacy)`，在 `initializeTacodeHome()` 里、且仅在 `TACODE_HOME` 未显式设置时执行。用 `fs.cp(..., { force: false, errorOnExist: false })` 合并到新目录并写标记 `~/.tacode/.migrated.json`（记来源路径与时间），旧目录只读保留。有标记即跳过；失败不写标记，下次启动重试；目标里已存在的文件不被旧目录覆盖。
+- `src/main/index.ts`：userData 迁移链扩成 `["DSHarness","Tether"] → TACode`（倒序取最近一个还存在的旧目录 `renameSync`），沿用原有改名先例，旧目录不保留；桌面壳改设 `TACODE_CREDENTIALS_STORE`。
+- 其余：`local-logger` 默认文件名 `tether.log` → `tacode.log`；i18n 的子代理与 MCP 提示改成 `~/.tacode/...`；README 与 DEVELOPMENT 的数据目录说明同步。（其余 tether 命名见本档上一条。）
+- 真实落地时点：10:18 全量测试中 `src/main/agent-host-faults.test.ts` 会真启动 RPC worker 却没隔离数据目录，把开发机 `~/.tether` 误迁了一次（随即删掉）；给该测试加临时 home + `credentialStore: "file"`（对齐 `agent-subagents.test.ts`）后复跑确认不再创建真实目录。10:22 用户重启 `pnpm dev` 后，新构建做了正式迁移：`~/Library/Application Support/Tether` → `TACode`、`~/.tether` → `~/.tacode`（旧目录均保留），并把当时的迁移标记改成现名 `~/.tacode/.migrated.json`。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 74 文件 652 用例通过（新增 `src/runtime/home.test.ts`）。未提交、未发布。
+- 附注：`~/.tacode` 是测试期间意外生成的副本，已删除；用户退出 TACode 后由新构建重新干净迁移一次。
+
 ## 2026-09-11：AI 服务列表卡片排版优化（09:47-10:00，Asia/Shanghai）
 
 - 用户附截图：要求优化 AI 服务列表样式。上一轮（09:42）去掉了卡片上的重复下拉后，剩余问题：①「默认」墨底方角徽章插在 meta 文本中间，位置突兀；②一条旧布局残留 `.provider-row-model { margin-top: 12px }` 把 meta 行往下坠，行距不均、卡片松散；③非默认卡片边界太淡、无 hover 反馈；④ meta 行「N 个模型」「默认模型 xxx」灰字连排无分隔，模型名与中文标签混在一个 mono 片段里截断。
@@ -129,7 +163,7 @@
 
 - 背景：用户拿 AI 跑完子代理后给出汇总（含逐条核对、5 条派发层问题、4 条执行层问题、P0–P3 建议）。我先逐条核实再动手：**报告的并发竞态、`entries` 不回收、`_tmp_shiki_probe.test.ts`、`features.json` 假设、`agent-host.stop()` 未放行等待者均成立**；另外我找到了它没定位的根因——沙箱 profile `src/runtime/tools/sandbox.ts:76` 的 `(deny signal)` + `(allow signal (target self))` 正是子代理里 `pnpm test` 报 `kill EPERM` 的原因（vitest 收尾要杀 worker）。
 - 本轮已修（低风险 + 带回归用例）：
-  1. **未知角色可纠错**：新增 `unknownSubagentMessage()` / `closestSubagentName()`（`shared/subagents.ts`，编辑距离 ≤2 + 包含匹配），主进程协调器（`delegation-coordinator.ts` 的 `Unknown subagent` 分支）与 runtime 工具（`tools/delegate.ts` 的 unknown 分支）改成共用同一份提示：附「你是不是想找 explorer?」+ 完整可用清单（模型看不到 `~/.tether/subagents/`，原来只报一句名字）。
+  1. **未知角色可纠错**：新增 `unknownSubagentMessage()` / `closestSubagentName()`（`shared/subagents.ts`，编辑距离 ≤2 + 包含匹配），主进程协调器（`delegation-coordinator.ts` 的 `Unknown subagent` 分支）与 runtime 工具（`tools/delegate.ts` 的 unknown 分支）改成共用同一份提示：附「你是不是想找 explorer?」+ 完整可用清单（模型看不到 `~/.tacode/subagents/`，原来只报一句名字）。
   2. **子代理目录注入模型上下文**：新增 `subagentCatalogText()`；`runtime/extension.ts` 在 `before_agent_start`（仅 `childDepth < 1`）注入 `tacode-subagent-catalog` 自定义消息，列出每个角色的 description / tools / maxTurns / thinkingLevel，并提示「要 path:line 证据 + 原文片段」。这样不必改 AGENTS.md 也能让模型知道有哪些角色。
   3. **报告可信度**：explorer / code-reviewer 的内置 prompt 硬性要求每条结论附 1–3 行**原文片段**并标注 `已核实 / 推断 / 未确认`；explorer 明确「没有 shell，读不到的行数/大小必须标未确认」。
   4. **`agent-host.stop()` 放行等待者**（真实泄漏）：原来只 reject pending 请求，`waitForIdle` 的等待者在「worker 已退出再 stop()」的早退分支会永久挂起；现在 stop() 开头统一 `flushStartWaiters(false)` + `flushSettledWaiters()`。
@@ -142,12 +176,12 @@
 ## 2026-09-10：子代理会话改为右侧面板标签（不再抢占中间主会话区）
 
 - 背景：用户点侧栏里的委派子代理行后，子会话被挂到**中间主会话区**（`App.tsx` 的 `onOpen={() => openSession(child)}` 复用了「打开会话」路径，还会改掉 `activeSession`）。期望与参考实现 Proma 一致：中间主区仍是父会话，右侧工作面板多一个标签展示子代理。Proma 的做法见 `LeftSidebar.tsx:1711-1745` + `SidePanel.tsx:1316-1321`（固定单例 `delegation` 标签 + `Map<父→子>` 决定内容）。
-- 主进程：新增 `src/main/session-transcript.ts`（`assertReadableSessionPath` / `parseSessionTranscript` / `readSessionTranscript`）：只允许读会话目录内 `.jsonl`，逐行取 `type:"message"` 条目，文件 >4MB 读尾部、消息 >2000 条保留最后 N 条并标记截断。新增 IPC `sessions:read`（`main/index.ts`）+ preload `sessions.read` + `shared/types.ts` 的 `SessionTranscript` 契约。子会话在 `~/.tether/sessions/`，不在工作区内，`workspace:read` 的 `resolveInWorkspace` 夹不到，所以需要这条专用只读通道。
+- 主进程：新增 `src/main/session-transcript.ts`（`assertReadableSessionPath` / `parseSessionTranscript` / `readSessionTranscript`）：只允许读会话目录内 `.jsonl`，逐行取 `type:"message"` 条目，文件 >4MB 读尾部、消息 >2000 条保留最后 N 条并标记截断。新增 IPC `sessions:read`（`main/index.ts`）+ preload `sessions.read` + `shared/types.ts` 的 `SessionTranscript` 契约。子会话在 `~/.tacode/sessions/`，不在工作区内，`workspace:read` 的 `resolveInWorkspace` 夹不到，所以需要这条专用只读通道。
 - 渲染层：`panel-state.ts` 新增 `ChildSessionPanelTab`（`{id,type:"child-session",path,info}`）与 `open-child-session` reducer 分支（同一 path 复用标签）+ `childSessionPanelLabel`；`use-browser-panels` 暴露 `openChildSession(path, info)`；`workbench-panels.tsx` 加标签文案与内容分支（多实例挂载、非活动 `display:none`）；新增 `child-session-panel.tsx`：头部 `role · 状态 · 耗时 · 步骤数 · tokens`，正文复用 `groupConversation` + `UserTurn`/`AssistantTurn` 渲染**只读转录**，运行中按 2s 轮询、连续 3 次长度不变即停止（桥接缺失/同步抛错降级为错误提示，不炸界面）。
 - 入口（用户指定两处）：① 侧栏委派行点击 → 开标签（`openDelegatedSession`）；② 主会话里 delegate 卡片的子代理行点击 → 开标签（经新增 `panel-actions.tsx` 的 `PanelActionsProvider`/`usePanelActions` 透传，避免改动 `renderTool` 深链），行尾新增 ⓘ 按钮保留原「详情抽屉」（活动流 + 最终报告）；侧栏行右键菜单新增「在主会话中打开」作为逃生口。
 - 未动：`+` 菜单 / 空态选择器（新类型带不了 sessionPath，且会让「+」从直接开网页变成弹菜单，打断既有 GUI 断言）；独立窗口路径。
 - 新增测试：`main/session-transcript.test.ts`（7 条：路径越界/非 jsonl/畸形输入、解析与跳过损坏行、超限截断、真实读文件）；`browser/panel-state.test.ts` 新增 4 条（开标签/去重刷新/多标签关闭回落/标题回落与截断）。
-- 验证：`pnpm typecheck` 通过；`pnpm test` 67 文件 585 用例全部通过；真实 Electron 探针（scratch：加载生产 fixture + 真 preload + `sessions:read` 桩）验证「侧栏行 → 标签标题、主会话未被切换、面板角色/头部/转录、卡片 context 入口、同一子会话只开一个标签」全部通过；真实数据探针用 `~/.tether/sessions/delegation-*.jsonl`（10 个文件）确认解析正常。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 67 文件 585 用例全部通过；真实 Electron 探针（scratch：加载生产 fixture + 真 preload + `sessions:read` 桩）验证「侧栏行 → 标签标题、主会话未被切换、面板角色/头部/转录、卡片 context 入口、同一子会话只开一个标签」全部通过；真实数据探针用 `~/.tacode/sessions/delegation-*.jsonl`（10 个文件）确认解析正常。
 - 说明：仓库自带 GUI 冒烟（`pnpm test:browser`）本机仍在**既有**的漂移阶段失败（composer 工具栏弹层 / adaptive width / panel resize，三次不同位置）；已用 stash 在干净树复现同一 composer 失败，确认与本次改动无关，故新增阶段改用上述专用探针验证。
 - 未提交、未发布、未改 AGENTS.md。
 
@@ -198,7 +232,7 @@
 
 - 背景：用户看到 PI-Desktop 的「智能体模式 + 子代理卡片」，要求把之前分析的 P0–P3 一次做完再统一测试。
 - **P0 运行时**：新增 `src/runtime/tools/delegate.ts`。子代理是 worker 进程内第二个 Pi `Agent`（`@earendil-works/pi-agent-core`），独立 system prompt / 模型 / 思考等级，工具集按定义声明并复用父会话 `ExtensionContext`（同一沙箱、同一审批）。`delegate` 默认阻塞到全部结算，进度用 `onUpdate` 回流渲染层现有卡片；父上下文只拿报告（12k 截断）。
-- **P1 定义与设置**：新增 `src/shared/subagents.ts`（定义结构、可分配工具白名单、缺省只读、frontmatter 解析/渲染、上限常量）+ `src/runtime/subagents.ts`（内置 explorer/code-reviewer/test-runner/fixer、`~/.tether/subagents/*.md` 用户文档按名覆盖、启用状态 `~/.tether/subagents.json`）；主进程新增 `subagents:list|read|save|remove|set-enabled|reveal` IPC + preload + 设置页「子代理」（`src/renderer/subagent-settings.tsx`，列表/启停/编辑校验/删除/打开目录）。
+- **P1 定义与设置**：新增 `src/shared/subagents.ts`（定义结构、可分配工具白名单、缺省只读、frontmatter 解析/渲染、上限常量）+ `src/runtime/subagents.ts`（内置 explorer/code-reviewer/test-runner/fixer、`~/.tacode/subagents/*.md` 用户文档按名覆盖、启用状态 `~/.tacode/subagents.json`）；主进程新增 `subagents:list|read|save|remove|set-enabled|reveal` IPC + preload + 设置页「子代理」（`src/renderer/subagent-settings.tsx`，列表/启停/编辑校验/删除/打开目录）。
 - **P2 生命周期与卡片**：`delegate` 支持 `background: true`；新增 `delegate_wait` / `delegate_list` / `delegate_stop`；后台结算后按批回灌报告（`sendUserMessage(deliverAs: followUp)`）；渲染层 `delegationStatuses()` 从生命周期工具结果反推委派状态，`delegateProgress(tool, tools)` 回填到卡片与底部「任务规划」，新增生命周期工具行文案与 i18n。
 - **P3 隔离与成本**：定义支持 `model` pin（找不到即失败，不静默降级）、`thinkingLevel`、`maxTurns`（超限标 truncated 并保留部分报告）、`permission: plan` 时剔除写类工具；子代理 token 用量汇总回传并在卡片展示；子代理工具调用统一走父会话审批（新增串行化，避免多子代理同时弹确认覆盖渲染层单槽位）。
 - 验证：`pnpm typecheck` 通过；`pnpm test` 58 文件 496 测试通过（新增 `shared/subagents.test.ts` 11 项、`runtime/subagents.test.ts` 8 项、`runtime/tools/delegate.test.ts` 10 项、`main/agent-subagents.test.ts` 真实 RPC worker 冒烟 1 项：父模型调用 delegate → 子代理跑出报告 → 父回合继续）；`pnpm build` 通过；`pnpm dev` 启动无报错。
@@ -226,7 +260,7 @@
 ## 2026-09-09：消除无活动会话时的 `agent:command` 终端刷错（20:11，Asia/Shanghai）
 
 - 现象（用户贴日志）：启动/切换会话后主进程终端出现成对 `Error occurred in handler for 'agent:command': Error: No active agent session`（栈落在 `agent:command` 的 `throw`）。渲染层本身已 `catch`（abort / set_thinking_level / get_* 等 fire-and-forget），这些行只是 Electron 对每次 `ipcMain.handle` 拒绝的打印。
-- 排查：在 preload 临时记录所有 `agent:command` 调用（类型 + 栈）到 `~/.tether/logs/tether.log` 并跑 `pnpm dev`。干净启动下渲染层 **0 次** command 调用，说明不是启动路径，而是「宿主已停/正在重启」的竞态窗口里仍有命令发出（最像 `syncAgentThinking` 的 `get_available_thinking_levels` + `get_state` 一对）。
+- 排查：在 preload 临时记录所有 `agent:command` 调用（类型 + 栈）到 `~/.tacode/logs/tacode.log` 并跑 `pnpm dev`。干净启动下渲染层 **0 次** command 调用，说明不是启动路径，而是「宿主已停/正在重启」的竞态窗口里仍有命令发出（最像 `syncAgentThinking` 的 `get_available_thinking_levels` + `get_state` 一对）。
 - 修复（哨兵协议）：新增 `src/shared/agent-protocol.ts`（`NO_ACTIVE_SESSION_MESSAGE`、`AGENT_NO_SESSION_KEY`、`agentNoSessionResult` / `isAgentNoSessionResult`）。主进程 `agent:command` 无活动会话时不再 `throw`，改为写一条 `diagnostics.warn("agent", …)` 本地日志并返回哨兵；`AgentManager.command` 的同类拒绝也被 handler 捕获成哨兵。preload 见到哨兵即还原为 `new Error(NO_ACTIVE_SESSION_MESSAGE)`——渲染层 catch 语义完全不变，主进程终端不再刷错误。
 - 修复（陈旧会话）：`App.tsx` 新增 `dropAgentSession()`（清 `live`/`agentCwd`/`runtimeIdRef`/`runtimeServiceRef`）；`ensureModelReady` 两条停-重启分支在停止前先置 `live=false`，重启失败时调用它，避免把陈旧 `agentCwd` 留给后续命令；`Login.onSaved` 重启失败同样清理；`removeProject` 仅在确有会话时发 `abort`。
 - 验证：`pnpm typecheck` 通过；`pnpm test` 53 文件 462 测试通过（新增 `agent-protocol.test.ts` 3 项，`agent-lifecycle.test.ts` 改用共享消息常量）；`pnpm build` 通过；用一次性 Electron 脚本（真实 `dist-electron/preload/index.cjs` + 假 `agent:command` 处理器返回哨兵）确认 preload 端 `command()` 以 `No active agent session` 拒绝；重跑 `pnpm dev` 启动无该错误行。
@@ -239,21 +273,21 @@
 - 复现与验证（GUI Electron 宿主 spawn 子进程 + `lsappinfo list`）：仅设置 `process.title` 的脚本会新增一条 `"exec"`/`"tacode-runtime"` 应用记录；不设置标题的同类脚本不产生任何 Dock 图标；去掉标题后重跑完整 worker，Dock 无新图标。
 - 修复：删除该 `process.title` 赋值，并在文件头注释说明原因（ps 里仍可用完整命令行识别 worker）。已重建 `dist-electron/runtime/rpc-entry.js`——worker 文件在每次会话启动时读取，因此新会话立即生效，无需重启应用。
 - 验证：`pnpm typecheck` 通过；`pnpm test` 51 文件 456 测试通过。
-- 附注：17:43 清理时误把用户当时正在运行的 5 个 `tacode-runtime` worker 当作探针残留 SIGTERM 掉（`~/.tether/logs/tether.log` 里 code 143 即此），相关会话已停止，重开即可。
+- 附注：17:43 清理时误把用户当时正在运行的 5 个 `tacode-runtime` worker 当作探针残留 SIGTERM 掉（`~/.tacode/logs/tacode.log` 里 code 143 即此），相关会话已停止，重开即可。
 
-## 2026-09-09：自研 Agent Runtime — 直接依赖 Pi，移除 tether-agent-core（17:30，Asia/Shanghai）
+## 2026-09-09：自研 Agent Runtime — 直接依赖 Pi，移除旧运行时包（17:30，Asia/Shanghai）
 
 - 结论先行：RPC/adapter 层不需要自研。实测 Pi 原生 `--mode rpc` 与 TACode 协议完全兼容（请求 `{id,type,...}`、应答 `{id,type:"response",command,success,data|error}`、事件流与 `extension_ui_request` 一致），缺口只在 extension 层。
-- 新增 `src/runtime/`：`rpc-entry.ts`（调用 Pi `main()` 并注入扩展；启动前把 `PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR` 指向 `~/.tether`，避免读写用户全局 `~/.pi/agent`；无凭据时快速失败）、`options.ts`（壳层参数消费 + Pi 参数转发 + `--effort`→`--thinking`）、`home.ts`（会话转录日期分区 + 扁平硬链接）、`providers.ts`、`settings.ts`、`credential-store.ts`（file/keyring/auto，钥匙串服务名沿用 `tether-agent-core` 以读回历史凭据）、`auth.ts`、`state.ts`（SQLite 索引）、`rpc-client.ts`（`dist-electron/runtime/rpc-entry.js` 定位）、`extension.ts`。
-- 工具层 `src/runtime/tools/`：read_file/list_files/search_files/write_file/edit_file、exec_command/write_stdin（ManagedProcessRegistry 后台进程）、apply_patch、update_plan、ask_user、沙箱（macOS Seatbelt，Docker 可选）、checkpoint（写 `tether-checkpoint` 条目供 `/undo`）；扩展命令 `/plan`、`/permissions`、`/effort`、`/jobs`、`/stop-job`、`/stop-jobs`。
-- 主进程接线：`agent-host.ts` 启动自研入口；`providers.ts`/`browser/passwords.ts`/`index.ts` 改用 `../runtime` 导出；`tsup.config.ts` 新增 `runtime/rpc-entry` 入口并移除 tether external；新增 `scripts/ensure-runtime.mjs` + `vitest.global-setup.ts` 在测试前按需构建 worker；`package.json` 移除 `tether-agent-core`，新增 `@napi-rs/keyring`、`pi-web-access`、`fast-glob`；README 与 DEVELOPMENT 文档同步。
-- 验证：`pnpm typecheck` 通过；`pnpm test` 51 文件 456 测试通过（新增 patch/workspace/policy/options 共 24 项）；`pnpm build` 通过；真实 RPC worker 以 `~/.tether` 会话目录完成一次 prompt 往返（`~/.tether` 里的 DeepSeek key 已失效，返回 401 并正常透出，属既有凭据问题）。
-- 已知差距（后续）：delegate 子代理、language_diagnostics、MCP 集成、`/checkpoints` 与 `/diff` 命令、personalization/project-trust/hooks/image-input 尚未移植；Windows 无原生沙箱后端时 exec_command 会报错（需 Docker 镜像或 `danger-full-access`）；数据目录仍为 `~/.tether`，迁移 `~/.tacode` 未做。
+- 新增 `src/runtime/`：`rpc-entry.ts`（调用 Pi `main()` 并注入扩展；启动前把 `PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR` 指向数据目录，避免读写用户全局 `~/.pi/agent`；无凭据时快速失败）、`options.ts`（壳层参数消费 + Pi 参数转发 + `--effort`→`--thinking`）、`home.ts`（会话转录日期分区 + 扁平硬链接）、`providers.ts`、`settings.ts`、`credential-store.ts`（file/keyring/auto，钥匙串服务名沿用旧值以读回历史凭据）、`auth.ts`、`state.ts`（SQLite 索引）、`rpc-client.ts`（`dist-electron/runtime/rpc-entry.js` 定位）、`extension.ts`。
+- 工具层 `src/runtime/tools/`：read_file/list_files/search_files/write_file/edit_file、exec_command/write_stdin（ManagedProcessRegistry 后台进程）、apply_patch、update_plan、ask_user、沙箱（macOS Seatbelt，Docker 可选）、checkpoint（写 `tacode-checkpoint` 条目供 `/undo`）；扩展命令 `/plan`、`/permissions`、`/effort`、`/jobs`、`/stop-job`、`/stop-jobs`。
+- 主进程接线：`agent-host.ts` 启动自研入口；`providers.ts`/`browser/passwords.ts`/`index.ts` 改用 `../runtime` 导出；`tsup.config.ts` 新增 `runtime/rpc-entry` 入口并移除旧运行时包的 external 配置；新增 `scripts/ensure-runtime.mjs` + `vitest.global-setup.ts` 在测试前按需构建 worker；`package.json` 移除旧运行时包，新增 `@napi-rs/keyring`、`pi-web-access`、`fast-glob`；README 与 DEVELOPMENT 文档同步。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 51 文件 456 测试通过（新增 patch/workspace/policy/options 共 24 项）；`pnpm build` 通过；真实 RPC worker 以数据目录完成一次 prompt 往返（当时该目录里的 DeepSeek key 已失效，返回 401 并正常透出，属既有凭据问题）。
+- 已知差距（后续）：delegate 子代理、language_diagnostics、MCP 集成、`/checkpoints` 与 `/diff` 命令、personalization/project-trust/hooks/image-input 尚未移植；Windows 无原生沙箱后端时 exec_command 会报错（需 Docker 镜像或 `danger-full-access`）；数据目录当时仍为 `~/.tether`，迁移 `~/.tacode` 未做（2026-09-11 已完成）。
 - 未提交、未发布、未改 AGENTS.md。
 
 ## 2026-09-09：稳定性加固 阶段 5 — 本地诊断、错误边界与故障回归（13:50，Asia/Shanghai）
 
-- 新增 `src/main/local-logger.ts`：本地 JSONL 诊断日志（默认 `~/.tether/logs/tether.log`，单文件 1 MB、保留 3 个历史文件轮转、内存最近 200 条、同路径串行写入、写入失败绝不抛出），写入前用 `redactSecrets` 脱敏、单条 message/details 截断，导出窄接口 `DiagnosticSink` 供 `AgentHost` 依赖（`local-logger.test.ts` 6 项）。
+- 新增 `src/main/local-logger.ts`：本地 JSONL 诊断日志（默认 `~/.tacode/logs/tacode.log`，单文件 1 MB、保留 3 个历史文件轮转、内存最近 200 条、同路径串行写入、写入失败绝不抛出），写入前用 `redactSecrets` 脱敏、单条 message/details 截断，导出窄接口 `DiagnosticSink` 供 `AgentHost` 依赖（`local-logger.test.ts` 6 项）。
 - 主进程接线（`src/main/index.ts`）：启动即创建诊断日志；新增 `app:log-diagnostic` IPC（仅限宿主窗口）；配置损坏恢复提示同时写入日志；`web-contents-created` 统一记录主窗口 / webview guest / 独立浏览器窗口的 `render-process-gone`；`app.whenReady()` 初始化失败时写诊断、`showErrorBox` 给出日志路径并 `app.exit(1)`，不再静默退出。`src/main/agent-host.ts` 记录 worker spawn 错误 / 退出码、RPC 请求超时、无法解析的 JSON、超长行、stdin 错误，并对 `desktopProvider.apiKey` 脱敏。
 - 渲染层：新增 `src/renderer/ErrorBoundary.tsx`（`main.tsx` 内包住 `App`，位于 `LocaleProvider` 之下），App 抛错时显示“重新加载界面”按钮与折叠的技术细节，并上报主进程本地日志；纯逻辑抽到 `src/renderer/render-error.ts`（`render-error.test.ts` 4 项）；`src/shared/i18n.ts` 新增 4 个键，`styles.css` 增加对应样式。
 - 故障注入测试：新增 `src/main/agent-host-faults.test.ts`（真实 RPC worker 被 SIGKILL → 受控错误 + 日志且不含密钥；未应答请求 45s 超时 → 日志脱敏）与 `src/main/agent-host-diagnostics.test.ts`（畸形 JSON 只诊断一次、超长行丢弃后继续解析、密钥脱敏）。
@@ -287,7 +321,7 @@
 ## 2026-09-09：修复“删除会话后残留 cwd 名占位，需删两次”（08:53，Asia/Shanghai）
 
 - 问题（用户报告）：创建一个会话，点删除后它还在且变成项目名“TAcode”，需再删一次才消失。
-- 根因：`sessions:remove` 清理运行中注册表时用 `sessionIdFromPath(path) === id` 匹配，但磁盘会话的 `id` 是 TetherStateStore 的 DB 主键（非路径 basename）。删除“已落盘且运行中”的会话时匹配失败，`loadedSessions` 条目残留，`mergeLoadedSessions` 继续把它合成回侧边栏（title 退化为 cwd 名“TAcode”，因 `sessionTitlesRef` 已删），所以第一次删除只“改名”不消失，第二次才真正删掉。
+- 根因：`sessions:remove` 清理运行中注册表时用 `sessionIdFromPath(path) === id` 匹配，但磁盘会话的 `id` 是 会话索引库的 DB 主键（非路径 basename）。删除“已落盘且运行中”的会话时匹配失败，`loadedSessions` 条目残留，`mergeLoadedSessions` 继续把它合成回侧边栏（title 退化为 cwd 名“TAcode”，因 `sessionTitlesRef` 已删），所以第一次删除只“改名”不消失，第二次才真正删掉。
 - 修复（`src/main/index.ts`）：① `sessions:remove` 用 `store.get(id)` 取该会话真实 `sessionPath`/`storagePath`，综合“真实路径 / basename / cwd”多重匹配，可靠删除 `loadedSessions` 并同步清理 `agentHosts` 对应 host；② 新增 `deletedSessionPaths` 黑名单（本会话内），`mergeLoadedSessions` 跳过已删除路径（双重保险）；③ 重开同路径会话时从黑名单移除（避免误拦）。
 - 验证：`pnpm typecheck` 通过；`src/main`+`src/shared` 23 文件 173 测试通过；重启 dev server（主进程改动不热更）。
 
@@ -316,9 +350,9 @@
 
 - 背景：Phase 3a 后“切走”已不再丢（后台继续跑、assistant 产出时底层 flush）。Phase 2 兜剩余缺口：app 崩溃/退出、用户显式停止一个“首条 assistant 未产出”的会话时，已发送 user 消息可能未落盘。
 - 主进程 `src/main/index.ts`：
-  - 受保护消息存储：`~/.tether/protected/<sessionId>.jsonl`；`agent:command("prompt")` 时把 user 消息**即刻落盘**（`appendProtectedUserMessage`，向主机进程写入，不依赖底层）。
+  - 受保护消息存储：`~/.tacode/protected/<sessionId>.jsonl`；`agent:command("prompt")` 时把 user 消息**即刻落盘**（`appendProtectedUserMessage`，向主机进程写入，不依赖底层）。
   - 打开会话时兜底：`agent:start` 若底层 session 文件**磁盘上不存在**（`fs.existsSync(file)`），把受保护中缺失的 user 消息合并进返回的 `snapshot.messages`（按文本去重），供切回/重启后显示；若文件已在磁盘（有 assistant、已 flush），清空受保护消息。
-  - `loadedSessions` 注册表持久化：`~/.tether/loaded-sessions.json`（启动 `loadLoadedSessions`，set/delete 时 `persistLoadedSessions`），使崩溃后侧边栏仍能恢复“未落盘”会话条目，从而可点击打开找回。
+  - `loadedSessions` 注册表持久化：`~/.tacode/loaded-sessions.json`（启动 `loadLoadedSessions`，set/delete 时 `persistLoadedSessions`），使崩溃后侧边栏仍能恢复“未落盘”会话条目，从而可点击打开找回。
 - 验证：`pnpm typecheck` 通过；`pnpm test` 全量 362/362 通过。
 - 说明：受保护文件真正只兜“首个 user 消息”（一旦有 assistant，底层即 flush，之后逐条立即写盘）。实际崩溃恢复路径涉及底层对未落盘 session 文件路径的处理，属 best-effort，建议在运行中的 App 手动验证：发首条消息后强杀进程 → 重启 → 侧边栏仍见该会话 → 打开可见已发消息。
 
@@ -338,7 +372,7 @@
 - 依据重写后的 `PLAN.md`（参考 Proma 方案），落地最小可交付 Phase 1：列表不再因磁盘暂缺文件删掉运行中/未落盘的新会话。
 - 主进程 `src/main/index.ts`：新增 `loadedSessions` 进程内注册表（应用侧“运行中会话”集合），`agent:start` 创建/打开会话时登记；`sessions:list` 用 `mergeLoadedSessions` 把仍运行、磁盘暂缺文件的新会话合成前置到列表；`sessions:remove` 归档时注销以清除占位。
 - 渲染进程 `src/renderer/App.tsx`：新增 `sessionTitlesRef` + `setSessionList`，把首次消息标题缓存并覆写主进程合成的占位（否则切走后只显示 cwd 兜底名）；所有已磁盘列表的调用点改走 `setSessionList`，避免整表替换丢占位。
-- 未改任何 npm 依赖（tether-agent-core / pi-coding-agent），纯壳层实现。底层 `_persist` 延迟写盘的“内容丢失”层面（首轮生成中切走/崩溃仍可能空），属 Phase 2（应用侧消息即落盘）范围。
+- 未改任何 npm 依赖（旧运行时包 / pi-coding-agent），纯壳层实现。底层 `_persist` 延迟写盘的“内容丢失”层面（首轮生成中切走/崩溃仍可能空），属 Phase 2（应用侧消息即落盘）范围。
 - 验证：`pnpm typecheck` 通过；`pnpm test` 全量 362/362 通过。
 - 目录：`PLAN.md.bak-promaref`（原 PLAN 备份）。
 
@@ -348,7 +382,7 @@
 - `src/renderer/use-follow-scroll.ts` 提取 `nextScrollTop`，并让 `followLatest` 复用已有 RAF 循环；ResizeObserver 连续回调只更新动态目标，不再每次 cancel/restart 缓动，降低流式追加 Markdown 时的滚动抖动。保留用户主动上滑退出跟随、底部滞回、会话位置和历史锚点保持；新增 viewport resize shield，避免布局变化产生的程序滚动被误判为用户意图。
 - 新增 `src/renderer/use-follow-scroll.test.ts`，覆盖动态底部、平滑步进、reduced-motion 和临界距离；scheduler 增加批次边界测试。
 - 验证：`pnpm typecheck` 通过；`pnpm test` 全量 357/357 通过；`pnpm build` 通过；`git diff --check` 通过。构建仍有既有 renderer 大 chunk 提示，不影响构建。
-- 未引入新依赖，未修改主进程、Agent 协议或 Markdown 渲染器；未提交、发布或重启用户当前 Tether 进程。
+- 未引入新依赖，未修改主进程、Agent 协议或 Markdown 渲染器；未提交、发布或重启用户当前 TACode 进程。
 
 
 ## 2026-09-07：实现与验证完成
@@ -365,7 +399,7 @@
 - 主进程串行、原子替换供应商元数据；每服务独立 CredentialStore 条目；编辑空密钥保留、更换端点需重填，存储失败尝试恢复原凭据。跨系统凭据/文件写入并非崩溃原子事务。
 - RPC 子进程内注册供应商，不覆盖全局 OpenAI/DeepSeek 凭据；模型配置接入实际请求，下一次发送应用变更。
 - 支持 Chat Completions、Responses、Anthropic Messages、Google Generative AI、OpenCode Go（Chat Completions）；不提供不受运行时支持的 Pi Messages/Codex Responses 登录模式。
-- README 中英文说明同步；界面沿用 tether-ui 的纸面/墨色变量。
+- README 中英文说明同步；界面沿用 tacode-ui 的纸面/墨色变量。
 
 ### 主要文件
 
@@ -380,7 +414,7 @@
 - `pnpm typecheck`：通过。
 - `pnpm exec tsup`：通过。
 - `pnpm build:renderer`：通过，有 Vite 大于 500 KB 的 chunk 提示，不影响构建。
-- 五个供应商相关测试文件：43/43 通过；其中四种协议均运行真实 `tether-agent-core` RPC 子进程请求本地模拟服务，验证模型、地址、配置、独立认证和生成响应。
+- 五个供应商相关测试文件：43/43 通过；其中四种协议均运行真实 `旧运行时包` RPC 子进程请求本地模拟服务，验证模型、地址、配置、独立认证和生成响应。
 - `pnpm test`：178/179 通过；唯一失败为修改前已存在的 `src/renderer/conversation.test.ts:308`，期望 `GLM-4V 识图 · glm-4v-flash · MinerU OCR`，实际 `识图 · glm-4v-flash · MinerU OCR`。未修改或弱化该无关测试。
 - `git diff --check`：通过。
 
@@ -394,7 +428,7 @@
 ## 2026-09-07 12:45 GMT+8：修复自定义服务首次提问启动失败
 
 - 用户现象：首页选择 `deepseek-v4-flash-vision-exp` 后提问，Agent 以 code 1 退出，提示 `OpenAI API is not configured`。
-- 已确认根因：桌面服务使用内置 `openai` 槽位；`tether-agent-core@0.1.19` 在扩展加载前调用 `ensureFirstRunAuth`，不识别 `TETHER_DESKTOP_PROVIDER_KEY`。原 RPC 测试预设了全局 OpenAI 假密钥，未覆盖无 OpenAI 凭据环境。
+- 已确认根因：桌面服务使用内置 `openai` 槽位；`旧运行时包@0.1.19` 在扩展加载前调用 `ensureFirstRunAuth`，不识别 `TACODE_DESKTOP_PROVIDER_KEY`。原 RPC 测试预设了全局 OpenAI 假密钥，未覆盖无 OpenAI 凭据环境。
 - 修改 `src/main/agent-host.ts`：仅对桌面自定义服务的 RPC 子进程设置非秘密启动占位值 `OPENAI_API_KEY=desktop-session-key`；真实请求仍由现有扩展解析服务专属密钥，不修改父进程环境或全局凭据文件，不改变普通 OpenAI 启动逻辑。
 - 更新 `src/main/provider-runtime.test.ts`：直接使用实际 `AgentHost.start`；覆盖五种接口格式与无 OpenAI 凭据、冲突凭据、无密钥服务三类环境，并保留普通 OpenAI 无凭据拒绝启动的负向测试。断言实际端点、模型、认证、回复、父进程环境和凭据文件未被修改。
 - 修复前新增场景中 8 个重现相同启动错误；修复后定向测试 16/16 通过。
@@ -428,7 +462,7 @@
 
 ## 2026-09-07：思考与执行流展示
 
-- 用户批准参考 Proma 的阅读层级与流式节奏，在当前目录新建 `codex/execution-flow` 分支实施。独立使用 Tether 现有 React/CSS/lucide 组件实现，没有复制 Proma 源码或修改许可。
+- 用户批准参考 Proma 的阅读层级与流式节奏，在当前目录新建 `codex/execution-flow` 分支实施。独立使用本仓库现有 React/CSS/lucide 组件实现，没有复制 Proma 源码或修改许可。
 - 新增 `execution-flow.tsx`：运行中默认展开、约320px限高过程视口、思考四行预览/全文切换、普通Markdown阶段说明、轻量工具行及按需结果详情；末尾答复独立显示，正常结束且用户未交互时延迟收起。失败、停止、等待确认和缺结果状态保持可发现，审批卡仍在过程外。
 - `conversation.ts` 新增展示投影与稳定历史分组引用；按模型消息边界维护work作用域，同一块快照修订替换旧文本，不以内容包含关系合并不同步骤。历史工具缺结果显示中性状态；工具update保留首次开始时间。
 - 新增有序帧事件批处理、后台兜底、短文本缓冲与独立滚动跟随；区分用户阅读意图和程序滚动，处理会话重建/观察器绑定，主区与过程区提供回到最新入口。
@@ -448,7 +482,7 @@
 - 隔离 IPC fixture 加载真实 App 完成浏览器验收：切换代码字体为 Menlo 后代码块计算字体跟随（`code` 由 monospace 变为 Menlo 栈）、代码字号步进即时生效、重载后从 localStorage 恢复（menlo / 13px）、无运行时错误；截图确认三区块布局与窄窗口。未读取真实凭据、未请求云端模型。
 - 预览工具对相同 URL 有资源缓存，旧 CSS 在旧标签残留属工具现象；源码与生产构建产物均已确认包含 `font-family: inherit` 修复。未提交、未发布、未改 AGENTS.md。
 
-## 内置浏览器移植（Snow App → Tether，2026-09-08）
+## 内置浏览器移植（Snow App → 本仓库，2026-09-08）
 
 - 范围确认：Snow 全量浏览器功能；两仓库 MIT。分层：A 核心浏览器 / B 独立窗口 / C 凭据与登录态 / D 调试与代理 / E Agent 浏览器工具。
 - Layer A 完成：主窗口 `webviewTag`，`src/main/browser/{popups,downloads,ipc}.ts`（弹窗分流 + guest `_blank` 中继去重、will-download 保存对话框与下载面板、clear cache/cookies、DevTools、截图写剪贴板）；`src/preload/webview-browser.cjs` guest 入口（tsup 多入口）；`DesktopApi.browser` 契约；渲染端 `src/renderer/browser/*`（多标签 webview、地址/搜索、页内查找、缩放、下载、截图、菜单、首页 localStorage）；接入右侧面板 PanelTabs（浏览器标签，flush 布局）。
@@ -457,7 +491,7 @@
 - 验证：`pnpm typecheck` 通过；`pnpm test` 254 例中 253 过（`conversation.test.ts:308` 识图标题为存量失败，干净树复现，与移植无关）；`pnpm build` 通过，产物含 webview-browser.cjs 与 browser-window.html。
 - Layer C/D/E 未开始：C 需用 safeStorage+node:crypto 重写密码保险库与登录态归档（导入功能 Rust-only，计划按平台降级）；D 含网络记录/路由 mock/CDP 白名单/右键菜单/代理；E 为 Pi extension + 本地桥 + 渲染端执行器（browserMcpOperations 移植）。计划文档在会话工作台 plan/snow-browser-port.md。
 
-- Layer C 核心完成（commit 210043f）：`src/main/browser/passwords.ts` 密码保险库（safeStorage 包裹 AES-256 主密钥 + AES-256-GCM 记录库，~/.tether/browser-passwords，临时文件 + rename 原子写，safeStorage 不可用拒绝落盘）；guest preload 扩展自动填充/提交捕获（`browser-passwords:find/save` 带 webview sender + senderFrame origin 双重校验）；管理 IPC list/get/save/delete/delete-batch 仅限窗口渲染进程。`tetherPasswordBridge` 暴露给页面脚本。
+- Layer C 核心完成（commit 210043f）：`src/main/browser/passwords.ts` 密码保险库（safeStorage 包裹 AES-256 主密钥 + AES-256-GCM 记录库，~/.tacode/browser-passwords，临时文件 + rename 原子写，safeStorage 不可用拒绝落盘）；guest preload 扩展自动填充/提交捕获（`browser-passwords:find/save` 带 webview sender + senderFrame origin 双重校验）；管理 IPC list/get/save/delete/delete-batch 仅限窗口渲染进程。`tacodePasswordBridge` 暴露给页面脚本。
 - Layer C 余项：密码管理设置 UI、登录态归档（依赖 CDP，随 D 层）、浏览器数据导入（Snow 为 Rust/DPAPI/Keychain，TS 仅 macOS Chromium 现实可行，需产品决策降级边界）。
 - Layer D/E 未开始（计划与会话工作台 plan/snow-browser-port.md 同步）。
 - 白屏修复（commit daf3009）：沙箱 preload 无 __dirname，guest preload 路径改由主进程 `browser:webview-preload-path` 提供（file: URL），BrowserPanel 拿到路径后再挂 webview；同时修正独立窗口 preload/icon/page 的 bundle 相对路径（tsup 单入口把 browser/* 并入 dist-electron/main，基准是该目录而非 browser/ 子目录）。ELECTRON_ENABLE_LOGGING 复现验证：preload 正常、React 正常挂载。
@@ -472,17 +506,17 @@
 - 可靠性：导航和新快照作废旧 ref；跨标签 ref 拒绝；观察期间导航拒绝；新 loader 就绪后返回导航结果；超时/停止取消排队动作；悬浮后重新验证原节点及点击点；大元素使用可见命中点；取消后短时释放可能按住的鼠标/键盘。独立审查发现的 3 项边界已修复。
 - UI 展示中文浏览器操作名称，修复 localhost/about:blank 解析；README 双语增加使用方式与权限说明。新增 `pnpm test:browser` 隔离 Electron smoke 命令。
 - 验证：`pnpm typecheck`、完整构建、真实 Electron BrowserPanel 本地页面 smoke、`git diff --check` 通过；真实 Agent RPC + 本地模型 fixture 验证工具可见性及 IPC 回环。新增 25 项浏览器相关单测全部通过；全量 278/279，唯一失败仍为 `conversation.test.ts:308` 既有识图标题断言。
-- 生效方式：重启 Tether 并重新启动 Agent 会话。未操作真实账号、未请求云端模型，未重启用户当前进程，未提交/发布。保留同期 UI 菜单/样式改动；AGENTS.md 未修改。详细证据在会话工作台 `3d29745f-5635-4f1b-96ca-3a1165dc7f29/verification.md`。
+- 生效方式：重启 TACode 并重新启动 Agent 会话。未操作真实账号、未请求云端模型，未重启用户当前进程，未提交/发布。保留同期 UI 菜单/样式改动；AGENTS.md 未修改。详细证据在会话工作台 `3d29745f-5635-4f1b-96ca-3a1165dc7f29/verification.md`。
 - Layer D 网络/代理、Layer C 管理 UI/归档，以及文件上传/任意 JS 等未在本次实现；跨窗口迁移会重建 guest，需重新列出标签。
 
 
 ## 2026-09-08：修正默认外部打开（11:03，Asia/Shanghai）
 
-- 用户截图显示“打开项目 web 端”后 Agent 执行 `open http://localhost:9001/unibest/`。只读核验当前 RPC worker 参数，仍仅加载 vision/provider，没有 browser.js；运行中的旧 Electron 主进程尚未更新，因此新建对话也无法获得上一轮浏览器工具。必须完全退出并重启 Tether，再启动 Agent 会话。
+- 用户截图显示“打开项目 web 端”后 Agent 执行 `open http://localhost:9001/unibest/`。只读核验当前 RPC worker 参数，仍仅加载 vision/provider，没有 browser.js；运行中的旧 Electron 主进程尚未更新，因此新建对话也无法获得上一轮浏览器工具。必须完全退出并重启 TACode，再启动 Agent 会话。
 - 新增 `src/extensions/browser-routing.ts` 与 tool_call guard：普通网页请求阻止常见系统 open/xdg-open/start/Start-Process/python webbrowser 及开发服务 --open，返回改用 browser_navigate 的具体提示；明确外部浏览器请求保留，文件打开/服务启动/文档字符串不误拦。该检测用于路由常见命令，不是完整 shell 安全解析器。
 - 浏览器提示词明确区分“启动开发服务器”与“在内嵌面板打开真实端口/路径”，并禁止缺失工具时悄悄回退外部浏览器。双语 README 强调完全重启与仅刷新/新建对话的区别。
 - 验证：33 项命令路由测试和 2 项真实 RPC 测试通过；后者用不会启动真实浏览器的临时 open fixture，确认外部命令被阻止并能改用 browser_navigate。类型检查、构建、diff 检查通过。全量 312/313，唯一失败仍是既有 conversation.test.ts:308 识图标题断言。
-- 未重启或终止用户正在运行的 Tether/Agent 进程；本次修复将在应用完全重启后加载。日志在本会话工作台 browser-routing-build.txt / browser-routing-tests.txt。
+- 未重启或终止用户正在运行的 TACode/Agent 进程；本次修复将在应用完全重启后加载。日志在本会话工作台 browser-routing-build.txt / browser-routing-tests.txt。
 
 
 ## 2026-09-08：右侧面板松开后仍跟随鼠标的修复（11:16，Asia/Shanghai）
@@ -491,7 +525,7 @@
 - 新增 `src/renderer/panel-resize.ts` 并接入 Chat。主指针捕获；每次 move 在改宽度前检查左键仍按下；pointerup/pointercancel/lostpointercapture、blur、页面隐藏、面板收起/移除及组件卸载统一结束；恢复原 cursor/userSelect，保存宽度，移除监听。忽略右键与其他指针。
 - `.is-resizing-panel` 仅在拖动时暂时禁用 webview/iframe 的鼠标命中，防止 guest 抢走释放事件；结束后恢复。原宽度计算与边界保持。
 - 验证：9 项状态回归通过，覆盖释放事件丢失、失焦、捕获丢失和卸载。新增真实 Electron 原生鼠标测试：跨入实际 BrowserPanel webview 拖动、松开、随后左右移动，宽度固定且网页交互恢复。`pnpm test:browser`（含完整构建）、`pnpm typecheck`、diff 检查通过；全量 321/322，唯一仍为既有 conversation.test.ts:308 识图标题断言。
-- 本轮是 renderer 修复。建议刷新一次 Tether 主窗口，清除旧代码可能残留的拖拽监听。未重启/中断用户会话。本会话未执行 Git 提交；收尾检查发现相关代码已由工作区其他操作纳入 `bf57c87`。日志：本会话工作台 panel-resize-smoke-results.txt / panel-resize-tests.txt。
+- 本轮是 renderer 修复。建议刷新一次 TACode 主窗口，清除旧代码可能残留的拖拽监听。未重启/中断用户会话。本会话未执行 Git 提交；收尾检查发现相关代码已由工作区其他操作纳入 `bf57c87`。日志：本会话工作台 panel-resize-smoke-results.txt / panel-resize-tests.txt。
 
 
 ## 2026-09-08：浏览器统一顶部单层标签（11:43，Asia/Shanghai）
@@ -594,7 +628,7 @@
 
 - ui.tsx UserTurn：图片区分单/多图——单图较大等比缩放（≤500px，object-contain），多图 280px 方块网格（object-cover），均圆角 12px 点击看大图；每张 hover 底部右下角黑色半透明「保存」悬浮按钮（Download 图标，data-URI 直接下载）。新增 Download 导入。
 - styles.css：.user-images 改为 flex-wrap gap 8px；新增 .user-image-wrap/{single}/.user-image-save；单图 object-contain、多图 object-cover 规则替换原统一 140px。
-- 注：Proma 的保存走 electronAPI.saveImageAs(localPath)，Tether 无此桥接，改用锚点下载 data-URI；无左右翻页（图片数据即 data-URI，可后续按需加）。
+- 注：Proma 的保存走 electronAPI.saveImageAs(localPath)，当时无此桥接，改用锚点下载 data-URI；无左右翻页（图片数据即 data-URI，可后续按需加）。
 - pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
 
 ## 2026-09-08：发送后消息图片从文字气泡独立成块（对齐 Proma）（20:19，Asia/Shanghai）

@@ -91,8 +91,8 @@ describe("顶部网页标签状态", () => {
 describe("delegationPanelKey", () => {
   it("委派 id 与子会话文件名归一到同一个 key（两个入口因此命中同一个标签）", () => {
     expect(delegationPanelKey("delegation-1")).toBe("delegation-1");
-    expect(delegationPanelKey(undefined, "/home/u/.tether/sessions/delegation-1.jsonl")).toBe("delegation-1");
-    expect(delegationPanelKey("delegation-1", "/home/u/.tether/sessions/delegation-1.jsonl")).toBe("delegation-1");
+    expect(delegationPanelKey(undefined, "/home/u/.tacode/sessions/delegation-1.jsonl")).toBe("delegation-1");
+    expect(delegationPanelKey("delegation-1", "/home/u/.tacode/sessions/delegation-1.jsonl")).toBe("delegation-1");
     expect(delegationPanelKey(undefined, "C:\\sessions\\delegation-2.jsonl")).toBe("delegation-2");
   });
 

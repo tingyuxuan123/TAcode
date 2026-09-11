@@ -1,8 +1,10 @@
 /** Project-relative dirs scanned by Pi when the workspace is trusted. */
 export const PROJECT_SKILL_ROOTS = [".agents/skills", ".pi/skills"] as const;
 
-/** User-global dirs (always available; not listed in workspace @ picker). */
-export const USER_SKILL_ROOTS = ["~/.tether/skills", "~/.agents/skills"] as const;
+/**
+ * User-global dirs (always available; not listed in workspace @ picker).
+ */
+export const USER_SKILL_ROOTS = ["~/.tacode/skills", "~/.agents/skills"] as const;
 
 export interface AgentSkillCommand {
   name: string;

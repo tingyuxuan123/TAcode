@@ -1,18 +1,19 @@
 # TACode
 
-面向仓库的 AI 编程桌面工作台。Agent 循环、沙箱、会话在 npm 包 `tether-agent-core`；本仓库只做 Electron 壳和中文工作流界面。
+面向仓库的 AI 编程桌面工作台。Agent 运行时（循环 / 沙箱 / 会话 / 权限 / 工具）在 `src/runtime`，直接依赖 Pi 生态；外层是 Electron 壳和中文工作流界面。
 
 ## 地图
 
 - 产品说明与架构：[README.md](README.md)
 - 主进程（窗口 / IPC / 权限 / 工作区）：[src/main/index.ts](src/main/index.ts)
+- Agent 运行时（工具 / 权限 / 沙箱 / 会话索引 / 数据目录）：[src/runtime/index.ts](src/runtime/index.ts)
 - RPC 子进程宿主：[src/main/agent-host.ts](src/main/agent-host.ts)
 - 界面状态：[src/renderer/App.tsx](src/renderer/App.tsx)
 - 组件：[src/renderer/ui.tsx](src/renderer/ui.tsx)
 - 会话归并：[src/renderer/conversation.ts](src/renderer/conversation.ts)
 - IPC 契约：[src/shared/types.ts](src/shared/types.ts)
 - 长任务协议：`.agents/skills/init-long-run`、`.agents/skills/continue-long-run`、`.agents/skills/plan-then-act`
-- 界面气质（改 CSS / 组件 / 克隆同款工作台）：`.agents/skills/tether-ui`（Cursor 侧同步 `.cursor/skills/tether-ui`）
+- 界面气质（改 CSS / 组件 / 克隆同款工作台）：`.agents/skills/tacode-ui`（Cursor 侧同步 `.cursor/skills/tacode-ui`）
 
 ## Agent Skills
 
@@ -21,7 +22,7 @@ Skills 由 Pi 运行时加载（TACode 不另写 loader）。标准路径：
 | 范围 | 路径 |
 | --- | --- |
 | 项目（需信任） | `.agents/skills/<name>/SKILL.md`、`.pi/skills/<name>/SKILL.md` |
-| 用户全局 | `~/.tether/skills/<name>/SKILL.md`、`~/.agents/skills/<name>/SKILL.md` |
+| 用户全局 | `~/.tacode/skills/<name>/SKILL.md`、`~/.agents/skills/<name>/SKILL.md` |
 
 每个 skill 目录一个 `SKILL.md`，frontmatter 需含 `name` 与 `description`（Pi 校验，缺项不会加载）。
 

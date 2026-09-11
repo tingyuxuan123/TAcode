@@ -180,7 +180,7 @@ export function closestSubagentName(role: string, names: readonly string[]): str
 
 /**
  * 未知子代理时的提示：附上可用清单 + 最接近的名字。
- * 模型看不到 `~/.tether/subagents/` 目录，只回一句 "Unknown subagent" 会让它继续瞎猜角色名。
+ * 模型看不到 `~/.tacode/subagents/` 目录，只回一句 "Unknown subagent" 会让它继续瞎猜角色名。
  */
 export function unknownSubagentMessage(
   role: string,

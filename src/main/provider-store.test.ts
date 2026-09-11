@@ -18,7 +18,7 @@ describe("desktop provider repository", () => {
   const input = { name: "Gateway", vendorKey: "custom", baseUrl: "https://example.test/v1", apiStyle: "chat_completions" as const,
     models: [{ id: "model-A" }, { id: "model-B" }], apiKey: "secret-one" };
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "tether-provider-store-"));
+    dir = await mkdtemp(join(tmpdir(), "tacode-provider-store-"));
     file = join(dir, "providers.json");
     keys = new Map();
     repo = new ProviderRepository(file, {

@@ -22,12 +22,12 @@ export interface DiagnosticSink {
 }
 
 export interface LocalLoggerOptions {
-  /** 日志目录（通常 ~/.tether/logs）。 */
+  /** 日志目录（通常 ~/.tacode/logs）。 */
   dir: string;
   fileName?: string;
   /** 单个文件大小上限，超过即轮转。 */
   maxBytes?: number;
-  /** 保留的历史文件个数（tether.log.1 … .N）。 */
+  /** 保留的历史文件个数（tacode.log.1 … .N）。 */
   maxFiles?: number;
   /** 需要脱敏的凭据来源；每次写入时求值，便于跟随运行时配置变化。 */
   secrets?: () => Array<string | undefined>;
@@ -57,7 +57,7 @@ export class LocalLogger implements DiagnosticSink {
   private recentEntries: string[] = [];
 
   constructor(options: LocalLoggerOptions) {
-    this.file = path.join(options.dir, options.fileName ?? "tether.log");
+    this.file = path.join(options.dir, options.fileName ?? "tacode.log");
     this.maxBytes = Math.max(1_024, options.maxBytes ?? 1_048_576);
     this.maxFiles = Math.max(1, options.maxFiles ?? 3);
     this.now = options.now ?? (() => new Date());

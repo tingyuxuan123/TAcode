@@ -1,4 +1,4 @@
-export const TYPOGRAPHY_STORAGE_KEY = "tether.typography";
+export const TYPOGRAPHY_STORAGE_KEY = "tacode.typography";
 export const UI_FONTS = ["default", "system", "serif", "custom"] as const;
 export const CODE_FONTS = ["default", "menlo", "monaco", "courier", "consolas", "jetbrains", "custom"] as const;
 export type FontKind = "ui" | "code";

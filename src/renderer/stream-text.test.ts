@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createStreamTextAnimator, nextStreamText, type StreamTextValue } from "./stream-text";
+import { createStreamTextAnimator, nextStreamText, streamEmitInterval, type StreamTextValue } from "./stream-text";
 
 type Frame = (timestamp: number) => void;
 
@@ -78,6 +78,40 @@ describe("stream text animator", () => {
     expect(frames.size).toBe(0);
     run(16);
     expect(changes.at(-1)?.text).toBe("abcdef");
+  });
+
+  it("limits emits by text length while still landing the final text", () => {
+    const text = "字".repeat(4000);
+    const { animator, changes, run } = setup({ identity: "turn-1", text: "" });
+    animator.setTarget({ identity: "turn-1", text }, true);
+    let timestamp = 0;
+    for (let frame = 0; frame < 300 && changes.at(-1)?.text !== text; frame += 1) {
+      timestamp += 16;
+      run(timestamp);
+    }
+    // 4000 字符落在 48ms 档：约 300 帧里最多落下 ~1/3 次，而不是逐帧落字。
+    expect(changes.length).toBeLessThan(40);
+    expect(changes.at(-1)?.text).toBe(text);
+    expect(changes.every((value) => text.startsWith(value.text))).toBe(true);
+  });
+
+  it("does not throttle short text", () => {
+    const { animator, changes, run } = setup({ identity: "turn-1", text: "" });
+    animator.setTarget({ identity: "turn-1", text: "abcdefghij" }, true);
+    run(16);
+    run(32);
+    run(48);
+    expect(changes.length).toBe(3);
+  });
+});
+
+describe("streamEmitInterval", () => {
+  it("grows with text length", () => {
+    expect(streamEmitInterval(500)).toBe(0);
+    expect(streamEmitInterval(2000)).toBe(24);
+    expect(streamEmitInterval(6000)).toBe(48);
+    expect(streamEmitInterval(15000)).toBe(80);
+    expect(streamEmitInterval(40000)).toBe(120);
   });
 });
 

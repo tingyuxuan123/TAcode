@@ -10,7 +10,7 @@ async function isolatedHome(settings: Record<string, unknown> = {}): Promise<str
   const home = await mkdtemp(join(tmpdir(), "tacode-options-"));
   roots.push(home);
   await writeFile(join(home, "settings.json"), JSON.stringify(settings));
-  vi.stubEnv("TETHER_HOME", home);
+  vi.stubEnv("TACODE_HOME", home);
   return home;
 }
 

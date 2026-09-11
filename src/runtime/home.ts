@@ -7,8 +7,8 @@
  * - 会话转录按 `sessions/YYYY/MM/DD/*.jsonl` 分区存放，同时保留扁平硬链接，
  *   兼容 Pi 当前的 `--session` / `--resume` 实现。
  *
- * 首版默认沿用 `~/.tether`（历史数据兼容），可用 `TACODE_HOME` 覆盖；
- * 迁移到 `~/.tacode` 时只改 `getTacodeHome()` 的默认值并做一次性拷贝。
+ * 数据目录默认 `~/.tacode`，可用 `TACODE_HOME` 覆盖。产品改名过来时，旧 `~/.tether`
+ * 会在首次启动整目录拷贝到新目录；旧目录原样保留，确认无误后可手动删除。
  */
 
 import fs from "node:fs/promises";
@@ -17,8 +17,20 @@ import path from "node:path";
 import process from "node:process";
 import { tacodeEnv } from "./env.js";
 
+/** 当前数据目录名；再改名只需改这里。 */
+const HOME_DIR_NAME = ".tacode";
+/** 旧版数据目录名，只作一次性迁移的来源。 */
+const LEGACY_HOME_DIR_NAME = ".tether";
+/** 迁移完成标记；存在即跳过，避免每次启动重复拷贝。 */
+const MIGRATION_MARKER = ".migrated.json";
+
 export function getTacodeHome(): string {
-  return resolveHomePath(tacodeEnv("HOME") ?? path.join(os.homedir(), ".tether"));
+  return resolveHomePath(tacodeEnv("HOME") ?? path.join(os.homedir(), HOME_DIR_NAME));
+}
+
+/** 旧版数据目录 `~/.tether`；仅迁移时读取，TACode 不再往这里写。 */
+export function getLegacyTacodeHome(): string {
+  return path.join(os.homedir(), LEGACY_HOME_DIR_NAME);
 }
 
 export function getTacodeSessionsDir(): string {
@@ -34,6 +46,10 @@ export function getTacodeArchivedSessionsDir(): string {
 /** 把 Pi 的运行时数据目录限定在 TACode 自有路径内，并准备目录。 */
 export async function initializeTacodeHome(): Promise<string> {
   const home = getTacodeHome();
+  // 显式指定数据目录（TACODE_HOME）时不自动迁移：路径是用户自己定的。
+  if (tacodeEnv("HOME") === undefined) {
+    await migrateLegacyHome(home, getLegacyTacodeHome());
+  }
   const sessions = getTacodeSessionsDir();
   process.env.PI_CODING_AGENT_DIR = home;
   process.env.PI_CODING_AGENT_SESSION_DIR = sessions;
@@ -46,6 +62,38 @@ export async function initializeTacodeHome(): Promise<string> {
   await ensureWebSearchDefaults(home);
   await partitionExistingSessions(sessions);
   return home;
+}
+
+/**
+ * 产品改名时把旧数据目录整目录拷贝到新目录。
+ *
+ * 用 `force: false` 合并：目标里已存在的文件（含上次中断留下的部分结果）保留，不覆盖。
+ * 只读旧目录，因为它是回退路径。旧目录里的会话转录用硬链接在「扁平运行时路径」与
+ * 「日期分区路径」间共享 inode，拷贝后会变成各自独立的文件，两条路径仍然都可读。
+ *
+ * 失败不写标记，下次启动重试；目标最多只是旧目录的部分合并，不会丢数据。
+ *
+ * @returns 是否真的执行了拷贝（已有标记、旧目录不存在、或新=旧时为 `false`）。
+ */
+export async function migrateLegacyHome(home: string, legacy: string): Promise<boolean> {
+  if (home === legacy) return false;
+  if (await pathExists(path.join(home, MIGRATION_MARKER))) return false;
+  const legacyStat = await statOrUndefined(legacy);
+  if (!legacyStat?.isDirectory()) return false;
+  await fs.mkdir(home, { recursive: true, mode: 0o700 });
+  try {
+    await fs.cp(legacy, home, { recursive: true, force: false, errorOnExist: false });
+  } catch {
+    return false;
+  }
+  await fs
+    .writeFile(
+      path.join(home, MIGRATION_MARKER),
+      `${JSON.stringify({ from: legacy, at: new Date().toISOString() }, null, 2)}\n`,
+      { mode: 0o600 },
+    )
+    .catch(() => undefined);
+  return true;
 }
 
 /** 桌面/RPC 模式跳过 TUI 引导，但不覆盖已有配置。 */
@@ -182,6 +230,15 @@ async function sessionTimestamp(file: string, fallback: Date): Promise<Date> {
     return fallback;
   } finally {
     await handle?.close().catch(() => undefined);
+  }
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
   }
 }
 

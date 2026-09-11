@@ -7,7 +7,7 @@ import { LocalLogger } from "./local-logger";
 let dir: string;
 
 beforeEach(async () => {
-  dir = await fsp.mkdtemp(path.join(os.tmpdir(), "tether-log-"));
+  dir = await fsp.mkdtemp(path.join(os.tmpdir(), "tacode-log-"));
 });
 
 afterEach(async () => {
@@ -58,10 +58,10 @@ describe("LocalLogger", () => {
       logger.info("rotate", `entry ${index} ${"z".repeat(100)}`);
     await logger.flush();
     const files = await fsp.readdir(dir);
-    expect(files).toContain("tether.log");
-    expect(files).toContain("tether.log.1");
-    expect(files).toContain("tether.log.2");
-    expect(files).not.toContain("tether.log.3");
+    expect(files).toContain("tacode.log");
+    expect(files).toContain("tacode.log.1");
+    expect(files).toContain("tacode.log.2");
+    expect(files).not.toContain("tacode.log.3");
     // 轮转后当前文件必须仍然远小于累计写入量，避免无界增长。
     expect((await fsp.stat(logger.filePath)).size).toBeLessThanOrEqual(1_024);
   });

@@ -14,12 +14,12 @@ describe("getLatestUpdate", () => {
   it("returns a newer GitHub release", async () => {
     const fetchImpl: typeof fetch = async () => new Response(JSON.stringify({
       tag_name: "v0.1.1",
-      html_url: "https://github.com/tt-11-dd/tether-ai/releases/tag/v0.1.1",
+      html_url: "https://github.com/tingyuxuan123/TAcode/releases/tag/v0.1.1",
     }));
 
     await expect(getLatestUpdate("0.1.0", fetchImpl)).resolves.toEqual({
       version: "0.1.1",
-      url: "https://github.com/tt-11-dd/tether-ai/releases/tag/v0.1.1",
+      url: "https://github.com/tingyuxuan123/TAcode/releases/tag/v0.1.1",
     });
   });
 });

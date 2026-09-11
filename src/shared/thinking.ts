@@ -1,7 +1,7 @@
 import type { MessageKey } from "./i18n";
 
 export const DEFAULT_EFFORT = "medium";
-export const EFFORT_STORAGE_KEY = "tether.effort";
+export const EFFORT_STORAGE_KEY = "tacode.effort";
 
 export type ThinkingLevelMap = Partial<
   Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>

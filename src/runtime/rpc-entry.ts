@@ -2,12 +2,12 @@
 /**
  * TACode 自研 Agent Runtime 入口（RPC 模式）。
  *
- * 与 `tether-agent-core` 的 rpc-entry 不同，这里直接调用 Pi 的 `main()`：
+ * 这里直接调用 Pi 的 `main()`（而不是调用第三方运行时包的 rpc-entry）：
  * RPC 协议、会话管理、内置工具、模型协议都由 `@earendil-works/pi-coding-agent`
  * 提供，TACode 只注入自己的扩展（`createTacodeExtension`）与数据目录/凭据。
  *
  * 由 `src/main/agent-host.ts` 以 `ELECTRON_RUN_AS_NODE=1` 子进程方式启动，
- * 通过换行分隔的 JSON-RPC over stdio 通信，命令白名单与 Tether Runtime 一致。
+ * 通过换行分隔的 JSON-RPC over stdio 通信，命令白名单与旧运行时一致。
  *
  * 注意：不要设置 `process.title`。worker 是 Electron 二进制以 node 模式运行的子进程，
  * 在 macOS 上调用 `process.title` 会让 LaunchServices 给每个 worker 注册一个 Dock 图标

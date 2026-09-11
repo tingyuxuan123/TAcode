@@ -8,7 +8,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-export const PLAN_STATE_ENTRY = "tether-plan-state";
+export const PLAN_STATE_ENTRY = "tacode-plan-state";
 
 export type PlanStepStatus = "pending" | "in_progress" | "completed";
 

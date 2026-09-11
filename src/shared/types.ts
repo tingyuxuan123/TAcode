@@ -64,7 +64,7 @@ export interface AppBuildStatus {
   restartRequired: boolean;
 }
 
-/** 只读会话转录（`sessions:read`）：子代理子会话在 `~/.tether/sessions/`，不在项目工作区内。 */
+/** 只读会话转录（`sessions:read`）：子代理子会话在 `~/.tacode/sessions/`，不在项目工作区内。 */
 export interface SessionTranscript {
   sessionPath: string;
   /** 会话 JSONL 的 message 条目（与 `agent:start` 的 snapshot.messages 同一形状）。 */
@@ -259,13 +259,13 @@ export interface DesktopApi {
   };
   sessions: {
     list(cwd?: string): Promise<SessionSummary[]>;
-    /** 只读读取某个会话转录（子代理子会话在 `~/.tether/sessions/`）。 */
+    /** 只读读取某个会话转录（子代理子会话在 `~/.tacode/sessions/`）。 */
     read(sessionPath: string): Promise<SessionTranscript>;
     remove(id: string): Promise<void>;
     pin(id: string, pinned: boolean): Promise<void>;
     rename(id: string, title: string): Promise<void>;
   };
-  /** 子代理定义管理（`~/.tether/subagents/*.md` + 启用状态）。 */
+  /** 子代理定义管理（`~/.tacode/subagents/*.md` + 启用状态）。 */
   subagents: {
     list(): Promise<{
       subagents: import("./subagents").SubagentInfo[];

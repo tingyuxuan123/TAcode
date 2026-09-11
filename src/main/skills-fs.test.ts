@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { listLocalSkills, resolveSkillRevealPath } from "./skills-fs";
 
 describe("skills-fs", () => {
-  const home = path.join(os.tmpdir(), `tether-skills-test-${process.pid}`);
+  const home = path.join(os.tmpdir(), `tacode-skills-test-${process.pid}`);
   const skillRoot = path.join(home, ".agents/skills/demo-skill");
 
   afterEach(async () => {

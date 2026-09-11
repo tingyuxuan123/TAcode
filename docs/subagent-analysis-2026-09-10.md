@@ -4,12 +4,14 @@
 两者都是通过 `delegate(background: true)` 启动、在子代理自然跑完后，从子会话 JSONL 的
 最终 assistant 文本中提取的——原因见下文第 0 节。
 
+> 成稿于 2026-09-10。文中数据目录路径已按改名后的现状（`~/.tacode`）更新；当时的路径为 `~/.tether`。
+
 ## 0. 为什么必须这样取报告：委派回传缺陷
 
 现象：`delegate` / `delegate_wait` 无论任务长短、并发与否、同步或后台，一律返回
 `failed: The delegated worker finished without a report.`，但子代理其实跑完了。
 
-证据（`~/.tether/state.sqlite` 的 `threads.delegation_completed_at` 对比子会话首条 user 消息时间）：
+证据（`~/.tacode/state.sqlite` 的 `threads.delegation_completed_at` 对比子会话首条 user 消息时间）：
 
 | delegationId | 判定为 failed 的时刻 | 子会话首条 user 消息 |
 | --- | --- | --- |
@@ -33,7 +35,7 @@
 主进程这条路径缺少等子代理空闲这一步。
 
 附带问题：`delegation-coordinator.ts` 没有注入任何诊断（无 `DiagnosticSink`），
-`~/.tether/logs/tether.log` 对这类失败零记录；`runPrompt` catch 分支的错误信息也不含
+`~/.tacode/logs/tacode.log` 对这类失败零记录；`runPrompt` catch 分支的错误信息也不含
 `childSessionPath`，导致故障无法自证。
 
 修复建议：
@@ -223,11 +225,11 @@ Pi 生态 (@earendil-works/pi-*)
 - 主进程仓库 `ProviderRepository`：`src/main/provider-store.ts:31`，凭据键 `serviceCredentialId = desktop-service:<id>`：`provider-store.ts:14`
 - 主进程工厂 + IPC 校验：`src/main/providers.ts:13-45`（`createTacodeCredentialStore()` 作为读写后端，`:16-20`）
 - runtime 凭据存储：`src/runtime/credential-store.ts`（三模式 file/keyring/auto，说明 `:1-15`；`FileCredentialStore`：`:37-79`；`installTacodeCredentialStore` 由 `rpc-entry.ts:33` 调用）
-- 桌面壳固定走文件存储避免钥匙串弹窗：`src/main/index.ts:163`（`process.env.TETHER_CREDENTIALS_STORE = "file"`）
+- 桌面壳固定走文件存储避免钥匙串弹窗：`src/main/index.ts:163`（`process.env.TACODE_CREDENTIALS_STORE = "file"`）
 - auth 读写子集：`src/runtime/auth.ts`（`saveProviderApiKey` 等，`:46-...`）
 - 服务运行时配置：`src/shared/provider-config.ts`（`serviceRuntimeConfig`），连接测试：`src/shared/provider-connection.ts`
 - 以扩展形式把桌面服务凭据交给 worker（不落 CLI 参数/文件）：`src/extensions/provider.ts:14-33`
-- worker 启动时注入凭据环境变量：`agent-host.ts:218-224`（`TETHER_DESKTOP_PROVIDER_CONFIG/KEY`）
+- worker 启动时注入凭据环境变量：`agent-host.ts:218-224`（`TACODE_DESKTOP_PROVIDER_CONFIG/KEY`）
 - 启动时解析桌面托管服务：`src/main/index.ts:1175-1176`、`:1190-1197`
 
 ### 3.5 skills
@@ -303,12 +305,12 @@ Pi 生态 (@earendil-works/pi-*)
 若为**主进程 → 渲染层推送**通道（如 `agent:event`）：preload 用 `subscribe`（`index.ts:9-13`），主进程用 `webContents.send(...)`（如 `index.ts:183`、`:187`、`:501`）。
 
 ### 6.2 新增一个子代理角色
-- **方式 A（无需改代码 / 用户定义）**：在 `~/.tether/subagents/<name>.md` 放入带 frontmatter 的文档，经设置页 `subagents:save` 落盘（IPC 见 `src/main/index.ts:582`，存储与合并见 `src/runtime/subagents.ts:138-197`）。
+- **方式 A（无需改代码 / 用户定义）**：在 `~/.tacode/subagents/<name>.md` 放入带 frontmatter 的文档，经设置页 `subagents:save` 落盘（IPC 见 `src/main/index.ts:582`，存储与合并见 `src/runtime/subagents.ts:138-197`）。
 - **方式 B（内置角色，需改代码）**：
   1. 在 `src/runtime/subagents.ts` 的 `BUILTIN_SUBAGENTS` 数组新增定义（数组起点 `subagents.ts:36`；示例 explorer：`:37-51`）。`tools` 取值必须来自 `SUBAGENT_ASSIGNABLE_TOOLS`（`src/shared/subagents.ts:12-21`）。
   2. 角色名会被 `delegate` 工具/协调器按名解析：`src/main/delegation-coordinator.ts:167-169`（`loadEnabledSubagents().find(item => item.name === role)`）。
   3. 渲染层设置页会自动列出（`subagents:list`，`src/main/index.ts:578`；界面 `src/renderer/subagent-settings.tsx`），无需额外改动。
-  4. 若需默认关闭/开启：启用状态在 `~/.tether/subagents.json`（`src/runtime/subagents.ts:27-29`、`:177-197`）。
+  4. 若需默认关闭/开启：启用状态在 `~/.tacode/subagents.json`（`src/runtime/subagents.ts:27-29`、`:177-197`）。
   - 注意：可写子代理（含 `exec_command` 等）由 `subagentCanMutate` 判定（`src/shared/subagents.ts:102-106`），且实际权限不超过父会话（相关生效逻辑见 `delegation-coordinator.ts` 的 permission 归一，`:60-68`、`:173`）。
 
 ---
@@ -342,10 +344,10 @@ Pi 生态 (@earendil-works/pi-*)
 失败模式：`vault.bin` 用新密钥无法解密 → `loadVault()` 的 catch（`:119-122`）返回空库且不报错 → 下一次 `savePasswordRecord`（`:197`）经 `persistVault`（`:133` rename）把空库+新记录写回，**全部历史密码被静默清除**，且用户没有任何提示。
 修复建议：把「密钥文件缺失」与「解密失败」分开处理；解密失败时抛出显式错误（拒绝读写）而不是重建密钥；确需重建时先备份 `vault.bin`/`vault.key` 并提示用户，且不要在解密失败时继续执行写回。
 
-### 2. `tetherPasswordBridge.find` 把明文密码交给网页 JS
+### 2. `tacodePasswordBridge.find` 把明文密码交给网页 JS
 `src/preload/webview-browser.ts:233-236`（save 在 `:238`）
 **已确认缺陷（安全默认值问题）**。guest preload 通过 `contextBridge` 把 `find(): Promise<{username,password}>` 暴露到页面主世界，浏览器 webview 以 `webpreferences="sandbox=no,contextIsolation=yes"` 运行（`src/renderer/browser/browser-panel.tsx:645`）。
-触发条件：任意在该 origin 上运行的脚本（页面自身、第三方统计/广告脚本、该站点的 XSS）调用 `tetherPasswordBridge.find()`。
+触发条件：任意在该 origin 上运行的脚本（页面自身、第三方统计/广告脚本、该站点的 XSS）调用 `tacodePasswordBridge.find()`。
 失败模式：无需用户交互即可拿到明文密码；`find` 不要求页面存在可见密码框，因此比「DOM 里被自动填充的 value」多出一条独立、可静默批量读取的通道（主进程 `guestOriginFrom` 只校验 origin，不校验调用来源脚本）。
 修复建议：仅在渲染层显式触发填充时回填，不给页面暴露返回明文的方法；或改为返回可用凭据的布尔/掩码，实际填充只走 `tryAutofill` 内部 IPC。
 

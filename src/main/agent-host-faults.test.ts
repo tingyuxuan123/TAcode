@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { AgentHost } from "./agent-host";
@@ -48,13 +48,30 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 20_000) => {
   throw new Error("condition not reached in time");
 };
 
-afterEach(() => {
+const roots: string[] = [];
+
+/**
+ * 真实 worker 会把数据目录定在 home：不隔离就会直接读写开发机的 `~/.tacode`，
+ * 甚至触发旧目录迁移。这里给每个用例一个空 home + 文件凭据存储。
+ */
+async function isolatedHome(): Promise<string> {
+  const home = await mkdtemp(join(tmpdir(), "tacode-host-fault-home-"));
+  roots.push(home);
+  await writeFile(join(home, "settings.json"), JSON.stringify({ credentialStore: "file" }));
+  vi.stubEnv("TACODE_HOME", home);
+  return home;
+}
+
+afterEach(async () => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("AgentHost fault injection", () => {
   it("surfaces a SIGKILLed worker as a controlled error and logs it", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tether-host-fault-"));
+    const dir = await mkdtemp(join(tmpdir(), "tacode-host-fault-"));
+    await isolatedHome();
     const { host, errors, logs } = harness();
     try {
       const config = serviceRuntimeConfig({
@@ -98,6 +115,7 @@ describe("AgentHost fault injection", () => {
 
   it("times out an unanswered request, logs it and redacts stderr", async () => {
     vi.useFakeTimers();
+    await isolatedHome();
     const key = "sk-fault-injection-key";
     const { host, errors, logs } = harness();
     const internals = host as unknown as {

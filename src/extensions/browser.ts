@@ -26,13 +26,13 @@ export function requestBrowser(tool: string, params: BrowserParams, signal?: Abo
       if (error) reject(error); else resolve(result!);
     };
     const cancel = () => {
-      if (process.connected) process.send?.({ type: "tether:browser:cancel", id }, () => {});
+      if (process.connected) process.send?.({ type: "tacode:browser:cancel", id }, () => {});
     };
     const onAbort = () => { cancel(); finish(new Error("浏览器操作已取消")); };
     const onDisconnect = () => finish(new Error("浏览器宿主连接已关闭"));
     const onMessage = (message: unknown) => {
       const response = message as BrowserResponse | null;
-      if (response?.type !== "tether:browser:response" || response.id !== id) return;
+      if (response?.type !== "tacode:browser:response" || response.id !== id) return;
       finish(response.error ? new Error(response.error) : undefined, response.result);
     };
     const timer = setTimeout(() => {
@@ -42,7 +42,7 @@ export function requestBrowser(tool: string, params: BrowserParams, signal?: Abo
     process.on("message", onMessage);
     process.once("disconnect", onDisconnect);
     signal?.addEventListener("abort", onAbort, { once: true });
-    process.send!({ type: "tether:browser:request", id, tool, params: input }, (error) => { if (error) finish(error); });
+    process.send!({ type: "tacode:browser:request", id, tool, params: input }, (error) => { if (error) finish(error); });
   });
 }
 

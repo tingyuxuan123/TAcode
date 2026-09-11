@@ -19,7 +19,7 @@ const roots: string[] = [];
 async function tempHome(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "tacode-subagents-"));
   roots.push(root);
-  vi.stubEnv("TETHER_HOME", root);
+  vi.stubEnv("TACODE_HOME", root);
   return root;
 }
 

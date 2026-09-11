@@ -1,4 +1,4 @@
-const INSPECT_WIDTH_KEY = "tether.inspectWidth";
+const INSPECT_WIDTH_KEY = "tacode.inspectWidth";
 const INSPECT_MIN = 220;
 const INSPECT_DEFAULT = 268;
 const CHAT_MIN = 320;

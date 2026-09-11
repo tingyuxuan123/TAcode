@@ -58,7 +58,7 @@ The renderer has no direct Node.js access; all desktop capabilities cross the ty
 │   ├── ensure-electron.mjs    # postinstall: fix Electron binaries, write path.txt, patch Info.plist name
 │   └── make-icon.py           # icon generation script
 ├── build/                     # icon assets (icon.png / icon-win.png / icon.svg)
-├── .agents/skills/            # built-in project skills (init-long-run / continue-long-run / plan-then-act / tether-ui)
+├── .agents/skills/            # built-in project skills (init-long-run / continue-long-run / plan-then-act / tacode-ui)
 ├── .github/workflows/release.yml
 └── src/
     ├── main/                  # Electron main process
@@ -304,14 +304,14 @@ Exported components grouped by function:
 - **Settings**: `Login` (panes: chat / vision / skills / shortcuts / about).
 - **Common**: `Icon` (inline SVG path) / `CopyButton` / `ApprovalCard` / `PermissionPicker` / `EffortPicker` / `Combo` / `ContextStats`.
 
-All styling lives in `styles.css` (hand-written CSS, no UI framework). Before changing UI look-and-feel, read `.agents/skills/tether-ui/SKILL.md` and `tokens.md` (UI design-token conventions).
+All styling lives in `styles.css` (hand-written CSS, no UI framework). Before changing UI look-and-feel, read `.agents/skills/tacode-ui/SKILL.md` and `tokens.md` (UI design-token conventions).
 
 ### 6.6 Internationalization
 
 - Copy lives in `src/shared/i18n.ts`: flat key tables for `zh` / `en`, with `t(locale, key, vars)` doing `{var}` interpolation.
 - `i18n.tsx` provides `LocaleProvider` / `useI18n()`; it loads from `app:get-locale` on first render and calls `setConversationLocale` on switch so pure functions in conversation.ts follow the language too.
 - Never hard-code user-visible copy in the renderer; new copy needs both `zh` and `en` keys.
-- Locale resolution: `resolveLocale` prefers the stored value (`locale` in `~/.tether/settings.json`), otherwise follows the system language list; default is `zh`.
+- Locale resolution: `resolveLocale` prefers the stored value (`locale` in `~/.tacode/settings.json`), otherwise follows the system language list; default is `zh`.
 
 ## 7. Sessions, Recovery & Edit Safety
 
@@ -323,9 +323,9 @@ Recovery: opening a session calls `agent:start({ sessionPath, resume: true })`; 
 
 ### 7.2 /undo and Checkpoints
 
-The runtime records a `tether-checkpoint` entry (with each file's `before` content) after a successful `apply_patch` / `exec_command`. The `/undo` flow:
+The runtime records a `tacode-checkpoint` entry (with each file's `before` content) after a successful `apply_patch` / `exec_command`. The `/undo` flow:
 
-1. `get_entries` pulls session entries; `lastTurnRestoreFiles` resolves the `before` file set of the newest checkpoint **after the last real user turn** that has not been undone by `tether-checkpoint-undone`.
+1. `get_entries` pulls session entries; `lastTurnRestoreFiles` resolves the `before` file set of the newest checkpoint **after the last real user turn** that has not been undone by `tacode-checkpoint-undone`.
 2. Show an `ApprovalCard` confirmation (special id `harness:undo`).
 3. On confirm, `workspace:restore(files)` writes the files back (`content: null` means delete) and `dropLastTurn` removes the turn from the UI.
 
@@ -369,7 +369,7 @@ Every relative path sent by the renderer must pass through `resolveInWorkspace()
 - **MinerU OCR**: free OCR, asynchronous upload + polling (45s timeout), degrades silently on failure.
 - The tool is enabled only when **this turn's user message pasted images** or the message contains an image handoff (decided stickily in `before_agent_start`; not removed mid-session, so the model doesn't fall back to shell OCR hacks).
 - The system prompt injects two engineering conventions: `NO_CAPTURE` (no Chrome/headless screenshots for visual acceptance unless the user explicitly asked this turn) and the narration-language rule (zh or en based on whether the visible user text contains CJK).
-- The extension API comes from agent-core's `ExtensionAPI`: `registerTool` / `getActiveTools` / `setActiveTools` / `on`.
+- The extension API comes from Pi's `ExtensionAPI`: `registerTool` / `getActiveTools` / `setActiveTools` / `on`.
 
 The shared layer `vision-api.ts` provides pure functions: request construction, response parsing, result merging (GLM + OCR sections), `visionHandoffPaths` / `visibleUserText` (recovering the original user text and image paths from handoff messages). Pasted base64 images are staged via `vision:stage` into `userData/uploads` (max 4), and the session file only stores staged paths.
 
@@ -377,20 +377,20 @@ The shared layer `vision-api.ts` provides pure functions: request construction, 
 
 | Location | Contents |
 | --- | --- |
-| `appData/Tether` (userData; legacy `appData/DSHarness` is auto-renamed on first launch) | `recent-workspaces.json`, `vision-config.json`, `chat-profiles.json`, `uploads/` (staged images), `tasks/` (cwd without a project) |
-| `~/.tether` (getTacodeHome, managed by src/runtime) | `settings.json` (locale / default provider+model), session index and thread storage, credentials (a file when `TETHER_CREDENTIALS_STORE=file` instead of the OS keyring) |
+| `appData/TACode` (userData; legacy `appData/Tether` / `appData/DSHarness` are auto-renamed on first launch) | `recent-workspaces.json`, `vision-config.json`, `chat-profiles.json`, `uploads/` (staged images), `tasks/` (cwd without a project) |
+| `~/.tacode` (getTacodeHome, managed by src/runtime; copied once from the pre-rename `~/.tether` on first launch, old directory kept) | `settings.json` (locale / default provider+model), session index and thread storage, credentials (a file when `TACODE_CREDENTIALS_STORE=file` instead of the OS keyring) |
 | project `.agents/` | `features.json` (cross-session task list), `progress.md` (progress) — maintained by skill conventions |
 
-Environment variables: `TETHER_CREDENTIALS_STORE=file` (avoids keyring prompts in the distributed build); `PI_TELEMETRY=0`; `PI_SKIP_VERSION_CHECK=1`; `HARNESS_EXTRA_MODELS` / `HARNESS_VISION_CONFIG` / `HARNESS_VISION_UPLOADS` passed to the agent child process.
+Environment variables: `TACODE_CREDENTIALS_STORE=file` (avoids keyring prompts in the distributed build); `PI_TELEMETRY=0`; `PI_SKIP_VERSION_CHECK=1`; `HARNESS_EXTRA_MODELS` / `HARNESS_VISION_CONFIG` / `HARNESS_VISION_UPLOADS` passed to the agent child process.
 
 ## 11. Skills System
 
 Skills are loaded by the Pi runtime (TACode does not ship a separate loader); this repository only provides UI and filesystem helpers:
 
-- **Scanning**: `src/main/skills-fs.ts` scans user-level (`~/.tether/skills`, `~/.agents/skills`) and project-level (`.agents/skills`, `.pi/skills`, requires trusting the project) roots; `app:list-skills` feeds the settings page.
+- **Scanning**: `src/main/skills-fs.ts` scans user-level (`~/.tacode/skills`, `~/.agents/skills`) and project-level (`.agents/skills`, `.pi/skills`, requires trusting the project) roots; `app:list-skills` feeds the settings page.
 - **Runtime commands**: the agent's `get_commands` returns commands with `source === "skill"`; `src/shared/skills.ts` `parseSkillCommands` produces `AgentSkillCommand[]` (name / description / path) for `/` completion and the settings page.
 - **Input normalization**: `skillUserDisplay` collapses `/skill:xxx` or expanded `<skill>` blocks into one command; `sameUserSkillTurn` is used for message deduplication.
-- **Built-in project skills**: `.agents/skills/` contains `init-long-run` / `continue-long-run` / `plan-then-act` / `tether-ui` (UI look-and-feel). Skill files must include frontmatter `name` + `description`; missing either means the skill is not loaded.
+- **Built-in project skills**: `.agents/skills/` contains `init-long-run` / `continue-long-run` / `plan-then-act` / `tacode-ui` (UI look-and-feel). Skill files must include frontmatter `name` + `description`; missing either means the skill is not loaded.
 - Skill manifest files are additionally collected into the workspace file tree by `addSkillManifests` in `listWorkspaceFiles`, so the `@` picker can reference them.
 
 ## 12. Build & Packaging
@@ -444,19 +444,19 @@ Follow the four steps in §4.2. In main-process handlers, validate every value c
 ### 14.3 Adding a UI Component / Changing the Look-and-Feel
 
 - Put components in `src/renderer/ui.tsx` (or split into a new file); styles go into `styles.css`.
-- First read `.agents/skills/tether-ui/SKILL.md` and `tokens.md` to keep color, radius, and spacing tokens consistent.
+- First read `.agents/skills/tacode-ui/SKILL.md` and `tokens.md` to keep color, radius, and spacing tokens consistent.
 - Visual acceptance: per repo convention, do **not** use Chrome/headless/screenshots for visual acceptance (unless the user explicitly asked for screenshots this turn); writing the HTML/CSS is enough.
 
 ### 14.4 Adding an Agent Tool or RPC Command
 
-1. Commands: add to the `ALLOWED_AGENT_COMMANDS` whitelist; `agent:command` arguments pass through to agent-core.
+1. Commands: add to the `ALLOWED_AGENT_COMMANDS` whitelist; `agent:command` arguments pass through to the agent process.
 2. Events: tool execution events are merged by `toolFromEvent` / `upsertLastAssistantTool` in `conversation.ts`; new tool kinds need branches in `toolTitle` / `traceRows` / `liveStatus` for titles and icons.
 3. If the new tool produces file changes, make sure `collectFileChanges` can parse them (patch args / details.files / output regex).
 4. Add long-running requests to the `LONG_RUNNING_REQUESTS` timeout set.
 
 ### 14.5 Changing the Session Persistence Format
 
-First look at Pi's session entry types (`SessionEntryLike`: `message` / `custom` entries); the parsing functions in `conversation.ts` and `lastTurnRestoreFiles` depend on the `tether-checkpoint` / `tether-checkpoint-undone` customType conventions — keep them in sync.
+First look at Pi's session entry types (`SessionEntryLike`: `message` / `custom` entries); the parsing functions in `conversation.ts` and `lastTurnRestoreFiles` depend on the `tacode-checkpoint` / `tacode-checkpoint-undone` customType conventions — keep them in sync.
 
 ## 15. Engineering Conventions (AGENTS.md Summary)
 
@@ -474,8 +474,8 @@ First look at Pi's session entry types (`SessionEntryLike`: `message` / `custom`
 | Agent hangs without response | Check `AgentHost` request timeouts (45s normal / 30min long); the child's stderr is appended to error messages |
 | Tests fail with `kill EPERM` | The sandbox restricts tinypool from cleaning up child processes; use `vitest run --pool=threads` |
 | Skills not loading | Frontmatter missing `name`/`description`; project skills need a trusted project; the path must be under a standard skill root |
-| /undo has no effect | The turn made no write-type tool calls; or the checkpoint was already undone; `get_entries` should show a `tether-checkpoint` entry |
-| Opening legacy session data | First launch tries to rename `DSHarness` to `Tether`; if migration is unavailable the old directory stays usable only by older builds |
+| /undo has no effect | The turn made no write-type tool calls; or the checkpoint was already undone; `get_entries` should show a `tacode-checkpoint` entry |
+| Opening legacy session data | First launch renames `Tether` / `DSHarness` to `TACode`; if migration is unavailable the old directory stays usable only by older builds |
 
 ---
 

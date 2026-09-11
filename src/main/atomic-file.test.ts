@@ -15,7 +15,7 @@ import {
 let dir: string;
 
 beforeEach(async () => {
-  dir = await fsp.mkdtemp(path.join(os.tmpdir(), "tether-atomic-"));
+  dir = await fsp.mkdtemp(path.join(os.tmpdir(), "tacode-atomic-"));
 });
 
 afterEach(async () => {
@@ -173,8 +173,8 @@ describe("config recovery notices", () => {
 
 describe("protectedMessageFileName", () => {
   it("is stable and filesystem-safe", () => {
-    const name = protectedMessageFileName("/Users/a/.tether/sessions/abc 123.jsonl");
-    expect(name).toBe(protectedMessageFileName("/Users/a/.tether/sessions/abc 123.jsonl"));
+    const name = protectedMessageFileName("/Users/a/.tacode/sessions/abc 123.jsonl");
+    expect(name).toBe(protectedMessageFileName("/Users/a/.tacode/sessions/abc 123.jsonl"));
     expect(name).toMatch(/^[A-Za-z0-9._-]+\.jsonl$/);
   });
 

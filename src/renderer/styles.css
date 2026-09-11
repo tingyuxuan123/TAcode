@@ -5135,8 +5135,9 @@ textarea::selection,
 }
 
 .settings {
+  --settings-frame-height: min(640px, 90vh);
   width: min(880px, 94vw);
-  height: min(640px, 90vh);
+  height: var(--settings-frame-height);
   min-height: 0;
   background: var(--surface);
   border-radius: 16px;
@@ -6851,9 +6852,11 @@ kbd {
   display: flex;
   flex-direction: column;
   width: min(880px, 94vw);
-  max-height: 85vh;
+  /* 与设置弹窗同宽同高、且都相对视口居中，所以「添加 AI 服务」会正好覆盖外层设置弹窗；
+     高度取设置弹窗的框架高度变量，避免两处写死的尺寸再次走偏。 */
+  height: var(--settings-frame-height, min(640px, 90vh));
   background: var(--surface);
-  border-radius: 14px;
+  border-radius: 16px;
   box-shadow: var(--shadow-overlay);
   overflow: hidden;
 }

@@ -1,9 +1,9 @@
 ---
-name: tether-ui
-description: Applies Tether’s paper + ink visual language (tokens, cards, chips, buttons, composer, approvals) for the desktop workbench and marketing site. Use when adding or restyling UI, CSS, landing pages, or cloning this look.
+name: tacode-ui
+description: Applies TACode’s paper + ink visual language (tokens, cards, chips, buttons, composer, approvals) for the desktop workbench and marketing site. Use when adding or restyling UI, CSS, landing pages, or cloning this look.
 ---
 
-# Tether UI
+# TACode UI
 
 浅色纸面 + 墨色字。桌面工作台和营销站共用这一套，不要做成 IDE、深色终端或 Discord。唯一例外是代码屏（见下）。
 
@@ -60,10 +60,10 @@ description: Applies Tether’s paper + ink visual language (tokens, cards, chip
 | 代码块 CodeBlock | 浅色头部栏（凹槽底、语言名/「代码」+ 复制）+ 固定深色代码屏 `--code-screen`，配 one-dark-pro |
 | Logo | 开口绳子 path；站点可用 `--brand`，桌面跟顶栏墨色 |
 
-工作台壳（侧栏 252、对话贴底、权限四档）只约束 **tether-ai**。营销站用 section / card / header，不要硬抄 Electron 壳。
+工作台壳（侧栏 252、对话贴底、权限四档）只约束**本仓库的桌面壳**。营销站用 section / card / header，不要硬抄 Electron 壳。
 
-克隆同气质产品：抄色板和上表组件，不要抄 Tether 商标与绳子 Logo。
+克隆同气质产品：抄色板和上表组件，不要抄 TACode 商标与绳子 Logo。
 
 ## 桌面改 UI 时
 
-`src/renderer/styles.css`、`ui.tsx`、`App.tsx`、`src/shared/i18n.ts`。站点：`tether-site/src/styles.css` 与 `src/components/`。
+`src/renderer/styles.css`、`ui.tsx`、`App.tsx`、`src/shared/i18n.ts`。站点（不在本仓库内）：营销站仓库的 `src/styles.css` 与 `src/components/`。

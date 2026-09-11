@@ -51,7 +51,7 @@ describe.each([
     ["anthropic_messages", "anthropic-messages", "/gateway/v1/messages", "x-api-key", "!literal-service-key"],
     ["google_generative_ai", "google-generative-ai", "/gateway/v1/models/private-model:streamGenerateContent?alt=sse", "x-goog-api-key", "!literal-service-key"],
   ] as const)("runs %s through the real RPC worker with isolated service credentials", async (style, api, endpoint, authHeader, expectedAuth) => {
-    const dir = await mkdtemp(join(tmpdir(), "tether-provider-runtime-"));
+    const dir = await mkdtemp(join(tmpdir(), "tacode-provider-runtime-"));
     const calls: Array<{ url?: string; auth?: string; body: Record<string, unknown> }> = [];
     const server = createServer(async (request, response) => {
       let body = "";
@@ -67,7 +67,7 @@ describe.each([
     await writeFile(join(home, "settings.json"), JSON.stringify({ credentialStore: "file" }));
     const storedAuth = JSON.stringify(globalKey ? { openai: { type: "api_key", key: globalKey } } : {});
     await writeFile(join(home, "auth.json"), storedAuth);
-    vi.stubEnv("TETHER_HOME", home);
+    vi.stubEnv("TACODE_HOME", home);
     vi.stubEnv("OPENAI_API_KEY", globalKey);
     const config = serviceRuntimeConfig({ id: "test", name: "Isolated gateway", vendorKey: "custom", apiStyle: style,
       baseUrl: `http://127.0.0.1:${address.port}/gateway/v1`, models: [{ id: "private-model", contextWindow: 32000, maxTokens: 1024, supportsImages: true }],
@@ -109,11 +109,11 @@ describe.each([
 });
 
 it("still requires credentials for the built-in OpenAI provider", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tether-builtin-auth-"));
+  const dir = await mkdtemp(join(tmpdir(), "tacode-builtin-auth-"));
   const host = new AgentHost(() => {}, () => {});
   try {
     await writeFile(join(dir, "settings.json"), JSON.stringify({ credentialStore: "file" }));
-    vi.stubEnv("TETHER_HOME", dir);
+    vi.stubEnv("TACODE_HOME", dir);
     vi.stubEnv("OPENAI_API_KEY", undefined);
     await expect(host.start({ cwd: dir, provider: "openai", permission: "plan", sandbox: "read-only" }))
       .rejects.toThrow("OpenAI API is not configured");

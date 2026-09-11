@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { Bot, Check, Download, Info, PanelLeftClose, PanelLeftOpen, Target, X } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentSessionStats, ExtensionUiRequest, PermissionMode } from "../shared/types";
 import { workspacePreviewUrl } from "../shared/preview";
@@ -40,7 +40,7 @@ import { isFilePath } from "./file-path";
 import { highlightToTokens, isHighlighterReady, onHighlighterReady } from "./shiki";
 
 const MAX_UPLOAD_IMAGES = 4;
-const PATH_MIME = "text/tether-path";
+const PATH_MIME = "text/tacode-path";
 // 只移动面板标签栏；网页内容仍留在原组件树中，保留 guest 与页面状态。
 const PanelTabHeaderContext = createContext<HTMLElement | null>(null);
 let treeDragPath = "";
@@ -232,7 +232,7 @@ export function SidebarNav({
     <aside className={collapsed ? "sidebar is-collapsed" : "sidebar"}>
       <header className="sidebar-titlebar">
         <div className="sidebar-brand">
-          <img className="brand-mark" src={logo} alt="" width={24} height={14} />
+          <img className="brand-mark" src={logo} alt="" width={24} height={15} />
           <strong>TACode</strong>
         </div>
         <button
@@ -709,7 +709,7 @@ export function Thinking({
   return (
     <div className={live ? (open ? "trace live open" : "trace live") : open ? "trace open" : "trace"}>
       <button type="button" className="trace-toggle" onClick={() => expandable && setOpen((value) => !value)}>
-        {live ? <Dots /> : <img className="trace-logo" src={logo} alt="" width={18} height={10} />}
+        {live ? <Dots /> : <img className="trace-logo" src={logo} alt="" width={18} height={11} />}
         <span className={live ? "shimmer trace-label" : "trace-label"}>
           {header}
         </span>
@@ -1333,45 +1333,53 @@ function copyMarkdownPlain(event: { preventDefault(): void; clipboardData: DataT
 }
 
 export function Markdown({ children, streaming }: { children: string; streaming?: boolean }) {
-  const source = compactFencedCode(
-    stripEmptyMarkdown(repairMarkdownTables(streaming ? closeOpenFences(children) : children)),
+  const source = useMemo(
+    () => compactFencedCode(stripEmptyMarkdown(repairMarkdownTables(streaming ? closeOpenFences(children) : children))),
+    [children, streaming],
   );
-  if (!source) return null;
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex, rehypeRaw]}
-      components={{
-        pre({ children }) {
-          const plain = extractNodeText(children).trim();
-          if (!plain) return null;
-          return <CodeBlock>{children}</CodeBlock>;
-        },
-        code({ children, className, ...props }) {
-          // 块级代码（带 language- 前缀）：交给 pre → CodeBlock 渲染，这里不再处理。
-          if (className) return <code className={className} {...props}>{children}</code>;
-          const plain = extractNodeText(children).trim();
-          if (!plain) return null;
-          // 行内 code 若是文件路径，渲染成可点击的文件 chip。
-          if (isFilePath(plain)) return <FilePathChip filePath={plain} />;
-          return <code {...props}>{children}</code>;
-        },
-        // 宽表格改为横向滚动容器：否则长内容列会把短标签列压到每行只剩一个字。
-        table({ node: _node, children, ...props }) {
-          return <div className="md-table-wrap"><table {...props}>{children}</table></div>;
-        },
-        th({ node: _node, children, ...props }) {
-          return <th {...tightCellProps(children, props)}>{children}</th>;
-        },
-        td({ node: _node, children, ...props }) {
-          return <td {...tightCellProps(children, props)}>{children}</td>;
-        },
-      }}
-    >
-      {source}
-    </ReactMarkdown>
-  );
+  // Element 级 memo：文本没变时复用同一个 React 元素，父组件因其他状态重渲染时整棵子树直接 bail out。
+  const element = useMemo(() => (source
+    ? <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} rehypePlugins={MARKDOWN_REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS}>{source}</ReactMarkdown>
+    : null), [source]);
+  return element;
 }
+
+/**
+ * 插件数组与自定义组件必须是**稳定引用**。
+ *
+ * `hast-util-to-jsx-runtime` 用 `components[tagName]` 直接当元素类型：内联箭头函数每
+ * 次渲染都是新类型，React 会判定「换了类型」而卸载并重建整棵子树。流式期间该函数每
+ * 帧执行一次，于是每个动画帧都在拆掉再重建 Markdown 子树（连带 CodeBlock 的高亮状态
+ * 与滚动容器的度量），这正是会话运行中渲染进程满载的主因。
+ */
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
+const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeRaw];
+const MARKDOWN_COMPONENTS: Components = {
+  pre({ children }) {
+    const plain = extractNodeText(children).trim();
+    if (!plain) return null;
+    return <CodeBlock>{children}</CodeBlock>;
+  },
+  code({ children, className, ...props }) {
+    // 块级代码（带 language- 前缀）：交给 pre → CodeBlock 渲染，这里不再处理。
+    if (className) return <code className={className} {...props}>{children}</code>;
+    const plain = extractNodeText(children).trim();
+    if (!plain) return null;
+    // 行内 code 若是文件路径，渲染成可点击的文件 chip。
+    if (isFilePath(plain)) return <FilePathChip filePath={plain} />;
+    return <code {...props}>{children}</code>;
+  },
+  // 宽表格改为横向滚动容器：否则长内容列会把短标签列压到每行只剩一个字。
+  table({ node: _node, children, ...props }) {
+    return <div className="md-table-wrap"><table {...props}>{children}</table></div>;
+  },
+  th({ node: _node, children, ...props }) {
+    return <th {...tightCellProps(children, props)}>{children}</th>;
+  },
+  td({ node: _node, children, ...props }) {
+    return <td {...tightCellProps(children, props)}>{children}</td>;
+  },
+};
 
 /**
  * 给「短标签」单元格加 `is-tight`（CSS 侧 `white-space: nowrap`）。
@@ -3767,7 +3775,7 @@ export function Login({
             {pane === "about" && (
               <div className="about-body">
                 <div className="about-hero">
-                  <img src={logo} alt="" className="about-logo" width={40} height={23} />
+                  <img src={logo} alt="" className="about-logo" width={40} height={25} />
                   <h3>
                     {t("about.title")}
                     <span className="about-version">v{appVersion || "0.1.3"}</span>
@@ -3776,9 +3784,9 @@ export function Login({
                   <button
                     type="button"
                     className="about-site"
-                    onClick={() => void window.harness.app.openExternal("https://tether-code.xyz/")}
+                    onClick={() => void window.harness.app.openExternal("https://github.com/tingyuxuan123/TAcode")}
                   >
-                    tether-code.xyz
+                    github.com/tingyuxuan123/TAcode
                   </button>
                 </div>
                 <p className="about-intro">{t("about.intro")}</p>
@@ -3801,7 +3809,7 @@ export function Login({
                 <button
                   type="button"
                   className="ghost"
-                  onClick={() => void window.harness.app.openExternal("https://github.com/tt-11-dd/tether-ai/issues")}
+                  onClick={() => void window.harness.app.openExternal("https://github.com/tingyuxuan123/TAcode/issues")}
                 >
                   <Icon path="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" size={14} />
                   <span>{t("about.feedback")}</span>
@@ -3809,7 +3817,7 @@ export function Login({
                 <button
                   type="button"
                   className="ghost"
-                  onClick={() => void window.harness.app.openExternal("https://tether-code.xyz/")}
+                  onClick={() => void window.harness.app.openExternal("https://github.com/tingyuxuan123/TAcode")}
                 >
                   <Icon path="M10 13a5 5 0 0 0 7.54.54l1.42-1.42a5 5 0 0 0-7.07-7.07L10.5 6.5M14 11a5 5 0 0 0-7.54-.54L5.04 11.88a5 5 0 0 0 7.07 7.07L13.5 17.5" size={14} />
                   <span>{t("about.site")}</span>

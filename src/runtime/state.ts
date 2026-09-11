@@ -2,7 +2,7 @@
  * TACode Runtime 会话索引（SQLite）。
  *
  * JSONL 转录是唯一事实来源；SQLite 只是索引/运行时状态层，用于侧边栏列表、
- * 置顶与归档。表结构与 Tether 时代一致，因此可直接复用历史 `state.sqlite`。
+ * 置顶与归档。表结构与改名前的版本一致，因此可直接复用历史 `state.sqlite`。
  */
 
 import fsSync from "node:fs";

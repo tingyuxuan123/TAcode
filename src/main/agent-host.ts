@@ -286,8 +286,8 @@ export class AgentHost {
           // The CLI checks built-in auth before loading the service extension.
           // Bootstrap only this worker; the extension supplies the real credential.
           OPENAI_API_KEY: "desktop-session-key",
-          TETHER_DESKTOP_PROVIDER_CONFIG: JSON.stringify(options.desktopProvider.config),
-          TETHER_DESKTOP_PROVIDER_KEY: options.desktopProvider.apiKey,
+          TACODE_DESKTOP_PROVIDER_CONFIG: JSON.stringify(options.desktopProvider.config),
+          TACODE_DESKTOP_PROVIDER_KEY: options.desktopProvider.apiKey,
         } : {}),
         ...(options.extraModels?.length
           ? { HARNESS_EXTRA_MODELS: options.extraModels.join(",") }
@@ -295,7 +295,7 @@ export class AgentHost {
         ...(options.visionConfig ? { HARNESS_VISION_CONFIG: options.visionConfig } : {}),
         ...(options.visionUploads ? { HARNESS_VISION_UPLOADS: options.visionUploads } : {}),
         ...(options.writableRoots?.length
-          ? { TETHER_WRITABLE_ROOTS: options.writableRoots.join(path.delimiter) }
+          ? { TACODE_WRITABLE_ROOTS: options.writableRoots.join(path.delimiter) }
           : {}),
         ...(options.delegationDepth !== undefined
           ? { SUBAGENT_DEPTH: String(options.delegationDepth) }
@@ -315,7 +315,7 @@ export class AgentHost {
       if (this.child !== child || !message || typeof message !== "object") return;
       const request = message as
         | BrowserRequest
-        | { type: "tether:browser:cancel"; id: string }
+        | { type: "tacode:browser:cancel"; id: string }
         | DelegationBridgeRequest;
       if (request.type === DELEGATION_BRIDGE_REQUEST && typeof request.requestId === "string") {
         const bridgeRequest = {
@@ -349,14 +349,14 @@ export class AgentHost {
           );
         return;
       }
-      const browserRequest = request as BrowserRequest | { type: "tether:browser:cancel"; id: string };
+      const browserRequest = request as BrowserRequest | { type: "tacode:browser:cancel"; id: string };
       if (typeof browserRequest.id !== "string") return;
-      if (browserRequest.type === "tether:browser:cancel") { this.browserRequests.get(browserRequest.id)?.abort(); return; }
-      if (browserRequest.type !== "tether:browser:request" || !this.executeBrowser || this.browserRequests.has(browserRequest.id)) return;
+      if (browserRequest.type === "tacode:browser:cancel") { this.browserRequests.get(browserRequest.id)?.abort(); return; }
+      if (browserRequest.type !== "tacode:browser:request" || !this.executeBrowser || this.browserRequests.has(browserRequest.id)) return;
       const controller = new AbortController();
       this.browserRequests.set(browserRequest.id, controller);
       const reply = (payload: object) => {
-        if (this.child === child && child.connected) child.send({ type: "tether:browser:response", id: browserRequest.id, ...payload }, () => {});
+        if (this.child === child && child.connected) child.send({ type: "tacode:browser:response", id: browserRequest.id, ...payload }, () => {});
       };
       Promise.resolve().then(() => this.executeBrowser!(browserRequest.tool, browserRequest.params, controller.signal))
         .then((result) => reply({ result }), (error) => reply({ error: error instanceof Error ? error.message : String(error) }))

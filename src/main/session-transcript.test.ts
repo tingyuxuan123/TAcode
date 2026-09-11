@@ -33,7 +33,7 @@ describe("assertReadableSessionPath", () => {
   });
 
   it("拒绝越界路径、非 jsonl 与畸形输入", () => {
-    // 子会话在 ~/.tether/sessions，但绝不能借这条通道读任意文件。
+    // 子会话在 ~/.tacode/sessions，但绝不能借这条通道读任意文件。
     expect(() => assertReadableSessionPath(sessions, "/etc/passwd")).toThrow();
     expect(() => assertReadableSessionPath(sessions, `${sessions}/../../etc/passwd.jsonl`)).toThrow();
     expect(() => assertReadableSessionPath(sessions, `${sessions}/delegation-1.json`)).toThrow();

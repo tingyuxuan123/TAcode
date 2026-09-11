@@ -161,11 +161,11 @@ describe("visionAgentPrompt", () => {
 });
 
 describe("restoring a stored handoff", () => {
-  const stored = visionAgentPrompt("这是什么", ["/Users/me/Library/Application Support/Tether/uploads/1786-1.png"]);
+  const stored = visionAgentPrompt("这是什么", ["/Users/me/Library/Application Support/TACode/uploads/1786-1.png"]);
 
   it("recovers the staged upload paths and their preview urls", () => {
     expect(visionHandoffPaths(stored)).toEqual([
-      "/Users/me/Library/Application Support/Tether/uploads/1786-1.png",
+      "/Users/me/Library/Application Support/TACode/uploads/1786-1.png",
     ]);
     expect(visionUploadUrl(stored.split("\n").at(-2)!.slice(2))).toBe("harness-preview://uploads/1786-1.png");
     expect(visionHandoffPaths("看看 @a.png")).toEqual([]);

@@ -18,10 +18,10 @@ import type { BrowserRestorePayload, BrowserTabSnapshot } from "../src/shared/ty
 async function smoke() {
   app.on("window-all-closed", () => {});
   const root = process.cwd();
-  const profile = await mkdtemp(path.join(tmpdir(), "tether-workbench-smoke-"));
+  const profile = await mkdtemp(path.join(tmpdir(), "tacode-workbench-smoke-"));
   app.setPath("userData", profile);
   const preload = path.join(profile, "preload.cjs");
-  await writeFile(preload, `require(${JSON.stringify(path.join(root, "dist-electron/preload/index.cjs"))});\nlocalStorage.setItem('tether.browserHomepage', JSON.stringify('about:blank'));`);
+  await writeFile(preload, `require(${JSON.stringify(path.join(root, "dist-electron/preload/index.cjs"))});\nlocalStorage.setItem('tacode.browserHomepage', JSON.stringify('about:blank'));`);
   const server = createServer((request, response) => {
     response.setHeader("content-type", "text/html; charset=utf-8");
     const title = request.url === "/second" ? "页面乙" : request.url === "/third" ? "页面丙" : "页面甲";
@@ -105,9 +105,9 @@ async function smoke() {
       main.webContents.send("browser:restore-to-main-broadcast", payload);
       BrowserWindow.fromWebContents(event.sender)?.close();
     });
-    if (!process.env.TETHER_COMPOSER_ONLY) {
+    if (!process.env.TACODE_COMPOSER_ONLY) {
     main = createWindow();
-    await main.loadFile(process.env.TETHER_WORKBENCH_FIXTURE!);
+    await main.loadFile(process.env.TACODE_WORKBENCH_FIXTURE!);
     await wait(async () => (await labels()).includes("审查"));
     const inlineTabHeight = await host("document.querySelector('.inspect-tabs').getBoundingClientRect().height");
 
@@ -178,25 +178,25 @@ async function smoke() {
     assert(await host("(() => {const r=document.querySelector('.inspect-tab-add').getBoundingClientRect();return r.right<=innerWidth&&r.width>0})()"));
     assert(await host("(() => {const label=document.querySelector('.inspect-tab.active .inspect-tab-label');return label.scrollWidth>label.clientWidth&&label.closest('button').title.includes(label.textContent)})()"));
     await host("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
-    if (process.env.TETHER_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "single-tabs-electron.png"), (await main.webContents.capturePage()).toPNG());
+    if (process.env.TACODE_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TACODE_BROWSER_ARTIFACTS, "single-tabs-electron.png"), (await main.webContents.capturePage()).toPNG());
     console.log("Workbench smoke passed: one tab bar, titles, Agent/manual/link creation, native background click, preserved input/guest, close, committed URLs, detached multi-page restore and narrow tab overflow.");
 
     stage = "actual Chat panel expands beyond 480px and adapts to its container";
     main = createWindow(true);
     main.setSize(1440, 620);
-    await main.loadFile(process.env.TETHER_WORKBENCH_FIXTURE!, { query: { chat: "true" } });
+    await main.loadFile(process.env.TACODE_WORKBENCH_FIXTURE!, { query: { chat: "true" } });
     await wait(async () => (await labels()).includes("审查"));
     await run("browser_new_tab", { url });
     stage = "tabs occupy the window header and release vertical content space";
     await verifyWorkbenchHeader(main, inlineTabHeight);
     stage = "adaptive widths and automatic sidebar collapse with top header";
     const expandedScreenshot = await verifyAdaptivePanelWidth(main);
-    if (process.env.TETHER_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "expanded-panel-electron.png"), expandedScreenshot);
+    if (process.env.TACODE_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TACODE_BROWSER_ARTIFACTS, "expanded-panel-electron.png"), expandedScreenshot);
 
     stage = "collapsible sidebar, native icon actions and wider browser";
     await run("browser_new_tab", { url });
     const sidebarScreenshot = await verifySidebar(main);
-    if (process.env.TETHER_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "collapsed-sidebar-electron.png"), sidebarScreenshot);
+    if (process.env.TACODE_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TACODE_BROWSER_ARTIFACTS, "collapsed-sidebar-electron.png"), sidebarScreenshot);
 
     stage = "subagent session opens as a side-panel tab and the main conversation stays put";
     await host("document.querySelector('[data-fixture-child-session] .session-row').click()");
@@ -267,9 +267,9 @@ async function smoke() {
     assert(layout.listIndent <= 22, `list indent too deep: ${JSON.stringify(layout)}`);
     assert(layout.chipFont !== null && layout.chipFont >= 11, `file chip too small: ${JSON.stringify(layout)}`);
     assert(layout.codeBg !== null && layout.codeBg !== "rgba(0, 0, 0, 0)", `inline code must keep a background: ${JSON.stringify(layout)}`);
-    if (process.env.TETHER_BROWSER_ARTIFACTS) {
-      await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "report-layout.json"), `${JSON.stringify(layout, null, 2)}\n`);
-      await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "report-layout-electron.png"), (await main.webContents.capturePage()).toPNG());
+    if (process.env.TACODE_BROWSER_ARTIFACTS) {
+      await writeFile(path.join(process.env.TACODE_BROWSER_ARTIFACTS, "report-layout.json"), `${JSON.stringify(layout, null, 2)}\n`);
+      await writeFile(path.join(process.env.TACODE_BROWSER_ARTIFACTS, "report-layout-electron.png"), (await main.webContents.capturePage()).toPNG());
     }
     console.log(`Report layout passed: ${layout.tightCount} short labels on one line each, table fits, body ${layout.fontSize}px/${layout.lineHeight}px, list indent ${layout.listIndent}px, chip ${layout.chipFont}px.`);
     console.log("Subagent panel passed: sidebar row and card context open one read-only transcript tab per delegation, main conversation untouched.");
@@ -294,11 +294,11 @@ async function smoke() {
     stage = "responsive composer controls and all options in the overflow menu";
     main = createWindow(true);
     main.setSize(900, 620);
-    await main.loadFile(process.env.TETHER_WORKBENCH_FIXTURE!, { query: { composer: "true" } });
+    await main.loadFile(process.env.TACODE_WORKBENCH_FIXTURE!, { query: { composer: "true" } });
     const composerScreenshots = await verifyComposerToolbar(main);
-    if (process.env.TETHER_BROWSER_ARTIFACTS) {
-      await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "composer-icons-electron.png"), composerScreenshots.icons);
-      await writeFile(path.join(process.env.TETHER_BROWSER_ARTIFACTS, "composer-menu-electron.png"), composerScreenshots.menu);
+    if (process.env.TACODE_BROWSER_ARTIFACTS) {
+      await writeFile(path.join(process.env.TACODE_BROWSER_ARTIFACTS, "composer-icons-electron.png"), composerScreenshots.icons);
+      await writeFile(path.join(process.env.TACODE_BROWSER_ARTIFACTS, "composer-menu-electron.png"), composerScreenshots.menu);
     }
   } catch (error) {
     console.error(`Workbench smoke failed after ${stage}`, error);

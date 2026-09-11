@@ -128,7 +128,7 @@ const setup = (): void => {
       return;
     }
     const passwordInput = findPasswordInput();
-    if (passwordInput && !passwordInput.value && passwordInput.dataset.tetherFilled !== "1") {
+    if (passwordInput && !passwordInput.value && passwordInput.dataset.tacodeFilled !== "1") {
       void tryAutofill();
     }
   }, 800);
@@ -186,7 +186,7 @@ const tryAutofill = async (): Promise<void> => {
   const origin = getOrigin();
   if (!isHttpOrigin(origin)) return;
   const passwordInput = findPasswordInput();
-  if (!passwordInput || passwordInput.value || passwordInput.dataset.tetherFilled === "1") {
+  if (!passwordInput || passwordInput.value || passwordInput.dataset.tacodeFilled === "1") {
     return;
   }
   let credentials: { username: string; password: string } | null = null;
@@ -205,7 +205,7 @@ const tryAutofill = async (): Promise<void> => {
     usernameInput.dispatchEvent(new Event("input", { bubbles: true }));
   }
   passwordInput.value = credentials.password;
-  passwordInput.dataset.tetherFilled = "1";
+  passwordInput.dataset.tacodeFilled = "1";
   passwordInput.dispatchEvent(new Event("input", { bubbles: true }));
   passwordInput.dispatchEvent(new Event("change", { bubbles: true }));
 };
@@ -230,7 +230,7 @@ const trySave = async (passwordInput: HTMLInputElement): Promise<void> => {
   }
 };
 
-contextBridge.exposeInMainWorld("tetherPasswordBridge", {
+contextBridge.exposeInMainWorld("tacodePasswordBridge", {
   /** 查询当前页面 origin 已保存的凭据（供页面脚本手动触发填充）。 */
   find: (): Promise<{ username: string; password: string } | null> =>
     ipcRenderer.invoke("browser-passwords:find", { origin: getOrigin() }),

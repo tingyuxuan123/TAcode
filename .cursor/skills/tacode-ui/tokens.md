@@ -1,6 +1,6 @@
-# Tether tokens
+# TACode tokens
 
-Canonical hex. Desktop: `tether-ai/src/renderer/styles.css` `:root`. Site aliases in `tether-site/src/styles.css`.
+Canonical hex. Desktop: `src/renderer/styles.css` `:root` (this repo). Site aliases live in the marketing-site repo.
 
 ## Color
 

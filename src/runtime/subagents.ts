@@ -2,8 +2,8 @@
  * 子代理定义的发现与持久化（运行时/主进程共用）。
  *
  * 层次：内置定义（explorer / code-reviewer / test-runner / fixer）+ 用户文档
- * `~/.tether/subagents/*.md`（按名覆盖内置）。启用状态单独存
- * `~/.tether/subagents.json`，不写进 Markdown。
+ * `~/.tacode/subagents/*.md`（按名覆盖内置）。启用状态单独存
+ * `~/.tacode/subagents.json`，不写进 Markdown。
  */
 
 import fsp from "node:fs/promises";

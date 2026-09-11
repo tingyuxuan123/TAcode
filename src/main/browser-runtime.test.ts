@@ -11,7 +11,7 @@ import type { AgentEvent } from "../shared/types";
 afterEach(() => vi.unstubAllEnvs());
 
 it.each([false, true])("advertises and executes browser tools, recovering from an external opener: %s", async (attemptExternal) => {
-  const dir = await mkdtemp(join(tmpdir(), "tether-browser-runtime-"));
+  const dir = await mkdtemp(join(tmpdir(), "tacode-browser-runtime-"));
   const fakeOpen = join(dir, "open");
   await writeFile(fakeOpen, "#!/bin/sh\nprintf invoked > opener-was-run\n", { mode: 0o755 });
   const calls: Record<string, unknown>[] = [];
@@ -40,7 +40,7 @@ it.each([false, true])("advertises and executes browser tools, recovering from a
   await mkdir(runtimeHome);
   await writeFile(join(runtimeHome, "settings.json"), JSON.stringify({ credentialStore: "file" }));
   await writeFile(join(runtimeHome, "auth.json"), "{}");
-  vi.stubEnv("TETHER_HOME", runtimeHome);
+  vi.stubEnv("TACODE_HOME", runtimeHome);
   const config = serviceRuntimeConfig({ id: "test", name: "Local browser fixture", vendorKey: "custom", apiStyle: "chat_completions", baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: "fixture", contextWindow: 32000, maxTokens: 1024 }], isEnabled: true, createdAt: "", updatedAt: "" });
   const events: AgentEvent[] = [];
   const errors: string[] = [];
