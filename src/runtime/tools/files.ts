@@ -9,29 +9,73 @@ import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import fg from "fast-glob";
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { runProcess } from "./process.js";
+import {
+  DEFAULT_IGNORES,
+  MAX_SEARCH_CONTEXT,
+  assertSafeGlob,
+  searchWorkspace,
+  type SearchDeps,
+  type SearchOutcome,
+} from "./search.js";
 import type { Workspace } from "./workspace.js";
 
 const MODEL_TEXT_LIMIT = 6_000;
-const DEFAULT_IGNORES = [
-  "**/.git/**",
-  "**/node_modules/**",
-  "**/dist/**",
-  "**/build/**",
-  "**/coverage/**",
-  "**/.next/**",
-  "**/.tacode/**",
-];
+/** 搜索结果按行组织、单行较短，且已有 limit/context 两道闸门，给比 read_file 更宽的预算。 */
+const SEARCH_TEXT_LIMIT = 20_000;
+const DEFAULT_SEARCH_LIMIT = 200;
+const MAX_SEARCH_LIMIT = 1_000;
 
 export function clipForModel(text: string, limit = MODEL_TEXT_LIMIT): string {
   if (text.length <= limit) return text;
-  const head = text.slice(0, Math.floor(limit * 0.7));
-  const tail = text.slice(-Math.floor(limit * 0.25));
-  return `${head}\n\n... output truncated (${text.length - limit} chars) ...\n\n${tail}`;
+  const lines = text.split("\n");
+  const headBudget = Math.floor(limit * 0.7);
+  const tailBudget = Math.floor(limit * 0.25);
+  // 单行超长（压缩产物、单行 JSON）：只能按字符切，并明确说两个半段不相邻。
+  if (lines.length === 1) {
+    const head = text.slice(0, headBudget);
+    const tail = text.slice(-tailBudget);
+    return `${head}\n\n... output truncated (${text.length - head.length - tail.length} chars omitted from one long line; the two halves are not adjacent) ...\n\n${tail}`;
+  }
+  // 按行取头尾：不把任何一行切成半截，也报出到底丢了几行。
+  const headLines: string[] = [];
+  let headChars = 0;
+  for (const line of lines) {
+    if (headLines.length > 0 && headChars + line.length + 1 > headBudget) break;
+    headLines.push(line);
+    headChars += line.length + 1;
+  }
+  if (headLines.length >= lines.length) {
+    const head = headLines.join("\n").slice(0, limit);
+    return `${head}\n\n... output truncated (${text.length - head.length} chars omitted) ...`;
+  }
+  const tailLines: string[] = [];
+  let tailChars = 0;
+  for (let index = lines.length - 1; index >= headLines.length; index -= 1) {
+    const line = lines[index]!;
+    if (tailLines.length > 0 && tailChars + line.length + 1 > tailBudget) break;
+    tailLines.unshift(line);
+    tailChars += line.length + 1;
+  }
+  const headText = headLines.join("\n");
+  const tailText = tailLines.join("\n");
+  const omittedLines = lines.length - headLines.length - tailLines.length;
+  const omittedChars = text.length - headText.length - tailText.length;
+  return `${headText}\n\n... output truncated (${omittedLines} line(s) / ${omittedChars} chars omitted) ...\n\n${tailText}`;
 }
 
-export function createFileTools(workspace: Workspace) {
-  return [readFileTool(workspace), listFilesTool(workspace), searchFilesTool(workspace), writeFileTool(workspace), editFileTool(workspace)];
+export interface FileToolOptions {
+  /** 仅测试注入：用于强制走无 rg 的内置搜索路径。 */
+  search?: SearchDeps;
+}
+
+export function createFileTools(workspace: Workspace, options: FileToolOptions = {}) {
+  return [
+    readFileTool(workspace),
+    listFilesTool(workspace),
+    searchFilesTool(workspace, options.search ?? {}),
+    writeFileTool(workspace),
+    editFileTool(workspace),
+  ];
 }
 
 function readFileTool(workspace: Workspace) {
@@ -39,7 +83,7 @@ function readFileTool(workspace: Workspace) {
     name: "read_file",
     label: "Read file",
     description:
-      "Read a UTF-8 text file inside the workspace. Returns numbered lines. Use line_start and line_end for large files.",
+      "Read a UTF-8 text file inside the workspace. Returns numbered lines (the number is the real file line). The returned range is always contiguous; when it stops early, the tail note names the omitted lines.",
     parameters: Type.Object({
       path: Type.String({ description: "Workspace-relative file path" }),
       line_start: Type.Optional(Type.Integer({ minimum: 1, description: "First line, inclusive" })),
@@ -55,17 +99,34 @@ function readFileTool(workspace: Workspace) {
       const content = await fs.readFile(absolute, "utf8");
       const lines = content.split(/\r?\n/);
       const start = Math.max(1, params.line_start ?? 1);
-      const end = Math.min(lines.length, params.line_end ?? Math.min(lines.length, start + 499));
-      if (end < start) throw new Error(`Invalid line range: ${start}-${end}`);
-      const selected = lines
-        .slice(start - 1, end)
-        .map((line, index) => `${String(start + index).padStart(6)}\t${line}`)
-        .join("\n");
-      const suffix =
-        end < lines.length ? `\n\n[${lines.length - end} more lines; continue from line ${end + 1}]` : "";
-      const text = selected + suffix;
+      const requestedEnd = Math.min(lines.length, params.line_end ?? Math.min(lines.length, start + 499));
+      if (requestedEnd < start) throw new Error(`Invalid line range: ${start}-${requestedEnd}`);
+      // 按字符预算反推 end：一次读取永远返回**连续**区间，不制造中段空洞
+      // （旧实现是「先取 500 行再首尾按字符硬切」，中间几百行会被无声去掉）。
+      const rendered: string[] = [];
+      let remaining = MODEL_TEXT_LIMIT;
+      for (let line = start; line <= requestedEnd; line += 1) {
+        const entry = `${String(line).padStart(6)}\t${lines[line - 1] ?? ""}`;
+        const cost = entry.length + 1;
+        if (rendered.length > 0 && cost > remaining) break;
+        rendered.push(entry);
+        remaining -= cost;
+      }
+      const end = start + rendered.length - 1;
+      // 单行就超预算（压缩文件、单行 JSON）：只截断这一行，并说明两个半段不相邻。
+      let body = rendered.join("\n");
+      const oversizedSingleLine = rendered.length === 1 && remaining < 0;
+      if (oversizedSingleLine) body = clipForModel(body, MODEL_TEXT_LIMIT);
+      const truncationNote = oversizedSingleLine
+        ? `\n\n[line ${start} alone exceeds the ${MODEL_TEXT_LIMIT}-char read budget]`
+        : end < requestedEnd
+          ? `\n\n[${requestedEnd - end} more line(s) omitted (lines ${end + 1}–${requestedEnd}); continue from line ${end + 1} with line_start]`
+          : end < lines.length
+            ? `\n\n[${lines.length - end} more lines; continue from line ${end + 1}]`
+            : "";
+      const text = body + truncationNote;
       return {
-        content: [{ type: "text", text: clipForModel(text) }],
+        content: [{ type: "text", text }],
         details: { path: workspace.relative(absolute), start, end, totalLines: lines.length, text },
       };
     },
@@ -106,56 +167,67 @@ function listFilesTool(workspace: Workspace) {
   });
 }
 
-function searchFilesTool(workspace: Workspace) {
+function searchFilesTool(workspace: Workspace, deps: SearchDeps) {
   return defineTool({
     name: "search_files",
     label: "Search files",
     description:
-      "Search text in workspace files with ripgrep. Returns file paths, line numbers, and matching lines.",
+      "Search text in workspace files with ripgrep, falling back to a built-in scan when ripgrep is unavailable. " +
+      "Each match is one line `path:line:text`; context lines use the ripgrep convention `path-line-text`. " +
+      "`limit` caps the total number of matches across all files.",
     parameters: Type.Object({
       query: Type.String({ minLength: 1, description: "Literal text or regular expression" }),
       path: Type.Optional(Type.String({ description: "File or directory to search, default ." })),
       glob: Type.Optional(Type.String({ description: "Optional file glob, e.g. *.ts" })),
       literal: Type.Optional(Type.Boolean({ description: "Treat query as literal text" })),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000 })),
+      ignore_case: Type.Optional(Type.Boolean({ description: "Case-insensitive match" })),
+      context: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          maximum: MAX_SEARCH_CONTEXT,
+          description: "Surrounding lines to show per match, default 0",
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Integer({ minimum: 1, maximum: MAX_SEARCH_LIMIT, description: "Maximum matches in total, default 200" }),
+      ),
     }),
     async execute(_id, params, signal) {
       const searchPath = await workspace.resolve(params.path ?? ".");
-      const limit = params.limit ?? 200;
-      const args = [
-        "--line-number",
-        "--column",
-        "--color=never",
-        "--hidden",
-        "--max-count",
-        String(limit),
-        ...DEFAULT_IGNORES.flatMap((item) => ["--glob", `!${item}`]),
-      ];
-      if (params.literal ?? false) args.push("--fixed-strings");
-      if (params.glob) args.push("--glob", params.glob);
-      args.push("--", params.query, searchPath);
-      const result = await runProcess("rg", args, {
-        cwd: workspace.root,
-        signal,
-        timeoutMs: 30_000,
-        maxOutputBytes: 150_000,
-      });
-      if (result.exitCode !== 0 && result.exitCode !== 1) {
-        throw new Error(result.stderr || `ripgrep exited with code ${result.exitCode}`);
-      }
-      const output = result.stdout
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .slice(0, limit)
-        .map((line) => line.replaceAll(`${workspace.root}${path.sep}`, ""))
-        .join("\n");
-      const text = output || "(no matches)";
+      const limit = params.limit ?? DEFAULT_SEARCH_LIMIT;
+      const outcome = await searchWorkspace(
+        {
+          root: workspace.root,
+          searchPath,
+          query: params.query,
+          literal: params.literal ?? false,
+          ignoreCase: params.ignore_case ?? false,
+          context: params.context ?? 0,
+          ...(params.glob ? { glob: params.glob } : {}),
+          limit,
+          ...(signal ? { signal } : {}),
+        },
+        deps,
+      );
+      const text = formatSearchText(outcome);
       return {
-        content: [{ type: "text", text: clipForModel(text) }],
-        details: { truncated: result.truncated || output.split("\n").length >= limit, text },
+        content: [{ type: "text", text: clipForModel(text, SEARCH_TEXT_LIMIT) }],
+        details: {
+          truncated: outcome.truncated,
+          engine: outcome.engine,
+          matches: outcome.matches,
+          text,
+        },
       };
     },
   });
+}
+
+/** 命中行在前、说明在后，中间空行分隔，模型与界面都能直接读懂。 */
+function formatSearchText(outcome: SearchOutcome): string {
+  const body = outcome.lines.join("\n") || "(no matches)";
+  if (outcome.notes.length === 0) return body;
+  return `${body}\n\n${outcome.notes.join("\n")}`;
 }
 
 function writeFileTool(workspace: Workspace) {
@@ -234,18 +306,6 @@ function countOccurrences(content: string, needle: string): number {
     if (index === -1) return count;
     count += 1;
     offset = index + needle.length;
-  }
-}
-
-function assertSafeGlob(pattern: string): void {
-  const normalized = pattern.replaceAll("\\", "/");
-  if (
-    path.isAbsolute(pattern) ||
-    normalized === ".." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../")
-  ) {
-    throw new Error(`Glob escapes workspace: ${pattern}`);
   }
 }
 

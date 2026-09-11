@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { normalizeBrowserParams, validateBrowserParams } from "./browser-tools";
+import {
+  BROWSER_TOOL_NAMES,
+  browserGuidanceFor,
+  browserPlanModeBlock,
+  normalizeBrowserParams,
+  stripBrowserGuidance,
+  validateBrowserParams,
+} from "./browser-tools";
 
 describe("browser command boundary", () => {
   it.each([
@@ -37,5 +44,78 @@ describe("browser params normalization", () => {
   });
   it("accepts a workspace path as the navigate target", () => {
     expect(normalizeBrowserParams("browser_navigate", { path: "demo/index.html" })).toEqual({ path: "demo/index.html" });
+  });
+});
+
+describe("plan 模式的浏览器限制（F3）", () => {
+  it("只读观察放行", () => {
+    for (const name of [
+      "browser_observe",
+      "browser_extract",
+      "browser_screenshot",
+      "browser_wait_for",
+      "browser_scroll",
+      "browser_list_tabs",
+      "browser_select_tab",
+    ]) {
+      expect(browserPlanModeBlock(name, {})).toBeUndefined();
+    }
+  });
+
+  it("本地预览放行，带 url 的导航拒绝", () => {
+    expect(browserPlanModeBlock("browser_navigate", { path: "demo/index.html" })).toBeUndefined();
+    const blocked = browserPlanModeBlock("browser_navigate", { url: "https://example.com" });
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("计划模式");
+  });
+
+  it("交互操作被拒绝，并给出可用清单与下一步", () => {
+    for (const [name, params] of [
+      ["browser_click", { ref: "e1" }],
+      ["browser_fill", { ref: "e1", text: "x" }],
+      ["browser_close_tab", { tabId: "t1" }],
+      ["browser_new_tab", {}],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const blocked = browserPlanModeBlock(name, params);
+      expect(blocked?.block).toBe(true);
+      expect(blocked?.reason).toContain("browser_observe");
+      expect(blocked?.reason).toContain("/plan execute");
+    }
+  });
+
+  it("非浏览器工具不受影响", () => {
+    expect(browserPlanModeBlock("exec_command", { cmd: "ls" })).toBeUndefined();
+    expect(browserPlanModeBlock(undefined, {})).toBeUndefined();
+  });
+});
+
+describe("browserGuidanceFor（F4）", () => {
+  const all = new Set(BROWSER_TOOL_NAMES);
+
+  it("没有任何 browser 工具激活时只给「不可用」的诚实说明", () => {
+    const text = browserGuidanceFor({ activeTools: new Set(["read_file"]) });
+    expect(text).toContain("不可用");
+    expect(text).not.toContain("browser_navigate({path");
+  });
+
+  it("只激活 navigate 时不再描述 click/fill 的流程", () => {
+    const text = browserGuidanceFor({ activeTools: new Set(["browser_navigate", "browser_new_tab"]) });
+    expect(text).toContain("browser_navigate({path");
+    expect(text).not.toContain("select_option");
+    expect(text).not.toContain("tabId 是具体网页标签");
+  });
+
+  it("计划模式追加只读限制说明", () => {
+    const planned = browserGuidanceFor({ activeTools: all, planMode: true });
+    expect(planned).toContain("当前是计划模式");
+    expect(planned).toContain("browser_observe");
+    expect(browserGuidanceFor({ activeTools: all, planMode: false })).not.toContain("当前是计划模式");
+  });
+
+  it("重新注入前只移除上一次的标记区间，保留其它扩展内容", () => {
+    const other = "LANG: 中文";
+    const injected = `base\n\n${other}\n\n${browserGuidanceFor({ activeTools: all })}`;
+    expect(stripBrowserGuidance(injected)).toBe(`base\n\n${other}`);
+    expect(stripBrowserGuidance("base")).toBe("base");
   });
 });

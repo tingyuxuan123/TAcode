@@ -856,7 +856,8 @@ function traceDetail(row: TraceRow): ReactNode {
     }
     return (
       <pre className="trace-detail-file">
-        <HighlightedFileCode code={text} language={path} />
+        {/* 正文已由 read_file 嵌了真实行号，不再叠渲染层序号。 */}
+        <HighlightedFileCode code={text} language={path} lineGutter={false} />
       </pre>
     );
   }

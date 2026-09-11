@@ -56,6 +56,8 @@ interface FakeHostOptions {
   assistantTurns?: number;
   /** 产出消息后不进入空闲，模拟「子代理没按上限自己收口」。 */
   neverSettle?: boolean;
+  /** 按第几次 prompt（0 起）决定报告文本；用于验证 no_report 重试。 */
+  reportTextForPrompt?: (promptIndex: number) => string;
 }
 
 /** 可编程的假 host：完整模拟 pi RPC worker 的“接收即返回 + 迟到报告”语义。 */
@@ -77,6 +79,8 @@ class FakeHost implements DelegationHost {
   private readonly promptError?: Error;
   private readonly assistantTurns: number;
   private readonly neverSettle: boolean;
+  private readonly reportTextForPrompt?: (promptIndex: number) => string;
+  private promptCount = 0;
   private settled = false;
   private idleWaiters: Array<() => void> = [];
 
@@ -89,6 +93,7 @@ class FakeHost implements DelegationHost {
     this.promptError = options.promptError;
     this.assistantTurns = options.assistantTurns ?? 1;
     this.neverSettle = options.neverSettle === true;
+    this.reportTextForPrompt = options.reportTextForPrompt;
   }
 
   isRunning(): boolean {
@@ -107,13 +112,17 @@ class FakeHost implements DelegationHost {
     if (!this.running && !this.settled) throw new Error("Agent session closed");
     if (type === "prompt") {
       if (this.promptError) throw this.promptError;
+      // 每次 prompt 都是新的一轮：空闲标志按轮重置（no_report 补发指令依赖这一点）。
+      this.settled = false;
       this.messages.push({ role: "user", content: data.message });
+      const reportText = this.reportTextForPrompt?.(this.promptCount) ?? this.reportText;
+      this.promptCount += 1;
       setTimeout(() => {
         if (!this.running && !this.settled) return;
         const turns = Math.max(1, this.assistantTurns);
         const single = turns === 1;
         for (let index = 0; index < turns; index += 1) {
-          const text = index === turns - 1 ? this.reportText : `turn-${index + 1}`;
+          const text = index === turns - 1 ? reportText : `turn-${index + 1}`;
           // 单轮且没有报告文本时保持原语义：不产出 assistant 消息（no_report 场景）。
           if (single && !text) continue;
           this.messages.push({ role: "assistant", content: text ? [{ type: "text", text }] : [] });
@@ -358,16 +367,42 @@ describe("DelegationCoordinator", () => {
       expect(record.status).toBe("failed");
       expect(record.error).toContain("no_report");
       expect(record.error).toContain("without writing a report");
-      expect(record.error).toContain("messages=1");
+      // 空报告会先补一条「只回报告」的指令，所以证据里是两轮 user 消息。
+      expect(record.error).toContain("messages=2");
       expect(record.error).toContain("lastMessage=user");
       expect(record.error).toContain("turns=0");
       expect(record.error).toContain("toolCalls=0");
+      expect(record.error).toContain("A second report-only instruction was sent");
       // 终态之前必须先停 worker：不允许 failed + running 并存。
       const delegated = (coordinator as unknown as { entries: Map<string, { record: DelegationRecordSnapshot; host?: FakeHost }> }).entries;
       const child = [...delegated.values()].find((entry) => entry.record.delegationId === snapshot.delegationId)?.host as FakeHost;
       expect(child.calls).toContain("stop");
       expect(child.stoppedAt).toBeLessThanOrEqual(record.completedAt!);
       expect(child.running).toBe(false);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("recovers a no_report delegation with one report-only retry", async () => {
+    const { coordinator, logs, state, parent } = await fixture({
+      hostOptions: () => ({
+        reportText: "",
+        reportDelayMs: 30,
+        reportTextForPrompt: (promptIndex) => (promptIndex === 1 ? "Recovered report: src/main/index.ts:1" : ""),
+      }),
+    });
+    try {
+      const snapshot = await coordinator.handleRequest(startRequest(), parent) as DelegationRecordSnapshot;
+      const waited = await coordinator.wait("/tmp/parent.jsonl", {
+        delegationIds: [snapshot.delegationId],
+        timeoutSeconds: 5,
+      });
+      const record = waited.delegations[0];
+      expect(record.status).toBe("completed");
+      expect(record.report).toContain("Recovered report: src/main/index.ts:1");
+      expect(logs.some((entry) => entry.message === "delegation recovered after a report-only retry")).toBe(true);
     } finally {
       await coordinator.stopAll();
       state.close();

@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   assertDelegationTransition,
   boundedDelegationText,
+  DELEGATION_REPORT_NUDGE,
   describeAssistantEvidence,
   extractAssistantReport,
   DELEGATION_BRIDGE_EVENT,
@@ -73,6 +74,8 @@ interface DelegationEntry {
   stopRequested: boolean;
   /** 有界活动缓冲：启动/判定/终态证据，随快照下发供失败态展示。 */
   recent: DelegationActivity[];
+  /** no_report 已自动重试过一次（只重试一次，不无限循环）。 */
+  noReportRetried?: boolean;
 }
 
 const permissionRank: Record<PermissionMode, number> = {
@@ -571,8 +574,8 @@ export class DelegationCoordinator {
     await host.waitForIdle();
     const result = await host.request<{ messages?: unknown[] }>("get_messages");
     const messages = Array.isArray(result?.messages) ? result.messages : [];
-    const evidence = describeAssistantEvidence(messages);
-    const report = extractAssistantReport(messages);
+    let evidence = describeAssistantEvidence(messages);
+    let report = extractAssistantReport(messages);
     const turns = Math.max(0, evidence.turns - run.baselineTurns);
     this.log("info", "delegation completion judged", {
       delegationId: entry.record.delegationId,
@@ -601,9 +604,56 @@ export class DelegationCoordinator {
       return;
     }
     if (!report) {
+      // 空报告不是「没干活」：子会话可能只跑了工具就结束了。先补一次「只回最终报告」的指令，
+      // 仍失败才落 failed，并把末尾活动/stderr 一起交给父代理。
+      if (!entry.noReportRetried && !entry.stopRequested) {
+        entry.noReportRetried = true;
+        this.pushActivity(entry, {
+          at: Date.now(),
+          kind: "notice",
+          text: "The worker wrote no report; asking it once more for a final report.",
+        });
+        this.log("warn", "delegation no_report; retrying once", {
+          delegationId: entry.record.delegationId,
+          childSessionPath: entry.record.childSessionPath,
+        });
+        try {
+          await host.request("prompt", { message: DELEGATION_REPORT_NUDGE });
+          await host.waitForIdle();
+          const retry = await host.request<{ messages?: unknown[] }>("get_messages");
+          const retryMessages = Array.isArray(retry?.messages) ? retry.messages : [];
+          evidence = describeAssistantEvidence(retryMessages);
+          report = extractAssistantReport(retryMessages);
+        } catch (error) {
+          this.log("warn", "delegation no_report retry failed", {
+            delegationId: entry.record.delegationId,
+            childSessionPath: entry.record.childSessionPath,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        if (report) {
+          this.pushActivity(entry, {
+            at: Date.now(),
+            kind: "report",
+            text: boundedDelegationText(report, MAX_ACTIVITY_TEXT_CHARS),
+          });
+          this.log("info", "delegation recovered after a report-only retry", {
+            delegationId: entry.record.delegationId,
+            childSessionPath: entry.record.childSessionPath,
+          });
+          this.settle(entry, "completed", report);
+          await this.state.indexSession(entry.record.childSessionPath!).catch(() => undefined);
+          return;
+        }
+      }
+      if (entry.stopRequested) {
+        await host.stop().catch(() => undefined);
+        this.settle(entry, "cancelled", "", "Stopped by the parent agent.");
+        return;
+      }
       const detail = this.describeFailure("no_report", undefined, entry, startedAt, evidence);
       this.pushActivity(entry, { at: Date.now(), kind: "notice", text: detail, isError: true });
-      // 空闲后仍无 assistant 文本：真正的 no_report。停掉 worker 再落终态。
+      // 空闲后仍无 assistant 文本：停掉 worker 再落终态。
       await host.stop().catch(() => undefined);
       this.settle(entry, "failed", "", detail);
       return;
@@ -637,6 +687,12 @@ export class DelegationCoordinator {
       }
     } else if (reason === "no_report") {
       parts.push("The delegated worker finished without writing a report (no assistant text after the turn settled).");
+      const activity = describeRecentActivity(entry.recent);
+      if (activity) parts.push(`lastActivity: ${activity}`);
+      if (exit?.stderrExcerpt) parts.push(`stderr: ${exit.stderrExcerpt.slice(-300)}`);
+      if (entry.noReportRetried) {
+        parts.push("A second report-only instruction was sent; it also produced no assistant text.");
+      }
     } else if (reason === "timeout") {
       parts.push(`The delegated worker did not finish within ${Math.round((Date.now() - startedAt) / 1_000)}s and was stopped.`);
     } else {
@@ -987,4 +1043,12 @@ async function readSessionTrailingAssistantReport(sessionPath: string): Promise<
   } catch {
     return "";
   }
+}
+
+/** 末尾活动摘要：把 recent 里最后几条拼成一行，供 no_report 失败详情使用。 */
+function describeRecentActivity(recent: DelegationActivity[]): string {
+  const entries = recent.slice(-3);
+  if (!entries.length) return "";
+  const text = entries.map((entry) => `${entry.kind}: ${entry.text}`).join(" | ");
+  return text.length > 400 ? `${text.slice(0, 400)}…` : text;
 }

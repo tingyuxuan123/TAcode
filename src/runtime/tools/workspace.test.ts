@@ -33,6 +33,21 @@ describe("Workspace", () => {
     await expect(ws.resolve("/etc/passwd")).rejects.toThrow(/escapes workspace/);
   });
 
+  it("越界报错带上 workspace root 与相对路径提示", async () => {
+    const root = await makeRoot();
+    const ws = new Workspace(root);
+    await ws.initialize();
+    let message = "";
+    try {
+      await ws.resolve("/Users/somebody/other-repo/src/api/login/index.ts");
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain(`workspace root: ${root}`);
+    expect(message).toContain("workspace-relative path");
+    expect(message).toContain("open that directory as the project");
+  });
+
   it("rejects symlinks pointing outside the workspace", async () => {
     const root = await makeRoot();
     const outside = await makeRoot();

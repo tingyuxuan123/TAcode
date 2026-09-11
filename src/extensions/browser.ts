@@ -1,7 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { visibleUserText } from "../shared/vision-api";
+import { getToolSetPolicy, setToolContribution } from "../shared/tool-set";
 import { browserRoutingBlock } from "./browser-routing";
-import { BROWSER_GUIDANCE, BROWSER_TOOLS, normalizeBrowserParams, type BrowserParams, type BrowserResponse, type BrowserToolResult } from "../shared/browser-tools";
+import {
+  browserGuidanceFor,
+  browserPlanModeBlock,
+  BROWSER_TOOLS,
+  normalizeBrowserParams,
+  stripBrowserGuidance,
+  type BrowserParams,
+  type BrowserResponse,
+  type BrowserToolResult,
+} from "../shared/browser-tools";
+
+/** 贡献所有权名（同一扩展重复加载会覆盖而不是叠加）。 */
+export const BROWSER_TOOL_OWNER = "browser";
 
 interface ExtensionAPI {
   registerTool(tool: Record<string, unknown>): void;
@@ -49,8 +62,18 @@ export function requestBrowser(tool: string, params: BrowserParams, signal?: Abo
 export default function browserExtension(pi: ExtensionAPI) {
   // CLI/delegate workers without a desktop IPC channel must not advertise unusable tools.
   if (!process.send) return;
+  // 只声明本扩展贡献的工具名，激活集交给 shared/tool-set 统一计算：
+  // 这里曾经用 setActiveTools([...getActiveTools(), ...browser]) 自己 union，
+  // 与 runtime 的 setActiveTools(options.activeTools) 互相覆盖，谁最后执行谁赢。
+  //
+  // planAllowed 为 true：计划模式下浏览器工具**仍然存在**（否则调用就是 `Tool … not found`），
+  // 交互类操作改由 tool_call 钩子在调用时拒绝并给出原因（对齐 Proma 的调用期 deny）。
+  setToolContribution(BROWSER_TOOL_OWNER, { names: BROWSER_TOOLS.map((tool) => tool.name), planAllowed: true });
   let currentPrompt = "";
-  pi.on("tool_call", (event) => browserRoutingBlock(event.toolName, event.input, currentPrompt));
+  pi.on("tool_call", (event) =>
+    browserRoutingBlock(event.toolName, event.input, currentPrompt) ??
+    (getToolSetPolicy()?.permission === "plan" ? browserPlanModeBlock(event.toolName, event.input) : undefined),
+  );
   for (const definition of BROWSER_TOOLS) {
     pi.registerTool({
       ...definition,
@@ -63,11 +86,14 @@ export default function browserExtension(pi: ExtensionAPI) {
       },
     });
   }
-  const activate = () => pi.setActiveTools([...new Set([...pi.getActiveTools(), ...BROWSER_TOOLS.map((tool) => tool.name)])]);
-  pi.on("session_start", activate);
   pi.on("before_agent_start", (event) => {
     currentPrompt = visibleUserText(event.prompt ?? "");
-    activate();
-    return { systemPrompt: `${(event.systemPrompt ?? "").replace(BROWSER_GUIDANCE, "").trimEnd()}\n\n${BROWSER_GUIDANCE}` };
+    // 系统提示只描述本轮**真正激活**的 browser_* 工具；计划模式额外说明只读限制。
+    const guidance = browserGuidanceFor({
+      activeTools: new Set(pi.getActiveTools()),
+      planMode: getToolSetPolicy()?.permission === "plan",
+    });
+    const base = stripBrowserGuidance(event.systemPrompt ?? "").trimEnd();
+    return { systemPrompt: `${base}\n\n${guidance}` };
   });
 }

@@ -15,6 +15,14 @@ export interface RunProcessOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   shell?: string | boolean;
+  /**
+   * stdout 累计换行数达到该值后立即终止子进程。
+   *
+   * 用于搜索类命令：让「最多返回 N 条」成为真实总量上限，而不是等命令把整个仓库
+   * 扫完再由调用方截断（后者既浪费 CPU，也让结果受制于遍历顺序）。调用方应传入
+   * `上限 + 1`，以便把「正好取满」和「确实还有更多」区分开。
+   */
+  maxStdoutLines?: number;
 }
 
 export interface RunProcessResult {
@@ -23,6 +31,11 @@ export interface RunProcessResult {
   exitCode: number | null;
   timedOut: boolean;
   truncated: boolean;
+  /**
+   * 因 `maxStdoutLines` 提前终止。这是**正常结束**而不是失败：此时 exitCode 通常为
+   * null（子进程被杀），调用方不应据此报错。
+   */
+  stdoutLineLimitReached: boolean;
 }
 
 export function runProcess(
@@ -32,6 +45,7 @@ export function runProcess(
 ): Promise<RunProcessResult> {
   const maxOutputBytes = options.maxOutputBytes ?? 200_000;
   const timeoutMs = options.timeoutMs ?? 120_000;
+  const maxStdoutLines = options.maxStdoutLines;
   return new Promise((resolve, reject) => {
     const env = stripModelCredentialEnvironment({ ...process.env });
     const child = spawn(command, args, {
@@ -46,8 +60,8 @@ export function runProcess(
     const stderrBuffer = new BoundedOutput(Math.ceil(maxOutputBytes / 2));
     let timedOut = false;
     let settled = false;
-    child.stdout?.on("data", (chunk: Buffer) => stdoutBuffer.append(chunk.toString("utf8")));
-    child.stderr?.on("data", (chunk: Buffer) => stderrBuffer.append(chunk.toString("utf8")));
+    let newlineCount = 0;
+    let stdoutLineLimitReached = false;
     const stop = () => {
       if (child.killed || child.pid === undefined) return;
       killProcessTree(child.pid, "SIGTERM");
@@ -57,6 +71,17 @@ export function runProcess(
         }
       }, 1_500).unref();
     };
+    child.stdout?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      stdoutBuffer.append(text);
+      if (maxStdoutLines === undefined || stdoutLineLimitReached) return;
+      newlineCount += countNewlines(text);
+      if (newlineCount >= maxStdoutLines) {
+        stdoutLineLimitReached = true;
+        stop();
+      }
+    });
+    child.stderr?.on("data", (chunk: Buffer) => stderrBuffer.append(chunk.toString("utf8")));
     const onAbort = () => stop();
     options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.signal?.aborted) stop();
@@ -83,9 +108,16 @@ export function runProcess(
         exitCode,
         timedOut,
         truncated: stdoutBuffer.truncated || stderrBuffer.truncated,
+        stdoutLineLimitReached,
       });
     });
   });
+}
+
+function countNewlines(text: string): number {
+  let count = 0;
+  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) count += 1;
+  return count;
 }
 
 export class BoundedOutput {

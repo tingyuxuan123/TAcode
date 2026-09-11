@@ -194,6 +194,10 @@ export function useShikiTokens(code: string, language: string, theme?: string): 
  * HighlightedFileCode — 带行号 gutter 的高亮代码区。
  * Shiki 就绪用逐行 color 渲染，未就绪降级 tokenizeCode 的 em 类着色。
  * 供读取文件详情与文件抽屉复用。
+ *
+ * `lineGutter` 只在代码本身没有行号时开启（文件抽屉是原始文件正文）。
+ * 读取文件详情传入 `lineGutter={false}`：那里的正文已由 read_file 嵌入真实行号，
+ * 再叠一层只会得到「显示序号 + 真实行号」两列数字（曾经出现 93 93 / 99 99 的误读）。
  */
 export function HighlightedFileCode({ code, language, lineGutter = true }: {
   code: string;
@@ -208,7 +212,7 @@ export function HighlightedFileCode({ code, language, lineGutter = true }: {
   return (
     <>
       {rawLines.map((rawLine, index) => (
-        <span key={index} className="code-line">
+        <span key={index} className={lineGutter ? "code-line" : "code-line no-gutter"}>
           {lineGutter && <i>{index + 1}</i>}
           <span>
             {shiki

@@ -53,6 +53,17 @@ describe("parsePatch", () => {
   it("requires a terminating *** End Patch", () => {
     expect(() => parsePatch("*** Begin Patch\n*** Add File: a.txt\n+x")).toThrow(/End Patch/);
   });
+
+  it("容忍前导空行与指令行尾随空白", () => {
+    const actions = parsePatch("\n\n*** Begin Patch  \n*** Add File: a.txt\n+x\n*** End Patch \n");
+    expect(actions).toHaveLength(1);
+  });
+
+  it("End Patch 缺失时报出解析到哪一行", () => {
+    expect(() => parsePatch("*** Begin Patch\n*** Add File: a.txt\n+x")).toThrow(
+      /parsed 1 file action\(s\); input ended after line 3, last line: \+x/,
+    );
+  });
 });
 
 describe("applyWorkspacePatch", () => {
@@ -118,5 +129,44 @@ describe("applyWorkspacePatch", () => {
       ),
     ).rejects.toThrow(/context not found/);
     expect(await readFile(join(root, "a.txt"), "utf8")).toBe("alpha\n");
+  });
+
+  it("定位失败时给出最近似行号与首个差异行", async () => {
+    const { root, ws } = await workspace();
+    await writeFile(join(root, "a.txt"), "alpha\nbeta\ngamma\n");
+
+    await expect(
+      applyWorkspacePatch(
+        ws,
+        [
+          "*** Begin Patch",
+          "*** Update File: a.txt",
+          "@@",
+          " alpha",
+          "-BETA",
+          "+beta",
+          "*** End Patch",
+        ].join("\n"),
+      ),
+    ).rejects.toThrow(/matches 1\/2 of the hunk lines[\s\S]*first difference at line 2[\s\S]*expected \(4 chars\): BETA[\s\S]*actual   \(4 chars\): beta/);
+  });
+
+  it("没有任何行相等时给出字符重合度最高的一行", async () => {
+    const { root, ws } = await workspace();
+    await writeFile(join(root, "a.txt"), "hello wirld\n");
+
+    await expect(
+      applyWorkspacePatch(
+        ws,
+        [
+          "*** Begin Patch",
+          "*** Update File: a.txt",
+          "@@",
+          "-hello world",
+          "+hello there",
+          "*** End Patch",
+        ].join("\n"),
+      ),
+    ).rejects.toThrow(/closest is line 1[\s\S]*character overlap[\s\S]*expected \(11 chars\)/);
   });
 });

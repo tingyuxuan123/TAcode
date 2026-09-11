@@ -47,14 +47,26 @@ export class Workspace {
   private assertLexicallyInside(candidate: string): void {
     const relative = path.relative(this.root, candidate);
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error(`Path escapes workspace: ${candidate}`);
+      throw new Error(
+        [
+          `Path escapes workspace: ${candidate}`,
+          `workspace root: ${this.root}`,
+          'File tools only accept paths inside the workspace. Use a workspace-relative path (e.g. "src/app.ts"); to work on another directory, open that directory as the project.',
+        ].join("\n"),
+      );
     }
   }
 
   private assertReallyInside(candidate: string): void {
     const relative = path.relative(this.realRoot ?? this.root, candidate);
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error(`Path resolves outside workspace: ${candidate}`);
+      throw new Error(
+        [
+          `Path resolves outside workspace: ${candidate}`,
+          `workspace root: ${this.realRoot ?? this.root}`,
+          "The path goes through a symlink that leads outside the workspace; use the real path inside the workspace instead.",
+        ].join("\n"),
+      );
     }
   }
 

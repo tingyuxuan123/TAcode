@@ -68,6 +68,16 @@ export interface DelegationActivity {
  */
 export const DELEGATION_COMPLETION_CONTRACT = "idle-then-last-assistant-text" as const;
 
+/**
+ * no_report 后补发一次的指令：子代理空闲却没有 assistant 文本时，让它只写最终报告。
+ * 两条委托链路（进程内 runner 与主进程协调器）共用同一份措辞。
+ */
+export const DELEGATION_REPORT_NUDGE = [
+  "Your session settled without any final report text, so the parent agent received nothing.",
+  "Do not call any more tools. Reply now with one self-contained final report: what you inspected, what you found (with exact paths and line numbers), and what remains unknown or unfinished.",
+  "If you could not complete the task, say so explicitly and why. Keep it under about 1500 characters.",
+].join(" ");
+
 /** 从消息数组里提取最后一条带文本的 assistant 消息作为最终报告；没有则返回空串。 */
 export function extractAssistantReport(messages: unknown[] | undefined): string {
   if (!Array.isArray(messages)) return "";

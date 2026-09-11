@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { applyToolSet, clearToolContribution, setToolContribution } from "../shared/tool-set";
 import {
   DEFAULT_VISION_CONFIG,
   isVisionReadable,
@@ -29,10 +30,10 @@ interface ExtensionAPI {
 }
 
 function setVisionTool(pi: ExtensionAPI, on: boolean) {
-  const active = pi.getActiveTools();
-  const has = active.includes("vision");
-  if (on === has) return;
-  pi.setActiveTools(on ? [...active, "vision"] : active.filter((name) => name !== "vision"));
+  // 只声明/收回本扩展的贡献，激活集由 shared/tool-set 统一计算（幂等，无变化不重建提示）。
+  if (on) setToolContribution(VISION_TOOL_OWNER, { names: ["vision"] });
+  else clearToolContribution(VISION_TOOL_OWNER);
+  applyToolSet(pi);
 }
 
 function isVisualCapture(command: string) {
@@ -50,6 +51,8 @@ function langLine(prompt: string) {
 }
 
 /** Agent plugin: GLM-4V-Flash for vision, MinerU for free OCR. */
+const VISION_TOOL_OWNER = "vision";
+
 export default function visionExtension(pi: ExtensionAPI) {
   let wanted = false;
   let lastPrompt = "";

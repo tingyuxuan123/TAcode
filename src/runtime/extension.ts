@@ -48,6 +48,12 @@ import { sandboxDescription, type SandboxOptions } from "./tools/sandbox.js";
 import { createRuntimeDelegationClient } from "./delegation-bridge.js";
 import { Workspace } from "./tools/workspace.js";
 import { Type } from "@earendil-works/pi-ai";
+import {
+  applyToolSet,
+  captureToolSetCarryOver,
+  clearToolSetCarryOver,
+  setToolSetPolicy,
+} from "../shared/tool-set.js";
 
 const PERMISSION_ENTRY = "tacode-permission";
 const CHECKPOINT_ENTRY = "tacode-checkpoint";
@@ -105,7 +111,8 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
       const checkpoints: Checkpoint[] = [];
       let permission: PermissionMode = options.permission;
       let permissionBeforePlan: PermissionMode = options.permission === "plan" ? "auto" : options.permission;
-      let toolsBeforePlan: string[] | undefined;
+      /** 本次进入 plan 模式是否已抓过 carryOver（防止每轮 turn_start 重复抓取）。 */
+      let planToolSetCaptured = false;
       let planState: PlanState | undefined;
 
       const effectiveAccess = (): EffectiveAccess => access.effective(permission);
@@ -127,30 +134,30 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
         ctx.ui.setTitle(`TACode Runtime — ${ctx.cwd}`);
       };
 
-      /** plan 模式只暴露只读工具；离开 plan 后恢复原工具集。 */
+      /**
+       * 工具集的唯一写入口：基础工具（`--tools`）+ 扩展贡献（browser_*、vision…）
+       * 统一由 shared/tool-set 计算（见那里的模块注释）。
+       *
+       * 旧实现在这里直接 `setActiveTools(options.activeTools)`：不在 `--tools` 里的
+       * 浏览器工具会被整体摘掉，而浏览器扩展又只在 session_start / before_agent_start
+       * 时 union 回来 —— 生成中途切换权限（/permissions、/plan）就会让 browser_* 在本回合
+       * 剩余时间里全部变成 `Tool … not found`。
+       */
       const applyPermissionTools = (): void => {
         if (permission === "plan") {
-          if (toolsBeforePlan === undefined) toolsBeforePlan = [...options.activeTools];
-          else {
-            const active = pi
-              .getActiveTools()
-              .filter(
-                (tool) =>
-                  options.activeTools.includes(tool) || tool.startsWith("mcp__") || tool === "update_plan",
-              );
-            toolsBeforePlan = [...new Set([...toolsBeforePlan, ...active])];
+          if (!planToolSetCaptured) {
+            planToolSetCaptured = true;
+            captureToolSetCarryOver(pi.getActiveTools(), options.activeTools);
           }
-          pi.setActiveTools([
-            ...new Set([...toolsBeforePlan.filter((tool) => planAllowedTools.has(tool)), "update_plan"]),
-          ]);
-          return;
-        }
-        if (toolsBeforePlan !== undefined) {
-          pi.setActiveTools(toolsBeforePlan);
-          toolsBeforePlan = undefined;
         } else {
-          pi.setActiveTools(options.activeTools);
+          planToolSetCaptured = false;
         }
+        setToolSetPolicy({
+          permission,
+          baseToolNames: options.activeTools,
+          planAllowedToolNames: [...planAllowedTools],
+        });
+        applyToolSet(pi);
       };
 
       registerDeepSeekProvider(pi, options);
@@ -235,10 +242,16 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
         planState = restorePlanState(
           ctx.sessionManager.getBranch() as Array<{ type?: string; customType?: string; data?: unknown }>,
         );
-        pi.setActiveTools(options.activeTools);
-        toolsBeforePlan = undefined;
+        planToolSetCaptured = false;
+        clearToolSetCarryOver();
         applyPermissionTools();
         updateStatus(ctx);
+      });
+
+      // 每个 LLM 往返都重新断言一次工具集：中途发生的权限模式 / 扩展贡献变化不会
+      // 留下整回合的空窗（applyToolSet 幂等，没有变化就不会重建系统提示）。
+      pi.on("turn_start", () => {
+        applyPermissionTools();
       });
 
       // 子代理目录注入系统上下文：模型看不到 ~/.tacode/subagents 目录，没有目录就只能猜角色名。
@@ -519,6 +532,8 @@ function createPatchTool(
     promptSnippet: "apply_patch: atomically add, update, move, or delete workspace files",
     promptGuidelines: [
       "Use apply_patch for file changes; keep each patch focused and reviewable.",
+      "When apply_patch reports a missing context, read the nearest-match line it names and resend only that hunk; do not re-send the whole file.",
+      "For a large mechanical rewrite (many files or hundreds of occurrences), a script with assertions plus a diff spot-check and a build verification is acceptable and preferred over hundreds of patches.",
       "Never report a change as complete before running relevant validation.",
     ],
     parameters: applyPatchParameters,

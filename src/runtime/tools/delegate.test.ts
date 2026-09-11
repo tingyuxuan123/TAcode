@@ -386,4 +386,38 @@ describe("delegate tool", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("No subagents");
   });
+
+  it("空报告时自动重试一次，重试有文本就按完成结算", async () => {
+    let prompts = 0;
+    const { tools } = harness({
+      script: async (agent) => {
+        prompts += 1;
+        if (prompts >= 2) agent.report("recovered report: src/a.ts:1");
+      },
+    });
+    const result = await runTool(tools, DELEGATE_TOOL_NAME, {
+      tasks: [{ role: "explorer", task: "look" }],
+    });
+    expect(prompts).toBe(2);
+    expect(result.details.tasks[0].status).toBe("completed");
+    expect(result.content[0]?.text).toContain("recovered report: src/a.ts:1");
+  });
+
+  it("重试仍无报告时落 failed，并附上末尾活动", async () => {
+    let prompts = 0;
+    const { tools } = harness({
+      script: async () => {
+        prompts += 1;
+      },
+    });
+    const result = await runTool(tools, DELEGATE_TOOL_NAME, {
+      tasks: [{ role: "explorer", task: "look" }],
+    });
+    expect(prompts).toBe(2);
+    expect(result.details.tasks[0].status).toBe("failed");
+    const text = result.content[0]?.text ?? "";
+    expect(text).toContain("without writing a report");
+    expect(text).toContain("A second report-only instruction was sent");
+    expect(text).toContain("lastActivity:");
+  });
 });

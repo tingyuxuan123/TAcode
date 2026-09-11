@@ -667,3 +667,52 @@
 - 取舍：OpenAI 线路也不再提供「最低」档（参考的显示即如此）；只认 budget_tokens 的第三方 Anthropic 网关靠模型级「Token 预算」显式兜底，不再有按档位推断的「自动」态，也不在 TACode 里维护第二份 token 换算表。
 - 验证：pnpm typecheck 通过；pnpm test 75 文件 / 665 用例全过。provider-thinking-runtime.test.ts 新增 chat_completions 顶层 reasoning_effort 与 responses 嵌套 reasoning.effort 两条真实请求断言，原 Anthropic 用例改为覆盖默认自适应、xhigh/max 原样透传、显式预算回落 budget_tokens；另用 linkedom + react-dom 客户端渲染真实 ModelSelectionPanes，七项断言确认五档 chips、默认选中自适应、预算模型与只读预览、OpenAI 线路无下发字段。
 - 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：平台工具层按用户报告落地 7 项修复 + agent 规则进 promptGuidelines（15:20，Asia/Shanghai）
+
+- 来源：用户用「平台工具侧 / agent 失误」两段式报告反馈真实会话踩到的坑（rg -rn 被误读成渲染 bug、write_stdin 丢输出、apply_patch 报错不可用、子代理 no_report 无原因、越界参数不回显等），要求逐项落地而非只讨论。
+- P0-1 `rg -rn` 无告警：新增 `src/runtime/tools/command-lint.ts`（轻量 shell 分词 + rg 的 `-r`/`--replace` 误用识别：`-rn` → 解析成 `-r n`，回显 actual argv 与大概率想要的命令；只对 rg 生效、不误伤 `grep -rn`、引号内的 `-rn` 不算旗标）；`managed-process.ts` 的 `ManagedResult` 新增 `command`/`warnings`，`formatManagedResult` 先输出 warning 再输出正文，并始终回显 `command:`。
+- P0-2 退出后轮询丢输出：`managed-process.ts` 不再在轮询时删记录，进程结束后保留（`FINISHED_RETENTION_MS` 10 分钟 + `MAX_FINISHED_RECORDS` 20 条，最旧淘汰）；再次轮询返回 `replayed: true` 与保留输出而不是 `Unknown process`；未知 id 的报错会列出已知进程与保留策略。
+- P0-3 apply_patch 失败诊断：`patch.ts` 指令行容错（前导空行 / 尾随空白）、`End Patch` 缺失时报「已解析 N 个 action + 输入结束行 + 末行内容」；`Patch context not found` 附最近似行号、匹配率、首个差异行（expected/actual + 字符数），并提示「相同文本被 cursor 挡在之前的 hunk」这一典型原因。
+- P1-4 子代理 no_report：`shared/delegation.ts` 新增 `DELEGATION_REPORT_NUDGE`；主进程协调器（`delegation-coordinator.ts`）与进程内 runner（`delegate.ts`）都在空报告时自动补发一次「只回最终报告」的指令（每轮只重试一次），重试出文本即 completed，仍失败才落 failed 并附 `lastActivity` / stderr 摘要 / 已重试说明。
+- P1-5 参数越界不回显：`exec_command` / `write_stdin` 的 schema 去掉 min/max（改由 description 说明区间），新增 `normalizeExecParams` / `normalizeYieldTimeMs`：回显传入值 + 允许区间 + 常用组合（长任务 timeout 600000 + yield 30000），超上限夹取并在结果最前面打 note；`write_stdin.process_id` 改为可选 + 运行时校验，缺失时列出已知进程。
+- P2-6 搜索列号误读：`search_files` 去掉 `--column`，description 声明 `path:line:text`。
+- P2-7 长任务接 `| tail` 无进度：command-lint 对「像长任务 + 管道接 tail/head」给 warning，提示不要接管道、拿 process_id 用 write_stdin 轮询。
+- agent 行为规则（用户明确选择写平台 promptGuidelines，不写项目 AGENTS.md）：`commands.ts` 的 `shellPromptRules()` 增加「搜索只用 rg -n、禁 -r」「长任务别接 tail/head」「异常输出先最小复现自证命令」「每条昂贵全量检查只跑一次、用 && 串联」「分支名先 git branch -a」「大规模机械改写允许脚本 + 断言 + 抽查 + 构建验证」；`extension.ts` 的 apply_patch guidelines 增加「按最近似行号只重发该 hunk」「大规模改写允许脚本路径」。
+- 测试：新增 `command-lint.test.ts`(11)、`commands.test.ts`(7)、`managed-process.test.ts`(3)；`patch.test.ts` 增 4 例（指令容错、End Patch 位置、最近似行号 + 首个差异行、字符重合度）；`delegation-coordinator.test.ts` 增 no_report 重试用例，并把 FakeHost 改为「每轮 prompt 重置 settled + 支持 reportTextForPrompt」，原 no_report 用例改断言 messages=2；`delegate.test.ts` 增本地重试与失败附证据 2 例。
+- 验证：pnpm typecheck 通过；pnpm test 78 文件 / 695 用例全过。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：读取截断与双列行号的根因修复（15:30，Asia/Shanghai）
+
+- 现象（用户截图）：`read_file` 详情里同一行出现两列数字（`93 93`、`99 99`），中段被 `... output truncated (10891 chars) ...` 吞掉、行号从 97 跳到 436，模型只能自己猜「输出被截断，读关键区间 100-450」；另一张截图是 `read_file` 报 `Path escapes workspace: /Users/yfdl/work/xc-iot/…`。
+- 根因一（两层行号）：runtime 的 read_file 在正文里嵌了 `%6d\t` 真实行号；渲染层 `HighlightedFileCode` 默认又加了一条 `index + 1` 的显示序号（截断标记行也占一个序号，所以被编成 99）。两列数字含义不同却长得一样，看起来像同一个行号被写了两遍。
+- 根因二（按字符硬切）：`clipForModel` 只保留头 70% + 尾 25% 的**原始字符**，会切在行中间（截图里只有 UI 序号、没有真实行号的那一行），且标记只报字符数、不报丢的是哪几行；read_file 默认 500 行窗口，超过 6000 字符必然丢掉中段。
+- 根因三（越界报错）：`Workspace.resolve()` 的 `assertLexicallyInside` 只抛 `Path escapes workspace: <path>`，既不说 workspace root，也不提「用相对路径」或「把该目录作为项目打开」。
+- 改法：
+  - `renderer/codeblock.tsx` + `renderer/ui.tsx` + `styles.css`：读文件详情传 `lineGutter={false}`（正文已带真实行号），新增 `.code-line.no-gutter` 单列布局；文件抽屉仍保留渲染层序号（那边是原始正文、没有嵌入行号）。
+  - `runtime/tools/files.ts`：read_file 改为**按字符预算反推 end**，一次读取永远返回连续区间（不再有中段空洞），并明确写出 `[N more line(s) omitted (lines X–Y); continue from line X with line_start]`；单行超预算时只截断该行并标注 `[line N alone exceeds the …-char read budget]`；`clipForModel` 改为**按行取头尾**并报 `(N line(s) / M chars omitted)`，单行超长时说明两个半段不相邻。
+  - `runtime/tools/workspace.ts`：越界报错补 `workspace root: …` 与「用相对路径 / 把该目录作为项目打开」；symlink 越界给同类提示。
+- 测试：新增 `src/runtime/tools/files.test.ts`（7 例：预算内连续区间、从中间续读连续、短行仍走 500 行窗口、单行超预算、clipForModel 按行不改半截、不超预算原样返回）；`workspace.test.ts` 增 1 例（越界报错含 root 与相对路径提示）。
+- 验证：pnpm typecheck 通过；pnpm test 79 文件 / 703 用例全过；pnpm build 通过。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：浏览器工具"生成中途切换权限后变 Tool not found"根因与 F1+F2 修复（15:45，Asia/Shanghai）
+
+- 现象与证据（来自用户会话 `~/.tacode/sessions/2026-09-11T07-13-26-347Z_01a08f50-*.jsonl`，cwd `/Users/yfdl/work/xc-app`）：07:14:04 `browser_navigate` 成功（tabId browser-tab-1789110844767-ihqk4l）、07:14:08 `browser_wait_for` 成功；07:16:52 出现 `customType: tacode-permission {"permission":"full"}`（界面权限选择器 → `App.tsx:1654` 发 `/permissions full`）；07:22:00 / 07:22:05 同一回合内 `browser_navigate`、`browser_list_tabs` 都返回 `Tool … not found`。该会话只有三条用户消息（07:13:26 / 07:16:38 / 07:22:56），所以失败与切权限发生在**同一回合**内。
+- 根因：`browser_*` 不在 worker 启动工具表（`src/runtime/options.ts` 的 `defaultActiveTools`），pi 侧 `_allowedToolNames` 因此不含它们；浏览器扩展只能自己 `setActiveTools(union)` 临时加进去（旧 `src/extensions/browser.ts:66`，只在 `session_start` / `before_agent_start` 执行）；而权限模式变化时 runtime 又用 `setActiveTools(options.activeTools)` 整体替换（旧 `src/runtime/extension.ts:152`）。三处各写同一状态、谁最后执行谁赢 → 生成中途切权限就把 `browser_*` 静默摘掉，同回合无恢复点，模型在 `currentContext.tools` 里查不到（`pi-agent-core/dist/agent-loop.js:398`）。plan 模式同源：`planAllowedTools` 不含 browser_*，但下一次 `before_agent_start` 又会被扩展加回来。
+- F1（工具集单一权威）：新增 `src/shared/tool-set.ts`，只有它计算激活集 = 基础工具（`--tools`）∪ 扩展贡献 ∪ carryOver 快照；plan 模式 = (base ∩ plan 白名单) ∪ planAllowed 贡献 ∪ `update_plan`；进入 plan 前 `captureToolSetCarryOver` 记下 base/贡献之外仍激活的名字（如 `mcp__*`），离开后恢复。状态挂在 `Symbol.for("tacode.tool-set")` 的 globalThis 上——runtime worker 与 `extensions/*` 是 tsup 两组独立产物，模块级单例会各持一份。`src/runtime/extension.ts` 的 `applyPermissionTools` 改为「配置策略 + `applyToolSet`」（`applyToolSet` 幂等：无变化不调 setActiveTools，避免重建系统提示；变化时打一行 `[tool-set] permission=… added=[…] removed=[…]`）；`src/extensions/browser.ts` 只 `setToolContribution`，删掉 activate union；`src/extensions/vision.ts` 改用 `setToolContribution` / `clearToolContribution`。
+- F2（每轮重新断言）：runtime 注册 `pi.on("turn_start")` 重新配置策略并 `applyToolSet`，中途的权限/贡献变化不再留下整回合空窗。
+- 测试：新增 `src/shared/tool-set.test.ts`（11 例，含「切到 full 不再摘掉 browser_*」「plan 收敛」「收敛 pi 内置工具」「carryOver 恢复」「无变化不重建」）、`src/extensions/browser.test.ts`（5 例，含无 IPC 通道不贡献）、`src/main/browser-toolset.test.ts`（真实 worker + mock 网关，断言切 `/permissions full` 后请求体里仍有 `browser_*`，并反向断言 plan 模式下没有）；`src/extensions/vision.test.ts` harness 改为先 `resetToolSet` + 配置策略。
+- 验证：pnpm typecheck 通过；pnpm test 82 文件 / 720 用例全过；pnpm build 通过。另外用带 IPC 的真实 worker 冒烟（fork + stdin 写 RPC）：session_start 收敛 40 → 27 个工具且 browser 工具保留；发送 `/permissions full` 后 `browserTools=17` 仍在、`[tool-set] permission=full` 无新变化；`turn_start` 钩子在每次 LLM 往返触发。回归测试有效性用「临时关掉贡献应用」验证过（会失败）。冒烟在 `~/.tacode/sessions` 留下的一个空会话文件已删除（不在 DB/loaded-sessions 中）。
+- 未做（用户未选）：F3 plan 模式只读浏览器白名单 + 明确拒绝文案、F4 `BROWSER_GUIDANCE` 与实际激活工具对齐、F5 工具集变更写入 session、F6 工具不可用时的能力说明。当前 plan 模式下浏览器工具不可用（与 Proma 显式 deny 一致），但 guidance 仍会提到 browser_*，模型仍可能先撞一次 not found。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：浏览器工具 F3+F4（plan 只读白名单 + 提示与实际工具对齐）（15:50，Asia/Shanghai）
+
+- F3（plan 模式只读白名单 + 调用期明确拒绝）：`src/shared/browser-tools.ts` 新增 `BROWSER_PLAN_READ_ONLY_TOOLS`（observe / find / extract / wait_for / scroll / screenshot / list_tabs / select_tab；`browser_navigate` 仅当传 `path` 本地预览时放行）与 `browserPlanModeBlock()`；`src/extensions/browser.ts` 的贡献改为 `planAllowed: true`（工具在 plan 模式下**仍然存在**，否则调用就是 `Tool … not found`），交互类调用由 `tool_call` 钩子在调用期拒绝并给出原因（"计划模式下只能观察页面…可用：…请在 /plan execute 后再交互"），对齐 Proma `agent-orchestrator.ts:1346` 的调用期 deny；比 Proma 多放开 wait_for / scroll / select_tab（观察所必需且不改页面状态）与 path 本地预览。
+- F4（提示与实际激活工具一致）：原来的静态 `BROWSER_GUIDANCE` 常量改为 `browserGuidanceFor({ activeTools, planMode })`：按当前真正激活的 browser_* 工具分段拼装（缺 `browser_fill` 就不讲 fill/select_option/hover 流程，缺 `browser_list_tabs` 就不讲 tabId 段），plan 模式追加只读限制段；一个浏览器工具都没激活时只给「本轮不可用、不要用系统浏览器/截图代替」的诚实说明；注入用 `<!-- tacode-browser-guidance:start/end -->` 标记，重新注入前按区间 `stripBrowserGuidance()` 移除，不依赖扩展处理顺序，也不会吃掉其它扩展追加的提示。
+- 测试：`src/shared/browser-tools.test.ts` 增 9 例（只读放行/交互拒绝/本地预览放行/非浏览器工具不受影响/guidance 分段/plan 段/标记移除）；`src/extensions/browser.test.ts` 增到 9 例（plan 下工具仍在激活集、调用期拒绝含原因、非 plan 不拦、注入一致且不重复、plan 注入含只读说明）；`src/main/browser-toolset.test.ts` 增 1 例真实 worker + mock 网关的端到端：plan 模式下模型调用 `browser_click` 被拒（tool 结果含"计划模式"与"browser_observe"）且浏览器桥接零调用；原 plan 阶段断言改为「浏览器工具仍在表里 + 基础工具 apply_patch 被收敛」，保留灵敏度。回归测试有效性用「临时关掉 plan 拒绝」验证过（会失败）。
+- 验证：pnpm typecheck 通过；pnpm test 84 文件 / 752 用例全过；pnpm build 通过。
+- 剩余（未做）：F5（工具集变更写入 session 供事后对齐，目前只有 worker stderr 的 `[tool-set]` 一行）、F6（工具被策略收起时的 turn 内能力说明，本轮只做到了「提示按激活集描述 + 不可用时的诚实说明」）。
+- 未提交/发布，未改 AGENTS.md。

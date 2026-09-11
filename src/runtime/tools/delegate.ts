@@ -26,6 +26,7 @@ import {
   boundedDelegationText,
   DELEGATION_LOCAL_WAIT_TIMEOUT_SECONDS,
   DELEGATION_MAX_TIMEOUT_SECONDS,
+  DELEGATION_REPORT_NUDGE,
   isDelegationTerminal,
   type DelegationAction,
   type DelegationBridgePayload,
@@ -246,6 +247,14 @@ function isSettled(record: DelegationRecord): boolean {
   return record.status !== "pending" && record.status !== "running";
 }
 
+/** 末尾活动摘要：把 recent 里最后几条拼成一行，供 no_report 失败详情使用。 */
+function describeRecentActivity(record: DelegationRecord): string {
+  const entries = record.recent.slice(-3);
+  if (!entries.length) return "";
+  const text = entries.map((entry) => `${entry.kind}: ${entry.text}`).join(" | ");
+  return text.length > 400 ? `${text.slice(0, 400)}…` : text;
+}
+
 function assistantText(message: { content: unknown }): string {
   if (typeof message.content === "string") return message.content;
   if (!Array.isArray(message.content)) return "";
@@ -314,6 +323,7 @@ class DelegationRunner {
     let toolCalls = 0;
     let usage: DelegationUsage | undefined;
     let truncated = false;
+    let noReportRetried = false;
     const unsubscribe = agent.subscribe((event: AgentEvent) => {
       if (event.type === "message_end" && event.message.role === "assistant") {
         turns += 1;
@@ -358,6 +368,19 @@ class DelegationRunner {
       // await waitForIdle()，与主进程桥接路径（AgentHost.waitForIdle）保持同一判定：
       // 空闲后以最后一条带文本的 assistant 消息为最终报告。
       await agent.waitForIdle();
+      // 空报告先补一次「只写最终报告」的指令；重试仍失败才落 failed（不无限循环）。
+      if (!lastReport.trim() && !truncated && !this.record.abort.signal.aborted) {
+        noReportRetried = true;
+        this.record.live = "no report; asking once more";
+        pushActivity(this.record, {
+          at: Date.now(),
+          kind: "notice",
+          text: "The subagent wrote no report; asking it once more for a final report.",
+        });
+        this.onProgress();
+        await agent.prompt(DELEGATION_REPORT_NUDGE);
+        await agent.waitForIdle();
+      }
     } catch (error) {
       this.settle(this.record.abort.signal.aborted ? "aborted" : "failed", lastReport, usage, error instanceof Error ? error.message : String(error));
       return;
@@ -367,7 +390,21 @@ class DelegationRunner {
     }
     if (this.record.abort.signal.aborted) return this.settle("aborted", lastReport, usage);
     if (truncated) return this.settle("truncated", lastReport, usage);
-    if (!lastReport.trim()) return this.settle("failed", "", usage, "The subagent finished without writing a report.");
+    if (!lastReport.trim()) {
+      const activity = describeRecentActivity(this.record);
+      return this.settle(
+        "failed",
+        "",
+        usage,
+        [
+          "The subagent finished without writing a report.",
+          ...(noReportRetried
+            ? ["A second report-only instruction was sent; it also produced no assistant text."]
+            : []),
+          ...(activity ? [`lastActivity: ${activity}`] : []),
+        ].join(" "),
+      );
+    }
     this.settle("completed", lastReport, usage);
   }
 

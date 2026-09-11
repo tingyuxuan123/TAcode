@@ -2860,6 +2860,11 @@ textarea::selection,
   padding: 0 14px 0 0;
   white-space: pre;
 }
+/* 正文自带行号（read_file 嵌入）时不再留 gutter 列，避免两列数字。 */
+.trace-detail-file .code-line.no-gutter {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0 14px;
+}
 .trace-detail-file .code-line i {
   color: var(--ink-3);
   padding-right: 10px;

@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { resetToolSet, setToolSetPolicy } from "../shared/tool-set";
 import { visionAgentPrompt } from "../shared/vision-api";
 import visionExtension from "./vision";
 
 function harness() {
+  // 激活集由 shared/tool-set 计算，测试里显式配置一个空基础集。
+  resetToolSet();
+  setToolSetPolicy({ permission: "auto", baseToolNames: [], planAllowedToolNames: [] });
   const handlers = new Map<string, (event: unknown) => unknown>();
   let active: string[] = [];
   visionExtension({
     registerTool() {},
     getActiveTools: () => active,
-    setActiveTools: (names: string[]) => { active = names; },
+    setActiveTools: (names: string[]) => { active = [...names]; },
     on: (event: string, handler: (event: never) => unknown) => {
       handlers.set(event, handler as (event: unknown) => unknown);
     },

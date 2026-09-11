@@ -98,11 +98,20 @@ export async function applyWorkspacePatch(
 
 export function parsePatch(input: string): PatchAction[] {
   const lines = input.replaceAll("\r\n", "\n").split("\n");
-  if (lines[0] !== "*** Begin Patch") throw new Error("Patch must start with *** Begin Patch");
+  // 容忍文件开头的空行与前导空格：模型多一空行不应该只报一句 Begin Patch。
+  let index = 0;
+  while (index < lines.length && !lines[index]!.trim()) index += 1;
+  const begin = index < lines.length ? lines[index]!.trim() : "";
+  if (begin !== "*** Begin Patch") {
+    const found = index < lines.length ? truncateText(lines[index]!, 120) : "(empty input)";
+    throw new Error(
+      `Patch must start with *** Begin Patch (found: ${found}). Re-send the patch beginning exactly with *** Begin Patch.`,
+    );
+  }
+  index += 1;
   const actions: PatchAction[] = [];
-  let index = 1;
   while (index < lines.length) {
-    const line = lines[index];
+    const line = directiveLine(lines[index]!);
     if (line === "*** End Patch") {
       if (actions.length === 0) throw new Error("Patch contains no file actions");
       return actions;
@@ -112,7 +121,7 @@ export function parsePatch(input: string): PatchAction[] {
       index += 1;
       const added: string[] = [];
       while (index < lines.length && !isActionHeader(lines[index])) {
-        const addition = lines[index];
+        const addition = lines[index]!;
         if (!addition.startsWith("+")) {
           throw new Error(`Add file lines must start with +: ${addition}`);
         }
@@ -132,15 +141,17 @@ export function parsePatch(input: string): PatchAction[] {
       const file = requireRelativePatchPath(line.slice("*** Update File: ".length));
       index += 1;
       let moveTo: string | undefined;
-      if (lines[index]?.startsWith("*** Move to: ")) {
-        moveTo = requireRelativePatchPath(lines[index].slice("*** Move to: ".length));
+      if (directiveLine(lines[index] ?? "").startsWith("*** Move to: ")) {
+        moveTo = requireRelativePatchPath(
+          directiveLine(lines[index]!).slice("*** Move to: ".length),
+        );
         index += 1;
       }
       const hunks: PatchHunk[] = [];
       while (index < lines.length && !isActionHeader(lines[index])) {
-        const headerLine = lines[index];
+        const headerLine = lines[index]!;
         if (!headerLine.startsWith("@@")) {
-          throw new Error(`Expected hunk header in ${file}, got: ${headerLine}`);
+          throw new Error(`Expected hunk header in ${file}, got: ${truncateText(headerLine, 120)}`);
         }
         const header = headerLine.replace(/^@@\s?/, "").replace(/\s?@@$/, "");
         index += 1;
@@ -148,10 +159,11 @@ export function parsePatch(input: string): PatchAction[] {
         let endOfFile = false;
         while (
           index < lines.length &&
-          !lines[index].startsWith("@@") &&
+          !lines[index]!.startsWith("@@") &&
           !isActionHeader(lines[index])
         ) {
-          const hunkLine = lines[index];
+          const rawLine = lines[index]!;
+          const hunkLine = directiveLine(rawLine);
           if (hunkLine === "*** End of File") {
             endOfFile = true;
             index += 1;
@@ -162,7 +174,7 @@ export function parsePatch(input: string): PatchAction[] {
             !hunkLine.startsWith("+") &&
             !hunkLine.startsWith("-")
           ) {
-            throw new Error(`Invalid hunk line in ${file}: ${hunkLine}`);
+            throw new Error(`Invalid hunk line in ${file}: ${truncateText(rawLine, 120)}`);
           }
           hunkLines.push(hunkLine);
           index += 1;
@@ -176,9 +188,27 @@ export function parsePatch(input: string): PatchAction[] {
       actions.push({ type: "update", path: file, ...(moveTo ? { moveTo } : {}), hunks });
       continue;
     }
-    throw new Error(`Unknown patch directive: ${line}`);
+    throw new Error(
+      `Unknown patch directive at line ${index + 1}: ${truncateText(lines[index]!, 120)}`,
+    );
   }
-  throw new Error("Patch is missing *** End Patch");
+  const last = lines.at(-1)?.trim();
+  throw new Error(
+    `Patch is missing *** End Patch (parsed ${actions.length} file action(s); input ended after line ${lines.length}${
+      last ? `, last line: ${truncateText(last, 120)}` : ""
+    }). Re-send the complete patch including the final *** End Patch line.`,
+  );
+}
+
+/** 指令行容错：`***` 开头的行允许前导/尾随空白，避免因此判定为未知指令。 */
+function directiveLine(line: string): string {
+  const trimmed = line.trim();
+  return trimmed.startsWith("***") ? trimmed : line;
+}
+
+function truncateText(value: string, limit: number): string {
+  const normalized = value.replace(/\s+$/u, "");
+  return normalized.length > limit ? `${normalized.slice(0, limit)}… (${normalized.length} chars)` : normalized;
 }
 
 function applyUpdate(
@@ -220,8 +250,124 @@ function findSequence(haystack: string[], needle: string[], cursor: number, head
       }
     }
   }
-  const preview = needle.slice(0, 3).join("\\n");
-  throw new Error(`Patch context not found${header ? ` near ${header}` : ""}: ${preview}`);
+  // 失败时把最近似位置、行号与首个差异行回给模型，而不是只报一句 context not found。
+  throw new Error(describeMissingSequence(haystack, needle, cursor, header));
+}
+
+/**
+ * 定位失败时的诊断：优先找「第一行完全相同但顺序/行号不符」的块，
+ * 否则给出整文件里最相似的一行，并直接对比两侧文本与长度。
+ */
+function describeMissingSequence(
+  haystack: string[],
+  needle: string[],
+  cursor: number,
+  header: string,
+): string {
+  const preview = needle.slice(0, 3).map((line) => truncateText(line, 120)).join("\\n");
+  const parts = [`Patch context not found${header ? ` near ${header}` : ""}: "${preview}"`];
+  const first = needle[0] ?? "";
+  const exact = findLineMatches(haystack, first);
+  if (exact.length) {
+    const target = exact.find((index) => index >= cursor) ?? exact[0]!;
+    const matched = countBlockMatches(haystack, needle, target);
+    parts.push(
+      `lines identical to the first context line exist at line ${exact.map((index) => index + 1).join(", ")}; the block starting at line ${target + 1} matches ${matched}/${needle.length} of the hunk lines.`,
+    );
+    if (target < cursor) {
+      parts.push(
+        "That block sits before the current cursor, so an earlier hunk already consumed it: check the order of the hunks and the @@ line hint.",
+      );
+    }
+    const mismatch = firstMismatchingLine(haystack, needle, target);
+    if (mismatch) parts.push(mismatch);
+  } else if (first) {
+    const nearest = mostSimilarLine(haystack, first);
+    if (nearest) {
+      parts.push(
+        `no file line equals the first context line; closest is line ${nearest.index + 1} (${Math.round(nearest.ratio * 100)}% character overlap).`,
+      );
+      parts.push(
+        `expected (${first.length} chars): ${truncateText(first, 160)}\n  actual   (${haystack[nearest.index]!.length} chars): ${truncateText(haystack[nearest.index]!, 160)}`,
+      );
+    } else {
+      parts.push(`the file has ${haystack.length} line(s) and none resemble the first context line.`);
+    }
+  }
+  parts.push("Re-read the exact lines with read_file and resend only this hunk.");
+  return parts.join("\n");
+}
+
+function findLineMatches(haystack: string[], line: string): number[] {
+  const matches: number[] = [];
+  for (let index = 0; index < haystack.length; index += 1) {
+    const candidate = haystack[index]!;
+    if (
+      candidate === line ||
+      candidate.trimEnd() === line.trimEnd() ||
+      candidate.trim() === line.trim()
+    ) {
+      matches.push(index);
+    }
+  }
+  return matches;
+}
+
+function countBlockMatches(haystack: string[], needle: string[], start: number): number {
+  let matched = 0;
+  for (let offset = 0; offset < needle.length; offset += 1) {
+    const candidate = haystack[start + offset];
+    if (candidate === undefined) break;
+    if (candidate === needle[offset] || candidate.trim() === needle[offset]!.trim()) matched += 1;
+  }
+  return matched;
+}
+
+/** 首个不一致行的逐行对比（含字符数与首尾差异），用来一眼看出空白/错字。 */
+function firstMismatchingLine(haystack: string[], needle: string[], start: number): string | undefined {
+  for (let offset = 0; offset < needle.length; offset += 1) {
+    const expected = needle[offset]!;
+    const actual = haystack[start + offset];
+    if (actual === undefined) {
+      return `hunk line ${offset + 1} has no counterpart: the file ends at line ${start + offset}.`;
+    }
+    if (actual === expected) continue;
+    return [
+      `first difference at line ${start + offset + 1} (hunk line ${offset + 1}):`,
+      `  expected (${expected.length} chars): ${truncateText(expected, 160)}`,
+      `  actual   (${actual.length} chars): ${truncateText(actual, 160)}`,
+    ].join("\n");
+  }
+  return undefined;
+}
+
+/** 字符多重集重合度：对 CJK 长行也能给出稳定的相似度，且是 O(n)。 */
+export function lineSimilarity(left: string, right: string): number {
+  if (!left && !right) return 1;
+  if (!left || !right) return 0;
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+  const counts = new Map<string, number>();
+  for (const char of shorter) counts.set(char, (counts.get(char) ?? 0) + 1);
+  let common = 0;
+  for (const char of longer) {
+    const remaining = counts.get(char) ?? 0;
+    if (remaining > 0) {
+      common += 1;
+      counts.set(char, remaining - 1);
+    }
+  }
+  return (2 * common) / (left.length + right.length);
+}
+
+function mostSimilarLine(haystack: string[], line: string): { index: number; ratio: number } | undefined {
+  if (!line || haystack.length === 0 || haystack.length > 20_000) return undefined;
+  let best: { index: number; ratio: number } | undefined;
+  for (let index = 0; index < haystack.length; index += 1) {
+    const ratio = lineSimilarity(haystack[index]!, line);
+    if (!best || ratio > best.ratio) best = { index, ratio };
+  }
+  return best && best.ratio > 0.25 ? best : undefined;
 }
 
 function findHeaderPosition(lines: string[], header: string, cursor: number): number {
@@ -250,12 +396,13 @@ function splitFile(content: string): { lines: string[]; trailingNewline: boolean
   return { lines: body ? body.split("\n") : [], trailingNewline };
 }
 
-function isActionHeader(line: string): boolean {
+function isActionHeader(line: string | undefined): boolean {
+  const value = line?.trim() ?? "";
   return (
-    line === "*** End Patch" ||
-    line.startsWith("*** Add File: ") ||
-    line.startsWith("*** Delete File: ") ||
-    line.startsWith("*** Update File: ")
+    value === "*** End Patch" ||
+    value.startsWith("*** Add File: ") ||
+    value.startsWith("*** Delete File: ") ||
+    value.startsWith("*** Update File: ")
   );
 }
 
