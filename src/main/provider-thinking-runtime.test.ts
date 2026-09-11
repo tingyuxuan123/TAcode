@@ -48,6 +48,8 @@ it("keeps configured Anthropic reasoning tiers consistent through model switches
         { id: screenshotModel, reasoning: true, supportsImages: true, thinkingLevels: configured, contextWindow: 128000, maxTokens: 64000 },
         { id: "deepseek-v4-flash", reasoning: true, thinkingLevels: ["minimal", "xhigh", "max"], contextWindow: 128000, maxTokens: 64000 },
         { id: "legacy-reasoner", reasoning: true, contextWindow: 128000, maxTokens: 64000 },
+        { id: "forced-adaptive-4", reasoning: true, thinkingLevels: ["minimal", "low", "medium", "high"], thinkingDispatch: "adaptive", contextWindow: 128000, maxTokens: 64000 },
+        { id: "forced-budget-6", reasoning: true, thinkingLevels: ["minimal", "low", "medium", "high", "xhigh", "max"], thinkingDispatch: "budget", contextWindow: 128000, maxTokens: 64000 },
         { id: "plain-chat", reasoning: false, thinkingLevels: ["max"], contextWindow: 128000, maxTokens: 64000 },
       ] });
     await host.start({ cwd: dir, provider: "openai", model: screenshotModel, permission: "plan", sandbox: "read-only",
@@ -90,7 +92,23 @@ it("keeps configured Anthropic reasoning tiers consistent through model switches
       expect(payload).not.toHaveProperty("output_config");
     }
 
+    await choose("forced-adaptive-4", ["minimal", "low", "medium", "high"]);
+    for (const [level, effort] of [["minimal", "low"], ["medium", "medium"], ["high", "high"]] as const) {
+      await host.request("set_thinking_level", { level });
+      expect(await prompt()).toMatchObject({ thinking: { type: "adaptive" }, output_config: { effort } });
+    }
+
+    // 显式选择 token 预算后，即使声明了极高/最大也不再走自适应。
+    await choose("forced-budget-6", ["minimal", "low", "medium", "high", "xhigh", "max"]);
+    for (const [level, budget] of [["low", 2048], ["max", 16384]] as const) {
+      await host.request("set_thinking_level", { level });
+      const payload = await prompt();
+      expect(payload).toMatchObject({ thinking: { type: "enabled", budget_tokens: budget } });
+      expect(payload).not.toHaveProperty("output_config");
+    }
+
     await choose("plain-chat", []);
+
     await host.request("set_thinking_level", { level: "max" });
     expect(await host.request("get_state")).toMatchObject({ thinkingLevel: "off" });
     expect(await prompt()).not.toHaveProperty("thinking");

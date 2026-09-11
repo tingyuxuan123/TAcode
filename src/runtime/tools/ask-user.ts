@@ -7,6 +7,26 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export const ASK_USER_TOOL = "ask_user";
 
+/**
+ * 取消/中止时的统一结果：工具立刻返回，让 turn 收尾。
+ *
+ * 交互式提问必须可被中止（用户点停止、轮次预算触发的 abort 都会 abort 当前 run
+ * 的 signal）。否则 worker 会永远挂在一条不会再被应答的 UI 请求上：
+ * `session.abort()` 内部 `await waitForIdle()` 要等这个工具返回，于是 abort 的响应
+ * 永远发不出来，界面上的「停止」看起来完全无效。
+ */
+function cancelledAnswer(question: string, options?: string[]) {
+  return {
+    content: [{ type: "text" as const, text: "User cancelled the question." }],
+    details: {
+      question,
+      ...(options && options.length ? { options } : {}),
+      cancelled: true,
+    },
+    isError: true,
+  };
+}
+
 const askUserParameters = Type.Object({
   question: Type.String({ minLength: 1, maxLength: 500 }),
   options: Type.Optional(
@@ -29,7 +49,7 @@ export function registerAskUserTool(pi: ExtensionAPI): void {
     parameters: askUserParameters,
     renderShell: "self",
     executionMode: "sequential",
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       const question = params.question.trim();
       const options = (params.options ?? []).map((item) => item.trim()).filter(Boolean).slice(0, 6);
       if (!ctx.hasUI) {
@@ -39,30 +59,21 @@ export function registerAskUserTool(pi: ExtensionAPI): void {
           isError: true,
         };
       }
+      // 弹窗还没出现就被中止（例如刚点停止）：直接以取消收尾，不留下无应答的请求。
+      if (signal?.aborted) return cancelledAnswer(question, options);
       ctx.ui.setWorkingVisible(false);
       try {
         if (options.length >= 2) {
-          const choice = await ctx.ui.select(question, options);
-          if (!choice) {
-            return {
-              content: [{ type: "text", text: "User cancelled the question." }],
-              details: { question, options, cancelled: true },
-              isError: true,
-            };
-          }
+          // 传 signal：abort 时 pi 会以 undefined 结束对话框，工具随之返回（见文件头注释）。
+          const choice = await ctx.ui.select(question, options, { signal });
+          if (!choice) return cancelledAnswer(question, options);
           return {
             content: [{ type: "text", text: `User chose: ${choice}` }],
             details: { question, choice, options },
           };
         }
-        const answer = await ctx.ui.input(question);
-        if (answer === undefined) {
-          return {
-            content: [{ type: "text", text: "User cancelled the question." }],
-            details: { question, cancelled: true },
-            isError: true,
-          };
-        }
+        const answer = await ctx.ui.input(question, undefined, { signal });
+        if (answer === undefined) return cancelledAnswer(question, options);
         return {
           content: [{ type: "text", text: `User answered: ${answer}` }],
           details: { question, answer },

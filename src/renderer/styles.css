@@ -4586,6 +4586,20 @@ textarea::selection,
   border-radius: 2.5px;
   background: var(--surface);
 }
+/* 停止中：保持「可停」的实心观感（不要掉进 .send:disabled 的灰底），用脉冲表示正在收尾。 */
+.send.stop.waiting {
+  background: var(--ink);
+  cursor: progress;
+}
+.send.stop.waiting i {
+  animation: stop-waiting 1s ease-in-out infinite;
+}
+@keyframes stop-waiting {
+  50% {
+    transform: scale(0.7);
+    opacity: 0.65;
+  }
+}
 
 .slash-menu {
   margin: 0 2px 4px;
@@ -7460,13 +7474,23 @@ kbd {
   min-width: 0;
 }
 .provider-dialog .provider-capability input { width: auto; }
-.provider-thinking-levels {
+.provider-thinking-levels,
+.provider-thinking-dispatch {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
-.provider-thinking-levels .provider-capability {
+.provider-thinking-dispatch-label {
+  color: var(--ink-2);
+  font-size: calc(11px * var(--ui-font-scale));
+  margin-right: 2px;
+}
+.provider-thinking-dispatch-hint {
+  flex-basis: 100%;
+}
+.provider-thinking-levels .provider-capability,
+.provider-thinking-dispatch .provider-capability {
   border: 1px solid var(--line);
   background: var(--inset);
   border-radius: 999px;
@@ -7476,7 +7500,8 @@ kbd {
   gap: 4px;
   cursor: pointer;
 }
-.provider-thinking-levels .provider-capability:hover {
+.provider-thinking-levels .provider-capability:hover,
+.provider-thinking-dispatch .provider-capability:hover {
   border-color: var(--ink-3);
 }
 .provider-test-success { color: var(--green); background: var(--green-tint); padding: 8px 12px; border-radius: 8px; font-size: calc(12px * var(--ui-font-scale)); flex: none; }

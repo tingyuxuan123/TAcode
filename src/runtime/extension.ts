@@ -630,6 +630,20 @@ function approveToolCallSerialized(
 }
 
 /**
+ * 可被中止的审批对话框。
+ *
+ * `ctx.ui.confirm` 不带 signal 时，用户点停止不会结束这条请求；而
+ * `session.abort()` 要 `await waitForIdle()` 等工具执行结束才回响应，
+ * 于是「停止」会一直看起来没生效。传 signal 后 abort 会以默认值 false 结束对话框，
+ * 审批按「拒绝」收尾，turn 立刻结束。
+ */
+async function confirmApproval(ctx: ExtensionContext, title: string, message: string): Promise<boolean> {
+  const signal = ctx.signal;
+  if (signal?.aborted) return false;
+  return ctx.ui.confirm(title, message, { signal });
+}
+
+/**
  * 统一的工具审批：父会话的 `tool_call` 钩子与子代理工具包装共用，
  * 保证子代理不会绕过父会话的权限模式与危险命令确认。
  */
@@ -680,18 +694,19 @@ async function approveToolCall(
     };
   }
   if (dangerousCommand) {
-    const approved = await ctx.ui.confirm(
+    const approved = await confirmApproval(
+      ctx,
       "Run destructive command?",
       `${command}\n\nThis may delete data or alter system/process state.`,
     );
     if (!approved) return { block: true, reason: "Destructive command denied by user" };
   } else if (toolName === "apply_patch" && isRecord(input) && typeof input.input === "string") {
     for (const section of patchApprovalSections(input.input)) {
-      const approved = await ctx.ui.confirm(`Apply ${section.file}?`, section.patch);
+      const approved = await confirmApproval(ctx, `Apply ${section.file}?`, section.patch);
       if (!approved) return { block: true, reason: `Denied ${section.file} by user` };
     }
   } else {
-    const approved = await ctx.ui.confirm(`Allow ${toolName}?`, approvalSummary(toolName, input));
+    const approved = await confirmApproval(ctx, `Allow ${toolName}?`, approvalSummary(toolName, input));
     if (!approved) return { block: true, reason: "Denied by user" };
   }
   return undefined;

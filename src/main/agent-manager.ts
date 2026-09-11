@@ -30,6 +30,15 @@ export interface AgentManagerOptions {
   createHost(runtimeId: string): AgentHost;
 }
 
+/**
+ * 必须「带外」派发的命令：不能排在按 runtime 串行化的命令队列后面。
+ *
+ * 队列里可能压着长请求（`compact` / `fork` / 大快照 `get_messages`），而 `abort`
+ * 是用户点「停止」后的紧急意图——排在它们后面就意味着停止要等十几秒到几分钟才有反应。
+ * 底层 worker 按行并发处理 stdin，所以直接派发不会打乱已发出命令的先后顺序。
+ */
+const OUT_OF_BAND_COMMANDS = new Set(["abort"]);
+
 /** 主进程启动宿主时补充的壳层参数（扩展路径、桌面服务凭据等）。 */
 export type AgentHostStartOptions = AgentStartOptions & {
   cwd: string;
@@ -142,6 +151,8 @@ export class AgentManager {
   ): Promise<T> {
     const host = this.activeHost(runtimeId);
     if (!host) return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
+    // 停止类命令绕开队列：用户的「停止」不能被队列里的长请求拖住（见 OUT_OF_BAND_COMMANDS）。
+    if (OUT_OF_BAND_COMMANDS.has(type)) return host.request<T>(type, data);
     return this.enqueue(host.runtimeId, async () => {
       const result = await host.request<T>(type, data);
       if (

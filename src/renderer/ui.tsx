@@ -2277,6 +2277,7 @@ export function PromptBar({
   steering,
   rootRef,
   running,
+  stopping = false,
   disabled,
   workspace,
   onPickWorkspace,
@@ -2303,6 +2304,8 @@ export function PromptBar({
   steering?: string[];
   rootRef?: Ref<HTMLDivElement>;
   running: boolean;
+  /** 已发出中止请求、在等 worker 收尾：按钮进入「停止中」态，避免重复点击与「点了没反应」的观感。 */
+  stopping?: boolean;
   disabled?: boolean;
   workspace?: string;
   onPickWorkspace(): void;
@@ -2748,7 +2751,14 @@ export function PromptBar({
           </div>
         )}
         <PromptToolbar down={hero} action={running ? (
-            <button type="button" className="send stop" onClick={onStop} aria-label={t("composer.abort")}>
+            <button
+              type="button"
+              className={stopping ? "send stop waiting" : "send stop"}
+              onClick={onStop}
+              disabled={stopping}
+              aria-busy={stopping}
+              aria-label={stopping ? t("composer.stopping") : t("composer.abort")}
+            >
               <i />
             </button>
           ) : (

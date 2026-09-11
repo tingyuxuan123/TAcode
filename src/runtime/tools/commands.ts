@@ -106,6 +106,7 @@ export function createCommandTools(options: CommandToolOptions) {
           "network",
           params.cmd,
           ctx,
+          signal,
           getPermission(),
           commandAccess,
           access,
@@ -143,6 +144,7 @@ export function createCommandTools(options: CommandToolOptions) {
               boundary,
               params.cmd,
               ctx,
+              signal,
               getPermission(),
               commandAccess,
               access,
@@ -206,7 +208,19 @@ export function formatManagedResult(result: ManagedResult, live = false): string
 async function requestCommandAccess(
   boundary: "network" | "host",
   command: string,
-  ctx: { hasUI: boolean; ui: { setWorkingVisible(visible: boolean): void; select(title: string, options: string[]): Promise<string | undefined>; notify(message: string, type?: "info" | "warning" | "error"): void } },
+  ctx: {
+    hasUI: boolean;
+    ui: {
+      setWorkingVisible(visible: boolean): void;
+      select(
+        title: string,
+        options: string[],
+        opts?: { signal?: AbortSignal },
+      ): Promise<string | undefined>;
+      notify(message: string, type?: "info" | "warning" | "error"): void;
+    };
+  },
+  signal: AbortSignal | undefined,
   permission: PermissionMode,
   current: EffectiveAccess,
   controller: SessionAccessController,
@@ -229,9 +243,12 @@ async function requestCommandAccess(
   ctx.ui.setWorkingVisible(false);
   let choice: string | undefined;
   try {
+    // 传 signal：用户点停止时该对话框会被立即取消，而不是让 worker 一直等应答
+    // （abort 要等当前工具返回才能收尾，见 runtime/tools/ask-user.ts 的同款说明）。
     choice = await ctx.ui.select(
       `${boundary === "network" ? "Allow network access?" : "Allow unrestricted host access?"}\n${oneLine(command, 100)}\nCurrent: ${sandbox}`,
       ["Allow once", "Allow for this conversation", "Deny"],
+      { signal },
     );
   } finally {
     ctx.ui.setWorkingVisible(true);
@@ -243,6 +260,7 @@ async function requestCommandAccess(
     ctx.ui.notify(`${boundaryLabel} allowed for this conversation.`, "warning");
     return controller.forCommand(permission, command);
   }
+  if (signal?.aborted) throw new Error("Command cancelled.");
   throw new Error(`User denied ${boundaryLabel} for: ${oneLine(command, 120)}`);
 }
 

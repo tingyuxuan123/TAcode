@@ -637,3 +637,28 @@
 - styles.css：.user-images 改为 justify-content flex-end + margin 2px，配合 .user-turn 的 column/flex-end/gap 4px 右对齐。
 - 图块无背景、文字保留气泡背景，分离感由「独立块 + 气泡」自然呈现；交互不变（单图大图/多图 280px、hover 保存、点击大图）。
 - pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
+
+## 2026-09-11：模型级「推理下发方式」开关（自动 / 自适应 / Token 预算）（11:45，Asia/Shanghai）
+
+- 背景：anthropic_messages 服务此前用「是否勾选极高/最大档」推断自适应 effort，勾了六档但只实现 budget_tokens 的网关会硬失败，只勾四档但支持 adaptive 的网关会被静默降级成 token 预算。
+- types.ts：ProviderModelBinding 新增 `thinkingDispatch?: "adaptive" | "budget"`，缺省表示按已勾选等级推断（与升级前行为一致）。
+- provider-config.ts：新增 `THINKING_DISPATCHES`、`THINKING_BUDGET_TOKENS`、`serviceThinkingBudget()`（xhigh/max 收敛到 16384）、`serviceThinkingDispatch()`（显式优先，其次按等级推断，非 anthropic 一律 budget）；serviceRuntimeConfig 的 forceAdaptiveThinking 改由该函数决定；validateService 校验枚举值。
+- provider-dialog.tsx：新增 ThinkingDispatchField（三态单选：自动/自适应/Token 预算 + 实际下发说明与预算 token 提示），仅 anthropic_messages 且勾了支持推理时出现；未启用模型走只读「当前下发：X」；styles.css 增加 .provider-thinking-dispatch 系规则（复用档位 pill 样式）。
+- i18n.ts：新增 settings.thinkingDispatch* 中英文案（含预算表与「不静默换算」说明）。
+- 验证：pnpm typecheck 通过；pnpm test 全量 74 文件 / 658 用例通过（provider-config.test.ts 新增显式覆盖、预算表与非法值用例，provider-thinking-runtime.test.ts 新增 forced-adaptive-4 / forced-budget-6 两个真实请求断言）；另用临时 React harness 渲染真实组件，四种状态截图人工确认。未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：「停止」点了没反应（12:10，Asia/Shanghai）
+
+- 现象：turn 停在「等用户应答」的卡片上（ask_user、权限确认、访问边界选择）时，点停止完全没效果，按钮一直停在停止态。
+- 根因一（等待应答的工具不可中止）：pi 的 `session.abort()` = `agent.abort()` + `await waitForIdle()`，必须等当前工具返回才发 abort 响应；而 ask_user 调 `ctx.ui.select/input` 没传 signal，pi RPC 的 UI 请求只能由 extension_ui_response 解开 → 工具永不返回 → abort 响应永不发出（该请求在主进程按 30 分钟长请求超时）→ 渲染层 `setRunning(false)` 永不执行。同类阻塞点：extension.ts 的审批 `confirm`、commands.ts 的访问边界 `select`。
+- 根因二（abort 排队）：主进程把 `abort` 也放进按 runtime 串行化的命令队列，队列里压着 `compact`/`fork`/大快照时停止要排队；pi 侧本身是按行并发处理 stdin 的，不需要这层串行。
+- 修复：
+  - runtime/tools/ask-user.ts：execute 改用工具 signal，select/input 传 `{ signal }`；取消与中止统一走 `cancelledAnswer()`（details.cancelled=true）；已中止时不再弹窗。
+  - runtime/extension.ts：新增 `confirmApproval(ctx, title, message)`，三处审批 confirm 传 `ctx.signal`。
+  - runtime/tools/commands.ts：`requestCommandAccess` 接收 signal 并传给 select，中止时报 "Command cancelled."。
+  - main/agent-manager.ts：新增 `OUT_OF_BAND_COMMANDS`（abort），停止类命令绕过按 runtime 串行队列。
+  - renderer/App.tsx：onStop 先把未决 UI 请求按 `{cancelled:true}` 答复（卡片立即收起）；abort 结果加 10s UI 上限（`STOP_UI_TIMEOUT_MS`），超时把按钮还原可再点，收尾仍由 agent_settled 驱动。
+  - renderer/ui.tsx + styles.css + shared/i18n.ts：停止按钮新增 stopping 态（disabled + 方块脉冲 + aria-label「停止中…」），消除「点了没反应」的观感。
+- 测试：新增 src/runtime/tools/ask-user.test.ts（4 例：选项/文本提问可中止、已中止不弹窗、正常应答不受影响）；src/main/agent-lifecycle.test.ts 新增「abort 带外、不被队列里的 compact 拖住」1 例，并让 FakeHost.blockNextRequest 支持按命令类型挂起。
+- 验证：pnpm typecheck 通过；pnpm test 662/663 通过。唯一失败 src/main/agent-subagents.test.ts「runs a subagent and returns its report to the parent turn」（details 期望 {total:1,done:1} 实得 {}），已用 git stash 移除本次全部改动复跑确认是既有失败，与本次修复无关。
+- 未提交/发布，未改 AGENTS.md。

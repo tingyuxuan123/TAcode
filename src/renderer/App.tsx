@@ -293,6 +293,8 @@ export function SessionRow({
 }
 
 const SANDBOX_OK_KEY = "harness:unsandboxed-projects";
+/** 「停止中」的 UI 上限：超过它就把按钮还原成可再次点击，收尾仍等 agent_settled。 */
+const STOP_UI_TIMEOUT_MS = 10_000;
 
 function allowedProjects(): Set<string> {
   try {
@@ -1591,24 +1593,44 @@ export function App() {
         const seq = startSeq.current;
         const epoch = runEpoch.current;
         eventQueue.current?.flush();
+        // 停在「等用户应答」的卡片上时（ask_user、权限确认、访问边界选择），worker 的
+        // abort 要等这个工具返回才能收尾；先按取消答复，卡片收起、turn 立刻结束。
+        const pendingUi = uiRequest;
+        if (pendingUi && !pendingUi.id.startsWith("harness:")) {
+          setUiRequest(undefined);
+          void window.harness.agent.respondToUi(pendingUi.id, { cancelled: true }).catch(() => undefined);
+        }
         setStopping(true);
-        void window.harness.agent.command("abort")
-          .then(() => {
-            if (seq !== startSeq.current || epoch !== runEpoch.current || !live.current) return;
-            eventQueue.current?.flush();
-            setMessages((current) => epoch === runEpoch.current ? settleStoppedTurn(current) : current);
-            setRunning(false);
+        // 宿主可能要等一个「不可中断的步骤」跑完才回 abort 响应（响应本身也有 10 分钟级上限），
+        // 期间按钮不能一直锁在「停止中」：给 UI 一个上限，超时就把按钮还原成可再次点击，
+        // 真正的收尾仍由 agent_settled 事件驱动。
+        const abortOutcome = window.harness.agent
+          .command("abort")
+          .then(() => "aborted" as const)
+          .catch((error) => (error instanceof Error ? error : new Error(String(error))));
+        const stopDeadline = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), STOP_UI_TIMEOUT_MS));
+        void Promise.race([abortOutcome, stopDeadline]).then((outcome) => {
+          if (seq !== startSeq.current || epoch !== runEpoch.current) return;
+          if (outcome === "timeout") {
             setStopping(false);
-          })
-          .catch((error) => {
-            if (seq !== startSeq.current || epoch !== runEpoch.current) return;
+            return;
+          }
+          if (outcome instanceof Error) {
             setStopping(false);
-            setToast(friendlyAgentError(error));
-          });
+            setToast(friendlyAgentError(outcome));
+            return;
+          }
+          if (!live.current) return;
+          eventQueue.current?.flush();
+          setMessages((current) => epoch === runEpoch.current ? settleStoppedTurn(current) : current);
+          setRunning(false);
+          setStopping(false);
+        });
       }}
       steering={steering}
       rootRef={dock}
       running={running}
+      stopping={stopping}
       disabled={loading || modelSwitchPending}
       workspace={workspace}
       onPickWorkspace={() => void openFolder()}

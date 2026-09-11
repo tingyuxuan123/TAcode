@@ -72,20 +72,21 @@ class FakeHost {
 
   async request<T>(type: string, data?: Record<string, unknown>): Promise<T> {
     this.requests.push({ type, ...(data ? { data } : {}) });
-    if (this.blocker) {
-      const blocker = this.blocker;
+    // 只挂起被点名的命令类型：其余命令（例如带外派发的 abort）照常返回。
+    const blocker = this.blocker;
+    if (blocker && (blocker.type === undefined || blocker.type === type)) {
       await new Promise<void>((resolve) => {
         blocker.resolve = resolve;
       });
-      this.blocker = undefined;
+      if (this.blocker === blocker) this.blocker = undefined;
     }
     if (type === "get_session_stats") return { sessionFile: this.sessionKey } as T;
     return {} as T;
   }
 
-  /** 测试用：让下一次 request 挂起，直到 releaseRequest()。 */
-  blockNextRequest(): void {
-    this.blocker = { resolve: () => undefined };
+  /** 测试用：让下一次 request 挂起，直到 releaseRequest()；给出 type 时只挂起该类命令。 */
+  blockNextRequest(type?: string): void {
+    this.blocker = { resolve: () => undefined, type };
   }
 
   releaseRequest(): void {
@@ -93,7 +94,7 @@ class FakeHost {
     this.blocker = undefined;
   }
 
-  private blocker?: { resolve: () => void };
+  private blocker?: { resolve: () => void; type?: string };
 
   async respondToUi(id: string, response: Record<string, unknown>): Promise<void> {
     this.uiResponses.push({ id, response });
@@ -249,6 +250,21 @@ describe("AgentManager", () => {
 
     hosts[0].releaseRequest();
     await pending;
+  });
+
+  it("dispatches abort out of band so a queued long request cannot stall the user's stop", async () => {
+    // 回归：队列里压着长请求（compact / fork / 大快照）时，abort 若排队就会等它完成，
+    // 用户点「停止」十几秒没有反应。停止必须带外直达 worker。
+    const started = await manager.start(options("/a.jsonl"));
+    hosts[0].blockNextRequest("compact");
+    const queued = manager.command(started.runtimeId, "compact");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await expect(manager.command(started.runtimeId, "abort")).resolves.toEqual({});
+    expect(hosts[0].requests.map((item) => item.type)).toEqual(["compact", "abort"]);
+
+    hosts[0].releaseRequest();
+    await queued;
   });
 
   it("does not spawn a duplicate host when start races with an existing running host", async () => {
