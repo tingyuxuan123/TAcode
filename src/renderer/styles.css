@@ -2535,6 +2535,8 @@ textarea::selection,
 .progress-spinner { animation: flow-spin 1.1s linear infinite; color: var(--accent, var(--link)); }
 .progress-ok { color: var(--green, #2ec27e); }
 .progress-err { color: var(--red); }
+/* 等待中：比“已完成/失败”弱一档，与行尾「等待中」文字同色 */
+.progress-pending { color: var(--ink-3); }
 .progress-overlay-popover { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 2rem)); max-height: 300px; overflow-y: auto; padding: 0 6px 6px; border: 1px solid var(--line-strong); border-radius: 12px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: var(--shadow-overlay); backdrop-filter: blur(8px); }
 .progress-overlay-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 6px; background: var(--surface); color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); font-weight: 600; letter-spacing: 0.02em; }
 .progress-overlay-head-count { flex: none; color: var(--ink-3); font-variant-numeric: tabular-nums; font-weight: 500; }
@@ -6622,9 +6624,10 @@ kbd {
 .provider-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   overflow-y: auto;
   min-height: 0;
+  padding-right: 2px;
   padding-bottom: 4px;
 }
 
@@ -6632,11 +6635,18 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: 11px 14px;
+  border-radius: 12px;
   background: var(--surface);
-  box-shadow: var(--shadow-btn);
-  border: 1px solid transparent;
+  /* 描边必须画在盒内（border）：滚动容器 .provider-list 无横向 padding，
+     用 --shadow-btn 那种盒外 1px 环会被 overflow 裁掉，卡片边缘看着像缺了一条边 */
+  box-shadow: 0 1px 2px #1c19170d;
+  border: 1px solid var(--line-strong);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.provider-row:hover {
+  border-color: var(--ink-3);
 }
 
 .provider-row.default {
@@ -6644,8 +6654,16 @@ kbd {
   background: var(--accent-tint);
 }
 
+.provider-row.default:hover {
+  border-color: var(--accent-ink);
+}
+
 .provider-row.disabled {
   opacity: 0.5;
+}
+
+.provider-row.disabled:hover {
+  border-color: var(--line-strong);
 }
 
 .provider-row-main {
@@ -6658,7 +6676,14 @@ kbd {
 .provider-row-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
+  min-width: 0;
+}
+
+.provider-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -6671,7 +6696,8 @@ kbd {
 }
 
 .provider-row-url {
-  font-size: calc(11.5px * var(--ui-font-scale));
+  font-family: var(--mono);
+  font-size: calc(11px * var(--ui-font-scale));
   color: var(--ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6684,17 +6710,48 @@ kbd {
   gap: 6px;
   font-size: calc(11.5px * var(--ui-font-scale));
   color: var(--ink-3);
+  min-width: 0;
+}
+
+/* meta 内多段信息之间用发丝点分隔 */
+.provider-row-meta > * + *::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--line-strong);
 }
 
 .provider-row-default {
-  display: inline-block;
-  padding: 0 6px;
-  border-radius: 4px;
+  flex: none;
+  padding: 0 8px;
+  border-radius: 999px;
   background: var(--accent-ink);
-  color: var(--accent-bg);
+  color: var(--surface);
   font-size: calc(10px * var(--ui-font-scale));
   font-weight: 600;
-  line-height: 18px;
+  line-height: 17px;
+}
+
+/* 服务当前的默认模型：只读展示，改在服务编辑里改 */
+.provider-row-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.provider-row-model-label {
+  flex: none;
+}
+
+.provider-row-model-value {
+  margin-left: 6px;
+  font-family: var(--mono);
+  font-size: calc(11px * var(--ui-font-scale));
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .provider-row-actions {
@@ -7421,7 +7478,6 @@ kbd {
 }
 .provider-test-success { color: var(--green); background: var(--green-tint); padding: 8px 12px; border-radius: 8px; font-size: calc(12px * var(--ui-font-scale)); flex: none; }
 .provider-test-hint { padding: 0 24px 16px; }
-.provider-row-model { margin-top: 12px; }
 
 .provider-model-limits label {
   display: flex;

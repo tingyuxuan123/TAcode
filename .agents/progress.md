@@ -1,5 +1,29 @@
 # 模型供应商管理进度
 
+## 2026-09-11：AI 服务列表卡片排版优化（09:47-10:00，Asia/Shanghai）
+
+- 用户附截图：要求优化 AI 服务列表样式。上一轮（09:42）去掉了卡片上的重复下拉后，剩余问题：①「默认」墨底方角徽章插在 meta 文本中间，位置突兀；②一条旧布局残留 `.provider-row-model { margin-top: 12px }` 把 meta 行往下坠，行距不均、卡片松散；③非默认卡片边界太淡、无 hover 反馈；④ meta 行「N 个模型」「默认模型 xxx」灰字连排无分隔，模型名与中文标签混在一个 mono 片段里截断。
+- `src/renderer/provider-dialog.tsx`：信息区拆出 `.provider-row-title`（名称 + 「默认」徽章同 row）；meta 行改为「N 个模型 · 默认模型 <模型名>」，标签用新 i18n key，模型名独立成 `.provider-row-model-value`（mono、自行 ellipsis）。
+- `src/shared/i18n.ts`：`settings.rowDefaultModel`（含 {model} 占位）改为 `settings.rowDefaultModelLabel`（中英两处）。
+- `src/renderer/styles.css`：卡片 padding 11px 14px、圆角 12px，hover 描边 `--line-strong`（默认卡 hover 保持墨边）；`.provider-row-default` 改全圆胶囊（规范允许徽章全圆）；meta 子项之间用 `+ *::before` 加发丝点分隔；删除 7439 行的 `margin-top: 12px` 残留。
+- 验证：静态预览（会话工作台 `plan/preview/provider-list.html` + 同目录 styles.css 副本；proma-file:// 协议下相对路径跳出会失败，需复制 css 到预览目录旁）核对普通/默认/停用三种卡片。`pnpm typecheck` 通过；`pnpm test` 73 文件 646 用例通过；`pnpm build:renderer` 已重建。未提交、未发布、未改 AGENTS.md。
+
+## 2026-09-11：AI 服务卡片去掉重复的下拉 + 收拾版面（09:42-09:47，Asia/Shanghai）
+
+- 用户反馈：AI 服务页显示得有点丑，并问每张卡的「默认模型（选择后设为默认服务）」下拉有什么用，没用就移。
+- 结论：确实重复，已移除。它做的事：同时把全局默认服务 + 默认模型设成这张卡（主进程 `provider-store.setDefault(id, model)` 会写 `provider.defaultModelId`、`store.defaultProviderId`、`store.defaultModelId`）。而这三件事都有现成入口——行尾图钉设默认服务；输入框的模型选择器选模型时会调 `providers.setDefault(serviceId, model)`；服务自己的默认模型在「编辑服务 → 服务默认模型」里改。卡片上再放一个下拉既重复又占高度。
+- `src/renderer/provider-dialog.tsx`：删掉 `.provider-row-model` 下拉；meta 行改为只读的一行「N 个模型 默认模型 <modelId>」（值 = 默认服务用全局默认模型，其他服务用各自的 `defaultModelId`），鼠标悬停提示改在哪里改。
+- 排版打磨：`.provider-row-default`（默认标记）之前写的 `color: var(--accent-bg)` 并不存在，颜色回落到继承值（低对比度，看着脏），改为 `var(--surface)`；`.provider-row-url` 改用等宽小字，与同行的模型名对齐。
+- i18n：删掉已无引用的 `settings.defaultServiceModel`，新增 `settings.rowDefaultModel`；`settings.serviceModel` 改成提示文案（指到哪里改）。
+- 验证：静态预览（会话工作台 `plan/preview/provider-cards.html`，真实 styles.css）核对浅/深色下的新卡片、默认标记对比度。`pnpm typecheck` 通过；`pnpm test` 73 文件 646 用例通过；`pnpm build:renderer` 已重建。未提交、未发布、未改 AGENTS.md。
+
+## 2026-09-11：规划列表「等待中」换成时钟图标（09:38-09:41，Asia/Shanghai）
+
+- 用户反馈：规划/任务列表里「等待中」的图标不对，不符合含义，要求换一个。
+- 原因：`progress-overlay.tsx` 的 `statusGlyph` 对 pending 直接落到兜底分支，用的 `ListTodo`（清单图标）——那是「无活动任务」的图标，与行尾文字「等待中」对不上。
+- 改：pending 单独返回 `Clock`（时钟 = 排队/等待），并新增 `.progress-pending { color: var(--ink-3) }` 与行尾状态文字同色（比“已完成/失败”弱一档）；`ListTodo` 保留作无任务时的兜底。
+- 验证：静态预览（会话工作台 `plan/preview/plan-list.html`，真实 `.progress-overlay-popover` 结构 + 真实 styles.css，图标为 lucide 1.41 真实节点）核对四种状态：已完成圆圈勾、进行中旋转环、**等待中时钟**、失败告警圆。`pnpm typecheck` 通过；`pnpm test` 73 文件 646 用例通过；`pnpm build:renderer` 已重建。未提交、未发布、未改 AGENTS.md。
+
 ## 2026-09-11：修进度胶囊遮挡转写最后几行（09:32-09:36，Asia/Shanghai）
 
 - 用户附截图（「遮挡内容」）：任务进度胶囊浮在写作区底部，盖住了「思考」块最后一行（Analyzing bicycle SVG coordinates）。

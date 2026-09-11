@@ -786,8 +786,7 @@ export function ProviderListPage({
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const action = async (run: () => Promise<void>) => {
+  const [busy, setBusy] = useState(false);  const action = async (run: () => Promise<void>) => {
     setBusy(true); setResult(null);
     try { await run(); }
     catch (error) { setResult({ ok: false, message: error instanceof Error ? error.message : String(error) }); }
@@ -821,6 +820,8 @@ export function ProviderListPage({
         <div className="provider-list">
           {providers.map((provider) => {
             const isDefault = provider.id === defaultProviderId;
+            // 默认服务用全局默认模型，其他服务用自己文档里的默认模型（都能在服务编辑里改）。
+            const serviceModel = ((isDefault ? defaultModelId : provider.defaultModelId) ?? provider.models[0]?.id) || "";
             return (
               <div
                 key={provider.id}
@@ -828,11 +829,19 @@ export function ProviderListPage({
               >
                 <div className="provider-row-main">
                   <div className="provider-row-info">
-                    <strong>{provider.name}</strong>
+                    <div className="provider-row-title">
+                      <strong>{provider.name}</strong>
+                      {isDefault && <span className="provider-row-default">{t("settings.default")}</span>}
+                    </div>
                     <span className="provider-row-url">{provider.baseUrl}</span>
                     <span className="provider-row-meta">
-                      {provider.models.length} {t("settings.modelsCount")}
-                      {isDefault && <span className="provider-row-default">{t("settings.default")}</span>}
+                      <span>{provider.models.length} {t("settings.modelsCount")}</span>
+                      {serviceModel && (
+                        <span className="provider-row-model" title={t("settings.serviceModel")}>
+                          <span className="provider-row-model-label">{t("settings.rowDefaultModelLabel")}</span>
+                          <span className="provider-row-model-value">{serviceModel}</span>
+                        </span>
+                      )}
                     </span>
                   </div>
                   <div className="provider-row-actions">
@@ -894,14 +903,6 @@ export function ProviderListPage({
                     </button>
                   </div>
                 </div>
-                <label className="provider-field provider-row-model">
-                  <span>{t("settings.defaultServiceModel")}</span>
-                  <select disabled={!provider.isEnabled || busy}
-                    value={(isDefault ? defaultModelId : provider.defaultModelId) ?? provider.models[0]?.id ?? ""}
-                    onChange={(e) => void action(() => onSetDefault(provider.id, e.target.value))}>
-                    {provider.models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
-                  </select>
-                </label>
               </div>
             );
           })}

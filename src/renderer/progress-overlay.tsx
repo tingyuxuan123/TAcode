@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, CheckCircle2, ChevronRight, CircleAlert, ListTodo, LoaderCircle } from "lucide-react";
+import { ArrowDown, CheckCircle2, ChevronRight, CircleAlert, Clock, ListTodo, LoaderCircle } from "lucide-react";
 import type { ProgressTask } from "./conversation";
 import { useI18n } from "./i18n";
 
@@ -17,6 +17,8 @@ function statusGlyph(task: ProgressTask | undefined): ReactNode {
   if (task.status === "running") return <LoaderCircle size={15} className="progress-spinner" aria-hidden="true" />;
   if (task.status === "completed") return <CheckCircle2 size={15} className="progress-ok" aria-hidden="true" />;
   if (task.status === "failed") return <CircleAlert size={15} className="progress-err" aria-hidden="true" />;
+  // 等待中（已登记、还没轮到它跑）：用时钟表示排队，不要用清单图标——那是「无活动任务」的兜底图标。
+  if (task.status === "pending") return <Clock size={15} className="progress-pending" aria-hidden="true" />;
   return <ListTodo size={15} aria-hidden="true" />;
 }
 
