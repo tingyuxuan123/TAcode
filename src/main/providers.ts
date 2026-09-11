@@ -52,8 +52,16 @@ export async function desktopProviderStatus() {
   return desktopProviderStatuses(store.providers, store.defaultProviderId, store.defaultModelId);
 }
 
-export async function resolveDesktopProvider(id: string, modelId?: string) {
+/**
+ * 子代理钉选里的 `provider` 段能不能当一个「AI 服务」来用：
+ * 命中已启用服务就返回它的 id，否则返回 undefined（按内置供应商处理）。
+ */
+export async function resolveDesktopServiceId(id: string): Promise<string | undefined> {
   const store = await providerRepository().load();
+  return store.providers.find((provider) => provider.id === id && provider.isEnabled)?.id;
+}
+
+export async function resolveDesktopProvider(id: string, modelId?: string) {  const store = await providerRepository().load();
   const provider = store.providers.find((p) => p.id === id && p.isEnabled);
   if (!provider) throw new Error("供应商已删除或禁用，请重新选择服务");
   const model = modelId || (store.defaultProviderId === id ? store.defaultModelId : provider.defaultModelId) || provider.models[0].id;

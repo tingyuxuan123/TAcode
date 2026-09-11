@@ -42,7 +42,7 @@ import {
 } from "../runtime/index";
 import { AgentHost } from "./agent-host";
 import { DelegationCoordinator } from "./delegation-coordinator";
-import { delegationRunOptions } from "./delegation-run-options";
+import { delegationRunOptions, delegationProviderTarget } from "./delegation-run-options";
 import { AgentManager, sessionFileOf } from "./agent-manager";
 import { closeAllBrowserPopups } from "./browser/popups";
 import { closeAllDetachedBrowserWindows } from "./browser/windows";
@@ -169,7 +169,8 @@ if (!fs.existsSync(userDataPath) && fs.existsSync(legacyUserDataPath)) {
 process.env.TETHER_CREDENTIALS_STORE = "file";
 
 let mainWindow: BrowserWindow | undefined;
-const browserAutomation = new BrowserAutomation(() => mainWindow);
+// 第二个参数把当前工作区交给浏览器自动化：browser_navigate 传 path 时直接预览工作区文件。
+const browserAutomation = new BrowserAutomation(() => mainWindow, () => activeAgentCwd);
 
 /** 本地诊断日志（只写本机、限大小、可轮转，不上传；写入前脱敏已知凭据）。 */
 const diagnostics = new LocalLogger({
@@ -538,7 +539,7 @@ function installMenu(): void {
   );
 }
 
-import { registerProviderIpcHandlers, desktopProviderStatus, resolveDesktopProvider } from "./providers";
+import { registerProviderIpcHandlers, desktopProviderStatus, resolveDesktopProvider, resolveDesktopServiceId } from "./providers";
 
 function registerIpc(): void {
   ipcMain.handle("app:version", () => app.getVersion());
@@ -2034,20 +2035,31 @@ app.whenReady().then(async () => {
     createHost: (runtimeId, delegationId) => createAgentHost(runtimeId, delegationId),
     findParentHost: (sessionPath) => agentManager.findBySession(sessionPath),
     buildStartOptions: async (payload, definition, sessionPath) => {
-      const provider = payload.provider as SupportedProviderId;
+      // 钉选的 provider 段如果命中用户加的 AI 服务，就把服务也一起接过去：
+      // 子代理可以跑在与当前会话不同的服务上（对齐 PI-Desktop 的模型钉选语义）。
+      const pinnedServiceId = definition.model
+        ? await resolveDesktopServiceId(definition.model.providerId)
+        : undefined;
+      const target = delegationProviderTarget({
+        parentProvider: String(payload.provider ?? ""),
+        ...(payload.serviceId ? { parentServiceId: payload.serviceId } : {}),
+        ...(pinnedServiceId ? { pinnedServiceId } : {}),
+      });
+      const provider = target.provider as SupportedProviderId;
       if (!SUPPORTED_PROVIDER_IDS.includes(provider)) throw new Error(`Unsupported delegation provider: ${payload.provider}`);
       const tasksDir = path.resolve(path.join(userDataPath, "tasks"));
       const cwd = path.resolve(payload.cwd);
       await fsp.mkdir(cwd, { recursive: true });
       const sandbox = cwd === tasksDir ? "read-only" : payload.sandbox;
       const storedUrl = provider === "deepseek" ? getStoredDeepSeekBaseUrl() : undefined;
-      const rawUrl = payload.baseUrl ?? storedUrl;
+      // 钉了服务时 baseUrl 由该服务提供，父会话的 baseUrl 不能跟着串过去。
+      const rawUrl = pinnedServiceId ? undefined : payload.baseUrl ?? storedUrl;
       await syncDeepSeekVisionConfig().catch(() => undefined);
       const profiles = await loadChatProfiles();
       const maxTokens = payload.maxTokens ?? activeCustomProfile(profiles)?.maxTokens;
       const baseUrl = rawUrl ? apiBaseUrl(rawUrl) : undefined;
-      const desktopProvider = payload.serviceId
-        ? await resolveDesktopProvider(payload.serviceId, definition.model?.modelId ?? payload.model)
+      const desktopProvider = target.serviceId
+        ? await resolveDesktopProvider(target.serviceId, definition.model?.modelId ?? payload.model)
         : undefined;
       return {
         provider,

@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { Bot, Check, Download, Info, PanelLeftClose, PanelLeftOpen, Target, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { PREVIEW_HOST, PREVIEW_SCHEME, type AgentSessionStats, type ExtensionUiRequest, type PermissionMode } from "../shared/types";
+import type { AgentSessionStats, ExtensionUiRequest, PermissionMode } from "../shared/types";
+import { workspacePreviewUrl } from "../shared/preview";
 import { skillUserDisplay } from "../shared/skills";
 import { visibleUserText, visionResultSections, visionToolChips } from "../shared/vision-api";
 import { defaultCustomProfile, type CustomApiProfile } from "../shared/chat-profiles";
@@ -2120,10 +2121,7 @@ function splitView(patch: string) {
 }
 
 /** Served by the main process from the workspace, so relative assets and page storage both work. */
-function previewUrl(file: string): string {
-  const path = file.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
-  return `${PREVIEW_SCHEME}://${PREVIEW_HOST}/${path}`;
-}
+const previewUrl = workspacePreviewUrl;
 
 function mentionAt(text: string, cursor: number): { start: number; query: string } | undefined {
   const before = text.slice(0, cursor);
@@ -3590,7 +3588,7 @@ export function Login({
             </button>
           </header>
           <div className="settings-body">
-            {pane === "subagents" && <SubagentsSettings />}
+            {pane === "subagents" && <SubagentsSettings providers={providers} />}
             {pane === "vision" && (
               <>
                 <p className="settings-hint">{t("settings.visionHint")}</p>

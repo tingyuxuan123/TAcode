@@ -1,10 +1,13 @@
 import { BrowserWindow, webContents, type WebContents } from "electron";
+import { watch, type FSWatcher } from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { browserText, validateBrowserParams, type BrowserParams, type BrowserRegistration, type BrowserToolResult } from "../../shared/browser-tools";
+import { browserText, normalizeBrowserParams, type BrowserParams, type BrowserRegistration, type BrowserToolResult } from "../../shared/browser-tools";
 import { normalizeUrl } from "../../renderer/browser/url";
 import { BrowserRefs, type AXNode } from "./accessibility";
 import { pageOperation } from "./page-operations";
+import { resolveWorkspacePreview, type WorkspacePreviewTarget } from "./preview-target";
 
 interface Tab extends BrowserRegistration { guest: WebContents; owner: WebContents; refs: BrowserRefs; ownerRuntimeId?: string }
 type RemoteResult = { result: { objectId?: string; value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } };
@@ -19,6 +22,13 @@ interface AgentSession {
 
 /** 同一会话排队等待的浏览器操作上限，防止异常输入把内存撑爆。 */
 const MAX_QUEUED_OPERATIONS = 8;
+/** 同时监听的预览目录上限；超出后先放过最旧的，避免无限堆积 fs.watch。 */
+const MAX_PREVIEW_WATCHES = 6;
+/** 预览文件变更的防抖间隔，与 PI-Desktop 的 live reload 取值一致。 */
+const PREVIEW_RELOAD_DEBOUNCE_MS = 250;
+
+/** 正在监听的本地预览文件；文件或其同目录资源变更时刷新对应 guest。 */
+interface PreviewWatch { watcher: FSWatcher; timer?: NodeJS.Timeout; file: string }
 
 function aborted(signal: AbortSignal) { if (signal.aborted) throw new Error("浏览器操作已取消或超时"); }
 async function bounded<T>(promise: Promise<T>, signal: AbortSignal, timeoutMs = 8000): Promise<T> {
@@ -44,7 +54,13 @@ export class BrowserAutomation {
   private presentations = new Map<string, { owner: WebContents; resolve: () => void }>();
   /** 每个宿主窗口只注册一次销毁清理，避免多标签重复挂监听。 */
   private watchedOwners = new WeakSet<WebContents>();
-  constructor(private readonly getMainWindow: () => BrowserWindow | undefined) {}
+  /** tabId → 正在监听的本地预览文件（PI-Desktop live reload 的等价实现）。 */
+  private previewWatches = new Map<string, PreviewWatch>();
+  constructor(
+    private readonly getMainWindow: () => BrowserWindow | undefined,
+    /** 当前会话的工作区根：用于把工作区文件解析成内置浏览器可加载的预览 URL。 */
+    private readonly getWorkspaceRoot?: () => string | undefined,
+  ) {}
 
   private session(runtimeId?: string): AgentSession {
     const key = runtimeId || "default";
@@ -62,12 +78,16 @@ export class BrowserAutomation {
     if (runtimeId === undefined) {
       for (const session of this.sessions.values()) session.workingTabId = undefined;
       for (const tab of this.tabs.values()) tab.refs.clear();
+      for (const tabId of [...this.previewWatches.keys()]) this.stopPreviewWatch(tabId);
       return;
     }
     const session = this.sessions.get(runtimeId);
     if (session) session.workingTabId = undefined;
     for (const tab of this.tabs.values())
-      if (tab.ownerRuntimeId === runtimeId) tab.refs.clear();
+      if (tab.ownerRuntimeId === runtimeId) {
+        tab.refs.clear();
+        this.stopPreviewWatch(tab.tabId);
+      }
   }
 
   register(owner: WebContents, registration: BrowserRegistration) {
@@ -93,6 +113,7 @@ export class BrowserAutomation {
 
   private remove(tab: Tab) {
     if (this.tabs.get(tab.tabId) !== tab) return;
+    this.stopPreviewWatch(tab.tabId);
     this.tabs.delete(tab.tabId);
     tab.refs.clear();
     for (const session of this.sessions.values())
@@ -107,8 +128,45 @@ export class BrowserAutomation {
       if (pending.owner === owner) this.presentations.delete(requestId);
   }
 
+  /** 预览文件变更后刷新对应 guest（对齐 PI-Desktop 的 live reload）。 */
+  private watchPreview(tab: Tab, file: string) {
+    this.stopPreviewWatch(tab.tabId);
+    let watcher: FSWatcher;
+    try {
+      watcher = watch(path.dirname(file), { persistent: false });
+    } catch {
+      return;
+    }
+    const entry: PreviewWatch = { watcher, file };
+    watcher.on("change", () => {
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => {
+        entry.timer = undefined;
+        const current = this.tabs.get(tab.tabId);
+        if (current !== tab || tab.guest.isDestroyed()) return;
+        // 页面重载后旧 ref 全部失效，与导航保持一致。
+        tab.refs.clear();
+        tab.guest.reload();
+      }, PREVIEW_RELOAD_DEBOUNCE_MS);
+    });
+    watcher.on("error", () => this.stopPreviewWatch(tab.tabId));
+    this.previewWatches.set(tab.tabId, entry);
+    if (this.previewWatches.size > MAX_PREVIEW_WATCHES)
+      for (const tabId of this.previewWatches.keys())
+        if (tabId !== tab.tabId) { this.stopPreviewWatch(tabId); break; }
+  }
+
+  private stopPreviewWatch(tabId: string) {
+    const entry = this.previewWatches.get(tabId);
+    if (!entry) return;
+    this.previewWatches.delete(tabId);
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.watcher.close();
+  }
+
   execute(tool: string, params: BrowserParams, externalSignal: AbortSignal, runtimeId?: string): Promise<BrowserToolResult> {
-    validateBrowserParams(tool, params);
+    // 模型可能把可选参数填成空串（如 tabId:""）；归一化后按“未提供”处理，避免整次调用失败。
+    const input = normalizeBrowserParams(tool, params);
     const session = this.session(runtimeId);
     if (session.queued >= MAX_QUEUED_OPERATIONS) return Promise.reject(new Error("浏览器操作排队过多，请等待当前操作结束后重试。"));
     const signal = AbortSignal.any([externalSignal, AbortSignal.timeout(40000)]);
@@ -116,7 +174,7 @@ export class BrowserAutomation {
     const run = session.queue.catch(() => {}).then(() => {
       session.queued = Math.max(0, session.queued - 1);
       aborted(signal);
-      return this.perform(tool, params, signal, session);
+      return this.perform(tool, input, signal, session);
     });
     session.queue = run.catch(() => undefined);
     return run;
@@ -155,7 +213,7 @@ export class BrowserAutomation {
     } finally { this.presentations.delete(requestId); }
   }
 
-  private async create(url: string, signal: AbortSignal, session: AgentSession): Promise<Tab> {
+  private async create(target: { url: string; preview?: WorkspacePreviewTarget }, signal: AbortSignal, session: AgentSession): Promise<Tab> {
     const win = this.getMainWindow();
     if (!win || win.isDestroyed()) throw new Error("主窗口不可用，请重新打开 TACode");
     const instanceId = `agent-browser-${randomUUID()}`;
@@ -168,7 +226,7 @@ export class BrowserAutomation {
       if (tab) {
         tab.ownerRuntimeId = session.runtimeId;
         session.workingTabId = tab.tabId;
-        if (url !== "about:blank") await this.navigate(tab, url, signal);
+        if (target.url !== "about:blank") await this.navigate(tab, target.url, signal, target.preview);
         return tab;
       }
       await delay(50, undefined, { signal });
@@ -264,8 +322,21 @@ export class BrowserAutomation {
     }
   }
 
-  private async navigate(tab: Tab, url: string, signal: AbortSignal) {
+  /** 工作区文件路径 → harness-preview 预览 URL；其余输入仍按普通 URL 处理。 */
+  private destination(params: BrowserParams): { url: string; preview?: WorkspacePreviewTarget } {
+    const pathParam = typeof params.path === "string" ? params.path : undefined;
+    const urlParam = typeof params.url === "string" ? params.url : undefined;
+    const preview = resolveWorkspacePreview(pathParam ?? urlParam, this.getWorkspaceRoot?.(), { explicit: pathParam !== undefined });
+    if (preview) return { url: preview.url, preview };
+    if (pathParam !== undefined)
+      throw new Error("未找到该工作区文件。path 必须是项目内已存在的文件（相对项目根，如 demo/index.html，或绝对路径）。");
+    return { url: this.url(urlParam ?? "about:blank") };
+  }
+
+  private async navigate(tab: Tab, url: string, signal: AbortSignal, preview?: WorkspacePreviewTarget) {
     tab.refs.clear();
+    if (preview) this.watchPreview(tab, preview.file);
+    else this.stopPreviewWatch(tab.tabId);
     await this.show(tab, signal);
     // CDP Page.navigate acknowledges navigation without waiting for all subresources/streaming requests.
     const result = await this.cdp<{ errorText?: string; loaderId?: string }>(tab, "Page.navigate", { url }, signal);
@@ -339,7 +410,7 @@ export class BrowserAutomation {
   private async perform(tool: string, params: BrowserParams, signal: AbortSignal, session: AgentSession): Promise<BrowserToolResult> {
     if (tool === "browser_list_tabs") return browserText({ tabs: this.list(session), workingTabId: session.workingTabId ?? null });
     if (tool === "browser_new_tab" || (tool === "browser_navigate" && !params.tabId && !session.workingTabId)) {
-      const tab = await this.create(this.url(params.url as string | undefined ?? "about:blank"), signal, session);
+      const tab = await this.create(this.destination(params), signal, session);
       return browserText(await this.observe(tab, {}, signal));
     }
     const tab = this.target(params, session);
@@ -352,7 +423,11 @@ export class BrowserAutomation {
       this.remove(tab);
       return browserText({ closed: true, tabId: tab.tabId });
     }
-    if (tool === "browser_navigate") { await this.navigate(tab, this.url(params.url as string), signal); return browserText(await this.observe(tab, {}, signal)); }
+    if (tool === "browser_navigate") {
+      const target = this.destination(params);
+      await this.navigate(tab, target.url, signal, target.preview);
+      return browserText(await this.observe(tab, {}, signal));
+    }
     if (tool === "browser_observe" || tool === "browser_find") return browserText(await this.observe(tab, params, signal));
     let result: unknown;
     if (["browser_click", "browser_fill", "browser_hover", "browser_dom", "browser_select_option", "browser_press", "browser_scroll", "browser_screenshot"].includes(tool)) await this.show(tab, signal);

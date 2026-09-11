@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MAX_SUBAGENT_MAX_TURNS } from "../shared/subagents";
-import { delegationRunOptions, delegationTurnLimit } from "./delegation-run-options";
+import { delegationProviderTarget, delegationRunOptions, delegationTurnLimit } from "./delegation-run-options";
 
 /**
  * 回归：角色定义里配的 `thinkingLevel` / `maxTurns` 必须真的进 worker 启动选项。
@@ -47,5 +47,32 @@ describe("delegationTurnLimit", () => {
 
   it("默认值与内置角色定义一致（两条路径不会各算一套）", () => {
     expect(MAX_SUBAGENT_MAX_TURNS).toBe(60);
+  });
+});
+
+/**
+ * 子代理模型钉选的 provider 段可以是用户在「AI 服务」里加的服务 id：
+ * 主进程查库命中就把服务一起接给子代理（它就能跑在与会话不同的服务上）；
+ * 没命中时沿用父会话的供应商与服务，不会把「服务」偷换成别的东西。
+ */
+describe("delegationProviderTarget", () => {
+  it("钉选命中服务时用该服务，运行时供应商固定为 openai", () => {
+    expect(delegationProviderTarget({
+      parentProvider: "openai",
+      parentServiceId: "subapi",
+      pinnedServiceId: "hub",
+    })).toEqual({ provider: "openai", serviceId: "hub" });
+  });
+
+  it("没钉服务时沿用父会话的供应商与服务", () => {
+    expect(delegationProviderTarget({ parentProvider: "openai", parentServiceId: "subapi" }))
+      .toEqual({ provider: "openai", serviceId: "subapi" });
+    expect(delegationProviderTarget({ parentProvider: "deepseek" }))
+      .toEqual({ provider: "deepseek" });
+  });
+
+  it("钉选没命中服务（写的是内置供应商或服务已删除）时不带上服务", () => {
+    expect(delegationProviderTarget({ parentProvider: "deepseek", pinnedServiceId: undefined }))
+      .toEqual({ provider: "deepseek" });
   });
 });

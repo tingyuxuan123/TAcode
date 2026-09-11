@@ -62,3 +62,33 @@ export function delegationRunOptions(
     ...(definition.execPolicy === "readonly" ? { execPolicy: "readonly" as const } : {}),
   };
 }
+
+/** 子代理跑在哪个供应商/服务上。 */
+export interface DelegationProviderTarget {
+  /** 交给 worker 的供应商 id（桌面服务统一注册为 `openai`）。 */
+  provider: string;
+  /** 桌面服务 id；缺省表示不带服务、走内置凭据。 */
+  serviceId?: string;
+}
+
+/**
+ * 子代理的供应商/服务归位：
+ *
+ * - 钉选的 `providerId` 命中用户在「AI 服务」里加的服务（主进程查库得到 `pinnedServiceId`）
+ *   → 用那个服务：运行时供应商固定为 `openai`（由 provider 扩展注册），凭据/baseUrl 都取该服务；
+ * - 否则沿用父会话的供应商与服务（钉选只改模型、不改服务）。
+ *
+ * 服务从「父会话继承」到「可按定义覆盖」是这一层唯一的变化，权限与沙箱不受影响。
+ */
+export function delegationProviderTarget(input: {
+  parentProvider: string;
+  parentServiceId?: string;
+  /** 钉选 provider 段对应的已启用桌面服务 id；未命中就是 undefined。 */
+  pinnedServiceId?: string;
+}): DelegationProviderTarget {
+  if (input.pinnedServiceId) return { provider: "openai", serviceId: input.pinnedServiceId };
+  return {
+    provider: input.parentProvider,
+    ...(input.parentServiceId ? { serviceId: input.parentServiceId } : {}),
+  };
+}

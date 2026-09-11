@@ -1,13 +1,17 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, net, protocol } from "electron";
 import { createServer } from "node:http";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { BrowserAutomation } from "../src/main/browser/automation";
 import { verifyPanelResize } from "./panel-resize-smoke";
+import { PREVIEW_SCHEME } from "../src/shared/types";
 import type { BrowserParams, BrowserPresentation, BrowserRegistration, BrowserToolResult } from "../src/shared/browser-tools";
+
+// 与主进程一致：预览协议必须是 standard/secure，webview 才能加载相对资源。
+protocol.registerSchemesAsPrivileged([{ scheme: PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 
 // Runs real BrowserPanel + Chromium guests against an ephemeral local fixture, never a user profile.
 async function smoke() {
@@ -21,7 +25,15 @@ const preload = path.join(profile, "preload.cjs");
 await writeFile(preload, `require(${JSON.stringify(path.join(root, "dist-electron/preload/index.cjs"))});\nconst { ipcRenderer } = require('electron');\ntry { localStorage.setItem('tether.browserHomepage', JSON.stringify('about:blank')); } catch {}\nipcRenderer.on('browser:agent-presentation', (_event, value) => { if (value.action === 'open') ipcRenderer.send('smoke:open', value); });`);
 const windows: BrowserWindow[] = [];
 let main: BrowserWindow;
-const automation = new BrowserAutomation(() => main);
+// 本地预览夹具：一个临时工作区，验证不启动静态服务器也能在面板里看到页面。
+const previewRoot = await mkdtemp(path.join(tmpdir(), "tether-browser-preview-"));
+await mkdir(path.join(previewRoot, "demo"), { recursive: true });
+const previewPage = (heading: string): string => `<!doctype html><meta charset="utf-8"><title>预览页面</title>
+<h1 id="heading">${heading}</h1><p id="asset">资源未加载</p><script src="./app.js"></script>`;
+const writePreview = (heading: string) => writeFile(path.join(previewRoot, "demo", "index.html"), previewPage(heading));
+await writePreview("预览页面");
+await writeFile(path.join(previewRoot, "demo", "app.js"), `document.querySelector("#asset").textContent = "相对资源已加载";`);
+const automation = new BrowserAutomation(() => main, () => previewRoot);
 const page = `<!doctype html><meta charset="utf-8"><title>浏览器操作测试</title>
 <style>body{font:18px sans-serif;padding:24px}input,button,select{font-size:18px;margin:6px}#editor{border:1px solid;min-height:30px}#scroller{height:80px;overflow:auto}#hovered{display:none}#hover:hover #hovered{display:block}</style>
 <main><h1>本地测试表单</h1><form><label>搜索<input aria-label="搜索"></label><button>提交</button></form><p role="status" id="result">尚未提交</p><p id="trusted"></p>
@@ -59,6 +71,10 @@ const find = async (name: string, role?: string, tabId?: string) => {
 const watchdog = setTimeout(() => { console.error("Browser smoke test timed out"); app.exit(1); }, 60000);
 try {
   await app.whenReady();
+  protocol.handle(PREVIEW_SCHEME, async (request) => {
+    const name = decodeURIComponent(new URL(request.url).pathname).replace(/^\/+/, "");
+    return net.fetch(pathToFileURL(path.join(previewRoot, name)).toString());
+  });
   ipcMain.handle("browser:webview-preload-path", () => pathToFileURL(path.join(root, "dist-electron/preload/webview-browser.cjs")).href);
   ipcMain.handle("browser:downloads-list", () => []);
   ipcMain.handle("app:get-locale", () => "zh-CN");
@@ -75,7 +91,8 @@ try {
   await verifyPanelResize(main);
   const first = (await run("browser_list_tabs")).tabs[0].tabId;
   await run("browser_select_tab", { tabId: first });
-  const observed = await run("browser_navigate", { url });
+  // 回归：模型会给可选参数补空串（tabId:""），不得因此让整次调用失败。
+  const observed = await run("browser_navigate", { tabId: "", url });
   assert.equal(observed.title, "浏览器操作测试");
   assert(observed.elements.some((item: any) => item.name === "搜索"));
   let ref = await find("搜索", "textbox");
@@ -127,9 +144,22 @@ try {
   await run("browser_navigate", { url: `${url}/replace` });
   await assert.rejects(run("browser_click", { ref: await find("浮层按钮A", "button") }), /替换|移除/);
   assert.equal((await run("browser_extract", { selector: "#result" })).result.text, "未点击B");
+  // 本地文件预览：path → harness-preview，无静态服务器；相对资源可用，文件变更自动刷新。
+  const preview = await run("browser_navigate", { path: "demo/index.html" });
+  assert.equal(preview.title, "预览页面");
+  assert(preview.url.startsWith(`${PREVIEW_SCHEME}://`), `expected preview scheme url, got ${preview.url}`);
+  assert.equal((await run("browser_extract", { selector: "#asset" })).result.text, "相对资源已加载");
+  await writePreview("预览页面 v2");
+  let reloaded = false;
+  for (let attempt = 0; attempt < 40 && !reloaded; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    reloaded = (await run("browser_extract", { selector: "#heading" })).result.text === "预览页面 v2";
+  }
+  assert(reloaded, "preview did not live reload after the file changed");
+  await assert.rejects(run("browser_navigate", { path: "demo/missing.html" }), /未找到该工作区文件/);
   await run("browser_close_tab", { tabId: second });
   assert.equal((await run("browser_list_tabs")).workingTabId, null);
-  console.log("Browser smoke passed: real React BrowserPanel, navigation, AX refs, trusted click, Chinese fill, contenteditable, select, Shadow DOM, hover, scroll, screenshot, stale/cross-tab refs, waits, cancellation and close.");
+  console.log("Browser smoke passed: real React BrowserPanel, navigation, AX refs, trusted click, Chinese fill, contenteditable, select, Shadow DOM, hover, scroll, screenshot, stale/cross-tab refs, waits, cancellation, blank-param tolerance, workspace file preview and live reload, close.");
 } catch (error) {
   console.error(`Failed after ${lastTool}`, error);
   failed = true;
@@ -139,6 +169,7 @@ try {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   // Temporary, isolated test profile only.
   await rm(profile, { recursive: true, force: true });
+  await rm(previewRoot, { recursive: true, force: true });
   app.exit(failed ? 1 : 0);
 }
 

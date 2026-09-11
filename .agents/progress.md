@@ -1,5 +1,57 @@
 # 模型供应商管理进度
 
+## 2026-09-11：修进度胶囊遮挡转写最后几行（09:32-09:36，Asia/Shanghai）
+
+- 用户附截图（「遮挡内容」）：任务进度胶囊浮在写作区底部，盖住了「思考」块最后一行（Analyzing bicycle SVG coordinates）。
+- 根因：`.progress-overlay` / `.conversation-latest` 是相对 `.chat` 绝对定位的悬浮层（`bottom: calc(var(--dock-clearance) + 8px)`，即输入区上方 8px），而转写内容 `.messages` 只有 20px 底部内边距——滚到底时最后 ~66px 的内容就落在胶囊背后。
+- 修：`App.tsx` 在 `progressTasks.length > 0` 时给 `.messages` 加 `has-progress`；`styles.css` 新增 `.messages.has-progress { padding-bottom: calc(20px + 52px) }`（胶囊 top 在滚动区底边上方约 66px，故留 72px）。无任务时不加内边距，底部不会多出空白。
+- 验证：静态预览（会话工作台 `plan/preview/progress-pill.html`，真实 `.chat/.conversation/.messages/.progress-overlay` 结构 + 真实 styles.css）量得：不带 `has-progress` 时最后一行 bottom=426 > 胶囊 top=386（重叠，复现问题）；带上后 bottom=374 < 386，间隙 12px。`pnpm typecheck` 通过；`pnpm test` 73 文件 646 用例通过；`pnpm build:renderer` 已重建。未提交、未发布、未改 AGENTS.md。
+
+## 2026-09-11：修「AI 服务」设置页不能滚动（09:28-09:33，Asia/Shanghai）
+
+- 用户附截图：「ai 服务里面不能滚动」，第三张服务卡片被截断（红框标出列表区）。
+- 根因：设置壳 `.settings-body` 是 `overflow: hidden`（保留），滚动必须由各页自己的内层容器提供——vision（`.custom-api-card-list`）、外观（`.theme-page`）、子代理（`.subagent-list`）、skills（`.skills-list`）都有 `overflow-y: auto` + `min-height: 0`，**唯独 AI 服务的 `.provider-list-page` 没有**；它作为 flex 子项 `min-height: auto` 又压不下去，超过壳高就被直接裁掉。卡片变高（每个服务多了「默认模型」下拉）后就踩到了这个旧缺口。
+- 修：`.provider-list-page` 加 `flex: 1 1 auto; min-height: 0` 并把底部 padding 改为 0，`.provider-list` 自己成为滚动容器（`overflow-y: auto; min-height: 0; padding-bottom: 4px`）——与子代理页一致，头部（说明 + 添加）留在原位不跟随滚动。
+- 同类预防：`.shortcut-list` 与 `.about-body` 同样没有滚动容器（内容超长就会被裁），一并补上 `flex/min-height: 0 + overflow-y: auto`。
+- 验证：静态预览（会话工作台 `plan/preview/provider-list.html`，把窗口压到 620px + 7 张卡片）量得 `.provider-list` scrollHeight 977 > clientHeight 486、可滚动，滚后头部 y 坐标不变，`.settings-body` 自身不溢出（无双滚动条）。`pnpm typecheck` 通过；`pnpm test` 73 文件 646 用例通过。产物已重建（`pnpm build:renderer` + `pnpm build:electron`，两者均 09:31）。未提交、未发布、未改 AGENTS.md。
+
+## 2026-09-11：浏览器工具修「tabId 空串就整次失败」+ 工作区 HTML 直接预览（09:13-09:30，Asia/Shanghai）
+
+- 用户贴两张图：TACode 里 Agent 生成了 `pelican-bike.html`、用户追问「这种你不应该打开浏览器给我看效果吗」，随后「打开网页」与「新建浏览器标签」两次调用都报 `参数为空或过长：tabId`（执行异常，50s）。要求参考 `/Users/yfdl/Downloads/PI-Desktop-main` 实现。
+- 根因（已从会话文件取证）：模型给可选参数补了空串，实际发出的是 `{"tabId":"","url":"http://127.0.0.1:4173/pelican-bike.html"}`；`validateBrowserParams` 对所有非 `text` 的字符串参数一律 `!value.trim()` 判非法，于是在到达浏览器之前就整体抛错。全库浏览器工具调用只有 3 次，其中 2 次死在这个校验上。
+- 参考 PI-Desktop 的两点：①它的 `Browser` 工具是单工具 + `action` 枚举，参数一律 `String(args?.x ?? "")` 容错，不会因为可选参数没值而失败；②它的 work-panel browser 支持直接打开工作区 HTML 文件并 live reload（`resolveLocalFile` + `navigateAndWait`），不必起静态服务器。差别在承载方式：它用主进程 `WebContentsView`（可直接 `file://`），TACode 是渲染进程 `webview`，`file://` 会被拦成 “Not allowed to load local resource”，所以改用仓库既有的 `harness-preview://` 特权协议。
+- `src/shared/browser-tools.ts`：新增 `normalizeBrowserParams()`，把空串/空值可选参数按「未提供」丢弃后再校验（`text` 与 select 的 `value` 例外，清空输入框语义保留）；`validateBrowserParams` 必填项改为「缺失或空白」都报错；`browser_navigate`/`browser_new_tab` 新增 `path` 参数（工作区内 HTML 文件），`browser_navigate` 由「必须有 url」改为「url 或 path 二选一」；`BROWSER_GUIDANCE` 增加「刚生成的本地页面用 path 预览，不要再跑 `python -m http.server`」与「默认标签要省略 tabId，别传空串」。
+- `src/shared/preview.ts`（新）：`workspacePreviewUrl(相对路径)`；`src/renderer/ui.tsx` 里原本私有的 `previewUrl` 改为复用它（图片预览与页面预览同一协议）。
+- `src/main/browser/preview-target.ts`（新）：`resolveWorkspacePreview(input, root, {explicit})` → `{file, url}`。`explicit` 区分「模型明确给的是文件路径」与「url 参数里碰巧像文件」；两道校验（词法拦 `../` 与绝对路径逃逸 + realpath 复查符号链接逃逸），要求工作区内真实存在的文件。
+- `src/main/browser/automation.ts`：构造函数新增第二个可选参数 `getWorkspaceRoot`（`index.ts` 传 `() => activeAgentCwd`，与 `servePreview` 的解析根一致）；`perform`/`create`/`navigate` 走新的 `destination()`；`navigate` 带 preview 时用 `fs.watch` 盯预览文件所在目录，250ms 防抖后 `guest.reload()` 并清 ref（对齐 PI-Desktop live reload，最多同时 6 个监听，标签移除/重置会话时关掉）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 73 文件 646 用例通过（新增 `preview-target.test.ts` 5 条：相对/绝对/file:// 解析、目录与不存在文件、工作区外与符号链接逃逸、无工作区根）；`pnpm test:browser` 的浏览器 smoke 全绿，并在其中新增端到端用例：`browser_navigate {tabId:"", url}`（回归）、`path` 预览（断言 guest URL 是 `harness-preview://`、相对资源 `./app.js` 生效、改文件后自动刷新出新内容、不存在的 path 报「未找到该工作区文件」）。
+- 已知问题（与本次改动无关）：`pnpm test:browser` 的 workbench smoke 在「collapsible sidebar」阶段断言失败；已在干净 HEAD（41daea5）的临时 worktree 里复现同样失败，属改动前既有问题，未处理。
+- 未提交、未发布、未改 AGENTS.md。
+
+## 2026-09-11：子代理的模型/推理强度改成按「AI 服务」来（09:15-09:26，Asia/Shanghai）
+
+- 用户要求：子代理 sheet 里的「模型」与「推理强度」要按他在 AI 服务里加的供应商来（实测其配置：hub / ooioo / subapi 三个自定义服务共 10 个模型，服务 id 都是 UUID/slug 形式）。问了两个选项，用户选：列全部服务 + 让钉选真正支持跨服务；推理强度按所选模型能力过滤。
+- 关键差异（本轮修）：之前主进程解析子代理钉选时只按「父会话当前服务」找模型（`payload.serviceId` 直接透传），钉选里写不出服务，用户这种非内置供应商 id 还会被 `SUPPORTED_PROVIDER_IDS` 挡掉。现在钉选的 `provider` 段命中已启用服务时就用该服务解析（凭据/baseUrl 都取它），于是子代理可以跑在与会话不同的服务上（对齐 PI-Desktop 的模型钉选语义）。
+- `src/main/providers.ts`：新增 `resolveDesktopServiceId(id)`（命中已启用服务则返回其 id）。
+- `src/main/delegation-run-options.ts`：新增纯函数 `delegationProviderTarget({parentProvider, parentServiceId, pinnedServiceId})`：命中服务 → `{provider:"openai", serviceId: 服务 id}`；否则沿用父会话（旧行为）；可单测。
+- `src/main/index.ts` 的 `buildStartOptions`：改用该函数；钉了服务时不再把父会话的 `baseUrl` 串过去（baseUrl 由被钉服务提供）。钉选未命中服务时行为与之前完全一致（纯追加，不影响现有定义）。
+- `src/renderer/subagent-draft.ts`：新增 `subagentModelOptions(providers)`（按 AI 服务展开，值 = `<serviceId>/<modelId>`，附带该模型的推理档位）、`subagentServiceNames`、`subagentThinkingLevelsFor`、`clampThinkingLevel`；档位按 `serviceRuntimeConfig(provider).models` + `levelsForModel` 算，所以“不支持推理的模型只剩 off”。
+- `src/renderer/subagent-settings.tsx`：模型栏由文本框改为按服务分组的 `<select>`（空 = 跟随会话；旧定义里手写的、不在服务列表里的钉选仍会显示为当前选项，不会被静默清掉）；推理强度栏按所选模型支持的档位过滤，换模型时把不支持的档位削到不超过原值的最高档；列表徐标改为显示“服务名/模型 id”（服务 id 是 UUID，直接显示不可读）。
+- `src/renderer/ui.tsx`：登录/设置弹窗把 `providers` 传给子代理设置页。`src/shared/i18n.ts`：新增 `subagents.modelInherit` / `subagents.modelEmpty`，更新 model/thinking 提示，删除不再引用的 `subagents.modelPlaceholder`。
+- 顺手修复：桥接记录里的 `model` 是纯 modelId 字符串，而渲染层只收 `{providerId, modelId}` 对象，所以委托卡片一直不显示子代理用的模型；`normalizeDelegateTask` 现在两种形状都收。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 73 文件 646 用例通过（新增：`delegation-run-options.test.ts` 3 条 provider/service 归位；`subagent-draft.test.ts` 5 条模型选项/档位过滤/收敛；`conversation.test.ts` 1 条纯 modelId 字符串）。另用一次性探针跑用户真实 `providers.json` 对过选项：hub/ooioo/subapi 共 10 个模型，`deepseek-v4-flash` 只剩 off、`glm-5.3-flash` 剩 off/low/medium/high/max、subapi 的 gpt-5.6-* 含 xhigh。视觉预览：会话工作台 `plan/preview/subagent-sheet.html`。未提交、未发布、未改 AGENTS.md。
+- 已知边界：进程内委派路径（`runtime/tools/delegate.ts` 的 `modelRegistry.find`，仅在不经桥接时走到）无法解析服务 id 形式的钉选，会报“pin not found”；生产走桥接路径（主进程 coordinator），不受影响。
+
+## 2026-09-11：子代理编辑页改成 PI-Desktop 的表单式 sheet（09:03-09:12，Asia/Shanghai）
+
+- 用户贴两张图：一张是 TACode 现状（裸 markdown 编辑器），一张是 PI-Desktop 的「新建子智能体」sheet（名称 / 何时委派给它 / 可用工具 chips / 模型 / 推理强度 / 轮次上限 / 指令 + 字节计数 + 底部「保存为 markdown 文件」），要求本次也参照。
+- 对照实现：`apps/desktop/src/components/settings/SubagentEditorSheet.tsx`（draft 模型 + 校验 + 工具勾选组）、`AgentSubagentsPage.tsx`（保存/重命名路径）、zh-CN i18n 的 `extensions.subagents.*`、`ext.css` 的 ext-sheet/ext-field 系列。
+- 新增 `src/renderer/subagent-draft.ts`（纯逻辑，便于单测）：`SubagentDraft` 草稿模型 + `subagentDraftFromInfo` / `subagentDraftToDocument` / `subagentDraftError` / `subagentBodyTemplate` / `subagentBodyBytes` / `emptySubagentDraft`；`description` 保存时收敛成单行（否则写坏 frontmatter），名称保存时走 `normalizeSubagentName`。
+- `src/renderer/subagent-settings.tsx`：弹窗从 textarea 改为表单 sheet（头部固定 + 字段区滚动 + 底部操作条）；字段：名称（带 slug 预览）、何时委派给它、可用工具 chips（写工具标红 + 写能力警告）、命令策略（仅勾了 exec_command/write_stdin 时出现，对应 TACode 特有的 `execPolicy: readonly`）、模型 + 推理强度、轮次上限 + 权限模式（对应 TACode 特有的 `permission`）、指令 + KB 计数；逐字段错误提示与 Esc/遮罩关闭。内置行点「编辑」现在用内置定义预填（旧实现是回落到模板，会把 explorer 写成 my-helper），保存即写用户文档覆盖同名内置；改名保存后清理旧文件。
+- `src/shared/i18n.ts`：新增 40 条中英词条（字段标签/提示/错误），删除已无引用的 `subagents.editorHint` / `subagents.invalid`。
+- `src/renderer/styles.css`：`.subagent-editor`/`.subagent-textarea`/`.subagent-editor-meta` 换为 `.subagent-sheet*` / `.subagent-field*` / `.subagent-tool-opt` / `.subagent-body` 等；工具 chip 规则加 `.subagent-sheet` 前缀，否则被 `.panel label` 的竖排强制覆盖。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 72 文件 626 用例通过（新增 `subagent-draft.test.ts` 7 条：逐字段校验、0/超限边界、往返解析含 permission/execPolicy、多行说明收敛、从内置定义回写）。视觉用静态预览核对（会话工作台 `plan/preview/subagent-sheet.html` + 项目 styles.css 副本，受管浏览器截图）：新建（浅色，含写工具→命令策略）与编辑既有项（深色，预填 + 只读命令）两种。未提交、未发布、未改 AGENTS.md。
+
 ## 2026-09-11：委托卡改成 PI-Desktop 的子代理拓扑样式（08:53-09:00，Asia/Shanghai）
 
 - 用户贴 PI-Desktop 截图（源码在 /Users/yfdl/Downloads/PI-Desktop-main），要求「把我的也改成这种」：分组卡表头「Subagent 已完成 · N 个 Subagent · 已完成 x/y · 耗时」+ 左侧主 Agent 节点、2px 连线、右侧子代理节点卡（Bot 头像 + 右下状态徽标、role/模型/状态·耗时、任务摘要、步骤数）。

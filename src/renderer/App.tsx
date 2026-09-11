@@ -1866,7 +1866,7 @@ export function App() {
             </div>
           )}
           {groups.length > 0 && (
-            <div className="messages" ref={follow.contentRef}>
+            <div className={progressTasks.length > 0 ? "messages has-progress" : "messages"} ref={follow.contentRef}>
               {groups.map((group, index) => {
                 if (group.type === "user") {
                   return (

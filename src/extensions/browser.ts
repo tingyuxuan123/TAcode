@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { visibleUserText } from "../shared/vision-api";
 import { browserRoutingBlock } from "./browser-routing";
-import { BROWSER_GUIDANCE, BROWSER_TOOLS, validateBrowserParams, type BrowserParams, type BrowserResponse, type BrowserToolResult } from "../shared/browser-tools";
+import { BROWSER_GUIDANCE, BROWSER_TOOLS, normalizeBrowserParams, type BrowserParams, type BrowserResponse, type BrowserToolResult } from "../shared/browser-tools";
 
 interface ExtensionAPI {
   registerTool(tool: Record<string, unknown>): void;
@@ -12,7 +12,8 @@ interface ExtensionAPI {
 
 /** Private Node IPC, inherited only by the desktop Agent worker; no HTTP port or credential file. */
 export function requestBrowser(tool: string, params: BrowserParams, signal?: AbortSignal): Promise<BrowserToolResult> {
-  validateBrowserParams(tool, params);
+  // 先归一化再发送：空串可选参数（如 tabId:""）按“未提供”处理，主进程收到的即是最终参数。
+  const input = normalizeBrowserParams(tool, params);
   if (!process.send || !process.connected) return Promise.reject(new Error("浏览器未连接桌面宿主，请从 TACode 桌面重新启动会话。"));
   if (signal?.aborted) return Promise.reject(new Error("浏览器操作已取消"));
   const id = randomUUID();
@@ -41,7 +42,7 @@ export function requestBrowser(tool: string, params: BrowserParams, signal?: Abo
     process.on("message", onMessage);
     process.once("disconnect", onDisconnect);
     signal?.addEventListener("abort", onAbort, { once: true });
-    process.send!({ type: "tether:browser:request", id, tool, params }, (error) => { if (error) finish(error); });
+    process.send!({ type: "tether:browser:request", id, tool, params: input }, (error) => { if (error) finish(error); });
   });
 }
 

@@ -1118,9 +1118,12 @@ function normalizeDelegateTask(value: unknown): DelegateTaskState | undefined {
   const role = typeof value.role === "string" ? value.role : "";
   const task = typeof value.task === "string" ? value.task : "";
   const live = typeof value.live === "string" && value.live.trim() ? value.live.trim() : undefined;
-  const model = isRecord(value.model) && typeof value.model.providerId === "string" && typeof value.model.modelId === "string"
-    ? { providerId: value.model.providerId, modelId: value.model.modelId }
-    : undefined;
+  // 运行时/主进程两种来源都出现过：桥接记录里是纯 modelId 字符串，进程内路径回传 {providerId, modelId}。
+  const model = typeof value.model === "string" && value.model.trim()
+    ? { providerId: "", modelId: value.model.trim() }
+    : isRecord(value.model) && typeof value.model.providerId === "string" && typeof value.model.modelId === "string"
+      ? { providerId: value.model.providerId, modelId: value.model.modelId }
+      : undefined;
   const thinkingLevel = typeof value.thinkingLevel === "string" ? value.thinkingLevel : undefined;
   const startedAt = typeof value.startedAt === "number" && Number.isFinite(value.startedAt) ? value.startedAt : undefined;
   const completedAt = typeof value.completedAt === "number" && Number.isFinite(value.completedAt) ? value.completedAt : undefined;

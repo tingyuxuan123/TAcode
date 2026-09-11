@@ -1425,6 +1425,11 @@ textarea::selection,
   padding: 28px 28px 20px;
   margin: 0 auto;
 }
+/* 进度胶囊（或回到底部箭头）浮在转写底部之上：有任务时多留出它的高度，
+   否则滚到底时它会盖住最后几行内容（见 ProgressOverlay 的 bottom 定位）。 */
+.messages.has-progress {
+  padding-bottom: calc(20px + 52px);
+}
 .empty {
   /* Hero column tracks the viewport like the reading column, so 1080p+ stops looking pinched. */
   width: min(100%, 880px, max(640px, 46vw));
@@ -5947,6 +5952,9 @@ textarea::selection,
 .shortcut-list {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 .shortcut-item {
   display: flex;
@@ -5987,6 +5995,7 @@ kbd {
   gap: 0;
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
@@ -6570,11 +6579,15 @@ kbd {
 
 /* ===== Provider Management Styles ===== */
 
+/* 卡片一多就得能滚：与别的设置页一样，由内层列表当滚动容器，头部（说明 + 添加）留在原位。
+   注意 `.settings-body` 是 overflow: hidden 的，所以内层必须给得出可滚动高度（flex + min-height: 0）。 */
 .provider-list-page {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 0 0 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
 }
 
 .provider-list-head {
@@ -6610,6 +6623,9 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-bottom: 4px;
 }
 
 .provider-row {
@@ -8642,42 +8658,199 @@ kbd {
 .subagent-actions .danger {
   color: var(--red);
 }
-.subagent-editor {
-  width: min(720px, 92vw);
-  max-height: 86vh;
-  overflow: auto;
+/* 子代理编辑弹窗：表单式 sheet（对齐 PI-Desktop 的 SubagentEditorSheet）。
+   头部固定、字段区滚动、底部操作条常驻。 */
+.subagent-sheet {
+  width: min(640px, 92vw);
+  max-height: min(88vh, 820px);
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
   border-radius: 14px;
+}
+.subagent-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px 12px;
+}
+.subagent-sheet-head .settings-hint {
+  margin-top: 6px;
+}
+.subagent-sheet-head .settings-close {
+  margin-left: auto;
+  flex: none;
+}
+.subagent-sheet-body {
   display: flex;
   flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 2px 20px 16px;
+  overflow: auto;
+}
+/* 字段：标签 + 控件 + 说明小字 */
+.subagent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.subagent-field > span {
+  font-size: calc(11.5px * var(--ui-font-scale));
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.subagent-field > small {
+  color: var(--ink-3);
+  font-size: calc(11px * var(--ui-font-scale));
+  line-height: 1.45;
+}
+.subagent-field > small.is-warn {
+  color: #b45309;
+}
+.subagent-field input,
+.subagent-field select {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: calc(13px * var(--ui-font-scale));
+  transition: border-color 120ms ease;
+}
+.subagent-field input:focus-visible,
+.subagent-field select:focus-visible {
+  outline: none;
+  border-color: var(--accent-ink);
+}
+.subagent-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
-.subagent-editor .row-actions {
-  justify-content: flex-end;
+.subagent-field-row > span:first-child {
+  font-size: calc(11.5px * var(--ui-font-scale));
+  font-weight: 500;
+  color: var(--ink-2);
 }
-.subagent-textarea {
+/* 成对字段：模型 + 推理强度 / 轮次上限 + 权限模式 */
+.subagent-field-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px 16px;
+}
+.subagent-field-area {
   width: 100%;
-  min-height: 300px;
+  min-height: 54px;
   resize: vertical;
-  font: calc(12px * var(--ui-font-scale))/1.5 var(--mono);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font: calc(13px * var(--ui-font-scale))/1.45 var(--sans);
+}
+.subagent-field-area:focus-visible {
+  outline: none;
+  border-color: var(--accent-ink);
+}
+/* 工具勾选：chip 式复选框，写能力（write/edit/exec）单独标色提示后果。
+   选择器带上 sheet 前缀——`.panel label` 会把弹窗里的 label 强制成竖排。 */
+.subagent-tool-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 1px;
+}
+.subagent-sheet .subagent-tool-opt {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: calc(11.5px * var(--ui-font-scale));
+  font-weight: 400;
+  cursor: pointer;
+}
+.subagent-sheet .subagent-tool-opt:hover {
+  background: var(--hover);
+}
+.subagent-sheet .subagent-tool-opt code {
+  font: calc(11.5px * var(--ui-font-scale))/1 var(--mono);
+}
+.subagent-sheet .subagent-tool-opt input {
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+  accent-color: var(--ink);
+}
+.subagent-sheet .subagent-tool-opt.is-on {
+  border-color: color-mix(in srgb, var(--ink) 34%, transparent);
+  background: var(--inset);
+  color: var(--ink);
+}
+.subagent-sheet .subagent-tool-opt.is-mutating code {
+  color: var(--red);
+}
+.subagent-byte-count {
+  flex: none;
+  color: var(--ink-3);
+  font: calc(11px * var(--ui-font-scale))/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.subagent-byte-count.is-near {
+  color: #b54708;
+}
+.subagent-byte-count.is-over {
+  color: var(--red);
+}
+.subagent-body {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  font: calc(12px * var(--ui-font-scale))/1.55 var(--mono);
   color: var(--ink);
   background: var(--inset);
   box-shadow: inset 0 0 0 1px var(--line);
   border: none;
   border-radius: 10px;
   padding: 10px 12px;
-  white-space: pre;
+  white-space: pre-wrap;
   overflow: auto;
 }
-.subagent-textarea:focus-visible {
+.subagent-body:focus-visible {
   outline: 2px solid var(--ink-3);
   outline-offset: 1px;
 }
-.subagent-editor-meta {
+.subagent-sheet-error {
+  margin: 0 20px;
+}
+.subagent-sheet-actions {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: calc(11px * var(--ui-font-scale));
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--line);
+}
+.subagent-sheet-note {
+  min-width: 0;
   color: var(--ink-3);
+  font-size: calc(11px * var(--ui-font-scale));
+  line-height: 1.45;
+}
+.subagent-sheet-actions .row-actions {
+  margin-left: auto;
+  flex: none;
 }
 .settings-warnings {
   margin: 0;

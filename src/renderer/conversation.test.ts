@@ -474,6 +474,23 @@ describe("conversation events", () => {
     ]);
   });
 
+  it("delegateProgress 认得桥接记录里的纯 modelId 字符串（卡片要能显示子代理跑的模型）", () => {
+    const messages = applyAgentEvent([], {
+      type: "tool_execution_update",
+      toolCallId: "d10",
+      toolName: "delegate",
+      args: { tasks: [{ role: "explorer", task: "scan" }] },
+      partialResult: {
+        details: {
+          total: 1,
+          done: 0,
+          tasks: [{ id: "delegation-2", role: "explorer", task: "scan", status: "running", model: "gpt-5.6-luna" }],
+        },
+      },
+    });
+    expect(delegateProgress(messages[0]!.tools[0]!).tasks[0]?.model).toEqual({ providerId: "", modelId: "gpt-5.6-luna" });
+  });
+
   it("失败委派卡片透传子会话路径与 recent 活动缓冲（桥接模式）", () => {
     const messages = applyAgentEvent([], {
       type: "tool_execution_end",
