@@ -470,11 +470,13 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
             ctx.ui.notify(`Thinking effort: ${pi.getThinkingLevel()}`, "info");
             return;
           }
-          if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value)) {
-            ctx.ui.notify("Expected /effort off|minimal|low|medium|high|xhigh|max", "warning");
+          // 历史「最低」档折算为「低」；其余未知值仍然报错。
+          const level = value === "minimal" ? "low" : value;
+          if (!["off", "low", "medium", "high", "xhigh", "max"].includes(level)) {
+            ctx.ui.notify("Expected /effort off|low|medium|high|xhigh|max", "warning");
             return;
           }
-          pi.setThinkingLevel(value as Parameters<typeof pi.setThinkingLevel>[0]);
+          pi.setThinkingLevel(level as Parameters<typeof pi.setThinkingLevel>[0]);
           ctx.ui.notify(`Thinking effort: ${pi.getThinkingLevel()}`, "info");
         },
       });

@@ -14,7 +14,7 @@ import {
   type CatalogApiStyle,
 } from "../shared/provider-presets";
 import type { ProviderRecord, ProviderModelBinding } from "../shared/types";
-import { SERVICE_THINKING_LEVELS, serviceThinkingBudget, serviceThinkingDispatch, serviceThinkingLevels, SUPPORTED_SERVICE_STYLES, type ThinkingDispatch } from "../shared/provider-config";
+import { SERVICE_THINKING_LEVELS, serviceThinkingDispatch, serviceThinkingLevels, SUPPORTED_SERVICE_STYLES, type ThinkingDispatch } from "../shared/provider-config";
 import { effortLabelKey } from "../shared/thinking";
 import type { MessageKey } from "../shared/i18n";
 import { applyKnownDefaults, needsDefaultsFill } from "../shared/model-defaults";
@@ -200,13 +200,12 @@ export function ServicePicker({
 
 // --- 推理下发方式 ---
 
-const THINKING_DISPATCH_OPTIONS: ReadonlyArray<{ value: "auto" | ThinkingDispatch; labelKey: MessageKey }> = [
-  { value: "auto", labelKey: "settings.thinkingDispatchAuto" },
+const THINKING_DISPATCH_OPTIONS: ReadonlyArray<{ value: ThinkingDispatch; labelKey: MessageKey }> = [
   { value: "adaptive", labelKey: "settings.thinkingDispatchAdaptive" },
   { value: "budget", labelKey: "settings.thinkingDispatchBudget" },
 ];
 
-/** anthropic_messages 服务可显式选择自适应 effort 或 token 预算，并说明实际下发的档位。 */
+/** anthropic_messages 服务选择档位下发方式：自适应 effort（默认）或 token 预算。 */
 function ThinkingDispatchField({ model, apiStyle, readOnly, onChange }: {
   model: ProviderModelBinding;
   apiStyle: CatalogApiStyle;
@@ -216,10 +215,6 @@ function ThinkingDispatchField({ model, apiStyle, readOnly, onChange }: {
   const { t } = useI18n();
   if (apiStyle !== "anthropic_messages" || !model.reasoning) return null;
   const dispatch = serviceThinkingDispatch(model, apiStyle);
-  const modeLabel = t(dispatch === "adaptive" ? "settings.thinkingDispatchAdaptive" : "settings.thinkingDispatchBudget");
-  if (readOnly) {
-    return <p className="provider-hint provider-thinking-dispatch-hint">{t("settings.thinkingDispatchEffective", { mode: modeLabel })}</p>;
-  }
   return (
     <>
       <div className="provider-thinking-dispatch" role="group" aria-label={t("settings.thinkingDispatch")}>
@@ -229,24 +224,18 @@ function ThinkingDispatchField({ model, apiStyle, readOnly, onChange }: {
             <input
               type="radio"
               name={`thinking-dispatch-${model.id}`}
-              checked={(model.thinkingDispatch ?? "auto") === option.value}
-              onChange={() => onChange?.(option.value === "auto" ? undefined : option.value)}
+              checked={dispatch === option.value}
+              disabled={readOnly}
+              onChange={() => onChange?.(option.value)}
             />
             <span>{t(option.labelKey)}</span>
           </label>
         ))}
       </div>
-      {model.thinkingDispatch === undefined && (
-        <p className="provider-hint provider-thinking-dispatch-hint">{t("settings.thinkingDispatchAutoHint", { mode: modeLabel })}</p>
-      )}
       <p className="provider-hint provider-thinking-dispatch-hint">
         {dispatch === "adaptive"
           ? t("settings.thinkingDispatchAdaptiveHint")
-          : t("settings.thinkingDispatchBudgetHint", {
-            minimal: serviceThinkingBudget("minimal"), low: serviceThinkingBudget("low"),
-            medium: serviceThinkingBudget("medium"), high: serviceThinkingBudget("high"),
-            capped: serviceThinkingBudget("max"),
-          })}
+          : t("settings.thinkingDispatchBudgetHint")}
       </p>
     </>
   );
@@ -496,17 +485,16 @@ export function ModelSelectionPanes({
                     <div className="provider-thinking-levels" role="group" aria-label={t("settings.serviceThinkingLevels")}>
                       {SERVICE_THINKING_LEVELS.map((level) => (
                         <label className="provider-capability" key={level}>
-                          <input type="checkbox" checked={serviceThinkingLevels(openModel, apiStyle).includes(level)}
+                          <input type="checkbox" checked={serviceThinkingLevels(openModel).includes(level)}
                             onChange={(e) => updateModel(openModel.id, { thinkingLevels: e.target.checked
-                              ? [...serviceThinkingLevels(openModel, apiStyle), level]
-                              : serviceThinkingLevels(openModel, apiStyle).filter((value) => value !== level) })} />
+                              ? [...serviceThinkingLevels(openModel), level]
+                              : serviceThinkingLevels(openModel).filter((value) => value !== level) })} />
                           <span>{t(effortLabelKey(level))}</span>
                         </label>
                       ))}
                     </div>
                   )}
-                  <ThinkingDispatchField model={openModel} apiStyle={apiStyle}
-                    onChange={(dispatch) => updateModel(openModel.id, { thinkingDispatch: dispatch })} />
+                  <ThinkingDispatchField model={openModel} apiStyle={apiStyle} onChange={(dispatch) => updateModel(openModel.id, { thinkingDispatch: dispatch })} />
                   <label className="provider-capability" title={t("settings.serviceCapabilityHint")}>
                     <input type="checkbox" checked={openModel.supportsImages ?? false} onChange={(e) => updateModel(openModel.id, { supportsImages: e.target.checked })} />
                     <span>{t("settings.supportsImages")}</span>
@@ -549,7 +537,7 @@ export function ModelSelectionPanes({
                       <div className="provider-thinking-levels" role="group" aria-label={t("settings.serviceThinkingLevels")}>
                         {SERVICE_THINKING_LEVELS.map((level) => (
                           <label className="provider-capability" key={level}>
-                            <input type="checkbox" checked={serviceThinkingLevels(openPreview, apiStyle).includes(level)} disabled />
+                            <input type="checkbox" checked={serviceThinkingLevels(openPreview).includes(level)} disabled />
                             <span>{t(effortLabelKey(level))}</span>
                           </label>
                         ))}

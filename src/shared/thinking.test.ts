@@ -33,26 +33,32 @@ describe("thinking effort helpers", () => {
     ]);
   });
 
-  it("keeps every configured tier distinct, including minimal, xhigh and max", () => {
-    expect(pickEffortOptions(["max", "off", "high", "minimal", "medium", "xhigh", "low", "max"]))
-      .toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
-    expect(reasoningLevelsAvailable(["minimal"])).toBe(true);
-    expect(normalizeEffort("minimal", ["minimal", "high"])).toBe("minimal");
+  it("keeps every configured tier distinct, including xhigh and max", () => {
+    expect(pickEffortOptions(["max", "off", "high", "medium", "xhigh", "low", "max"]))
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(normalizeEffort("max", ["low", "high", "xhigh", "max"])).toBe("max");
     expect(normalizeEffort("high", ["off"])).toBe("off");
   });
 
+  it("retires the minimal tier while migrating stored selections to low", () => {
+    expect(pickEffortOptions(["minimal", "low", "high"])).toEqual(["low", "high"]);
+    expect(reasoningLevelsAvailable(["minimal"])).toBe(false);
+    expect(normalizeEffort("minimal", ["minimal", "low", "high"])).toBe("low");
+    expect(normalizeEffort("minimal", ["minimal", "high"])).toBe("high");
+    expect(levelsForModel("x", [{ id: "x", reasoning: true, thinkingLevels: ["minimal", "max"] }])).toEqual(["max"]);
+  });
+
   it.each(["zh", "en"] as const)("labels all tiers distinctly in %s", (locale) => {
-    const labels = ["minimal", "low", "medium", "high", "xhigh", "max"].map((level) => t(locale, effortLabelKey(level)));
-    expect(new Set(labels).size).toBe(6);
+    const labels = ["low", "medium", "high", "xhigh", "max"].map((level) => t(locale, effortLabelKey(level)));
+    expect(new Set(labels).size).toBe(5);
   });
 
   it("uses explicit service levels instead of model-name heuristics", () => {
     const id = "deepseek-v4-flash-vision-exp";
     expect(levelsForModel(id, [{ id, reasoning: true, thinkingLevels: ["low", "medium", "high", "max"] }]))
       .toEqual(["low", "medium", "high", "max"]);
-    expect(levelsForModel("deepseek-v4-flash", [{ id: "deepseek-v4-flash", reasoning: true, thinkingLevels: ["minimal", "max"] }]))
-      .toEqual(["minimal", "max"]);
+    expect(levelsForModel("deepseek-v4-flash", [{ id: "deepseek-v4-flash", reasoning: true, thinkingLevels: ["xhigh", "max"] }]))
+      .toEqual(["xhigh", "max"]);
   });
 
   it("honors runtime maps and explicit disabled reasoning", () => {

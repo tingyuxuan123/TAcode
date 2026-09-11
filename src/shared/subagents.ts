@@ -54,7 +54,6 @@ export const DEFAULT_SUBAGENT_TOOLS: readonly SubagentToolName[] = [
 
 export const SUBAGENT_THINKING_LEVELS = [
   "off",
-  "minimal",
   "low",
   "medium",
   "high",
@@ -230,6 +229,9 @@ export function isSubagentThinkingLevel(value: string): value is SubagentThinkin
   return (SUBAGENT_THINKING_LEVELS as readonly string[]).includes(value);
 }
 
+/** 已退场的「最低」档：老角色文档里写了它仍按「低」理解，不再提示非法。 */
+const LEGACY_SUBAGENT_THINKING_LEVELS: Record<string, SubagentThinkingLevel> = { minimal: "low" };
+
 export function isSubagentPermission(value: string): value is SubagentPermission {
   return ["inherit", "plan", "ask", "auto", "full"].includes(value);
 }
@@ -333,7 +335,8 @@ export function parseSubagentDocument(input: {
   let thinkingLevel: SubagentThinkingLevel | undefined;
   const rawThinking = field("thinkinglevel") ?? field("effort");
   if (rawThinking) {
-    if (isSubagentThinkingLevel(rawThinking)) thinkingLevel = rawThinking;
+    const normalized = LEGACY_SUBAGENT_THINKING_LEVELS[rawThinking] ?? rawThinking;
+    if (isSubagentThinkingLevel(normalized)) thinkingLevel = normalized;
     else warnings.push(`thinkingLevel 非法，已忽略：${rawThinking}`);
   }
 

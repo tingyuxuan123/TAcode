@@ -4,33 +4,31 @@ import type { CatalogApiStyle } from "./provider-presets";
 export const SUPPORTED_SERVICE_STYLES: CatalogApiStyle[] = [
   "chat_completions", "responses", "anthropic_messages", "google_generative_ai", "opencode_go",
 ];
-export const SERVICE_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
-export const THINKING_DISPATCHES = ["adaptive", "budget"] as const;
-export type ThinkingDispatch = (typeof THINKING_DISPATCHES)[number];
+/** 思考深度档位：与参考实现一致的五档。minimal 上游 API 不接受，已从界面退场。 */
+export const SERVICE_THINKING_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 
-/** 预算路径的档位到 token 数的名义映射，与 pi-ai 的 simple-options 预算表保持一致。 */
-export const THINKING_BUDGET_TOKENS: Record<string, number> = {
-  minimal: 1024, low: 2048, medium: 8192, high: 16384,
-};
+/** pi 认识的完整档位集合；未勾选（含已退场的 minimal）要在 thinkingLevelMap 里显式置 null 才会消失。 */
+const PI_THINKING_LEVELS = ["minimal", ...SERVICE_THINKING_LEVELS];
 
-/** 预算路径实际发出的 token 数：xhigh/max 会被 pi 收敛到 high。 */
-export function serviceThinkingBudget(level: string): number {
-  const clamped = level === "xhigh" || level === "max" ? "high" : level;
-  return THINKING_BUDGET_TOKENS[clamped] ?? THINKING_BUDGET_TOKENS.medium;
+/** Anthropic 的两种思考下发方式：自适应 effort 或 token 预算。 */
+export type ThinkingDispatch = "adaptive" | "budget";
+export const SERVICE_THINKING_DISPATCHES: ThinkingDispatch[] = ["adaptive", "budget"];
+
+/** 历史配置里残留的档位，读入时静默折算，不再出现在界面上。 */
+const LEGACY_THINKING_LEVELS: Record<string, string> = { minimal: "low" };
+
+export function serviceThinkingLevels(model: ProviderModelBinding): string[] {
+  return model.thinkingLevels ?? SERVICE_THINKING_LEVELS;
 }
 
-/** 该模型实际的推理下发方式；显式选择优先于按推理等级的推断。 */
+/**
+ * anthropic_messages 专属：reasoning 档位是走自适应 effort 还是 token 预算。
+ * 缺省（含历史配置）一律自适应；只有模型显式选了 budget 才回落到预算下发。
+ * 其它协议没有预算概念，返回值恒为 budget，调用方只在 anthropic 分支使用。
+ */
 export function serviceThinkingDispatch(model: ProviderModelBinding, style: CatalogApiStyle): ThinkingDispatch {
   if (style !== "anthropic_messages" || !model.reasoning) return "budget";
-  if (model.thinkingDispatch) return model.thinkingDispatch;
-  // 只有声明了极高/最大等级的模型按自适应推断，与升级前行为一致。
-  return model.thinkingLevels?.some((level) => level === "max" || level === "xhigh") ? "adaptive" : "budget";
-}
-
-export function serviceThinkingLevels(model: ProviderModelBinding, style: CatalogApiStyle): string[] {
-  return model.thinkingLevels ?? (style === "anthropic_messages"
-    ? ["minimal", "low", "medium", "high"]
-    : SERVICE_THINKING_LEVELS);
+  return model.thinkingDispatch === "budget" ? "budget" : "adaptive";
 }
 
 export function serviceBaseUrl(value: string, style: CatalogApiStyle): string {
@@ -60,11 +58,17 @@ export function validateService(record: ProviderRecord): ProviderRecord {
     if (model.contextWindow && model.maxTokens && model.maxTokens > model.contextWindow) {
       throw new Error("最大输出不能超过上下文窗口");
     }
-    if (model.thinkingLevels !== undefined && (!Array.isArray(model.thinkingLevels) || model.thinkingLevels.some((level) => !SERVICE_THINKING_LEVELS.includes(level)))) {
+    if (model.thinkingLevels !== undefined && !Array.isArray(model.thinkingLevels)) {
       throw new Error("推理等级无效");
     }
-    if (model.thinkingDispatch !== undefined && !THINKING_DISPATCHES.includes(model.thinkingDispatch)) {
-      throw new Error("推理下发方式无效");
+    const thinkingLevels = model.thinkingLevels === undefined
+      ? undefined
+      : [...new Set(model.thinkingLevels.map((level) => LEGACY_THINKING_LEVELS[level] ?? level))];
+    if (thinkingLevels?.some((level) => !SERVICE_THINKING_LEVELS.includes(level))) {
+      throw new Error("推理等级无效");
+    }
+    if (model.thinkingDispatch !== undefined && !SERVICE_THINKING_DISPATCHES.includes(model.thinkingDispatch)) {
+      throw new Error("思考下发方式无效");
     }
     return {
       id,
@@ -72,7 +76,7 @@ export function validateService(record: ProviderRecord): ProviderRecord {
       ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
       ...(model.reasoning !== undefined ? { reasoning: Boolean(model.reasoning) } : {}),
       ...(model.supportsImages !== undefined ? { supportsImages: Boolean(model.supportsImages) } : {}),
-      ...(model.thinkingLevels !== undefined ? { thinkingLevels: [...new Set(model.thinkingLevels)] } : {}),
+      ...(thinkingLevels !== undefined ? { thinkingLevels } : {}),
       ...(model.thinkingDispatch !== undefined ? { thinkingDispatch: model.thinkingDispatch } : {}),
     };
   });
@@ -94,22 +98,24 @@ export function serviceRuntimeConfig(provider: ProviderRecord) {
   if (!api) throw new Error("不支持的模型接口格式");
   return {
     name: provider.name, api, baseUrl: serviceBaseUrl(provider.baseUrl, provider.apiStyle),
-    models: provider.models.map((model) => ({
-      id: model.id, name: model.id, api,
-      reasoning: model.reasoning ?? false,
-      input: model.supportsImages ? ["text", "image"] : ["text"],
-      contextWindow: model.contextWindow ?? 128_000,
-      maxTokens: model.maxTokens ?? Math.min(8192, model.contextWindow ?? 128_000),
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      ...(model.reasoning ? { thinkingLevelMap: Object.fromEntries(SERVICE_THINKING_LEVELS.map((level) => [level,
-        serviceThinkingLevels(model, provider.apiStyle).includes(level)
-          ? (api === "anthropic-messages" && level === "minimal" ? "low" : level)
-          : null,
-      ])) } : {}),
-      // 自适应 effort 与 token 预算二选一，由模型级开关决定（缺省按已勾选等级推断）。
-      ...(api === "anthropic-messages" && model.reasoning && serviceThinkingDispatch(model, provider.apiStyle) === "adaptive"
-        ? { compat: { forceAdaptiveThinking: true } } : {}),
-      ...(api === "openai-completions" ? { compat: { supportsStore: false, supportsDeveloperRole: false, supportsStrictMode: false } } : {}),
-    })),
+    models: provider.models.map((model) => {
+      const levels = serviceThinkingLevels(model);
+      const adaptive = serviceThinkingDispatch(model, provider.apiStyle) === "adaptive";
+      return {
+        id: model.id, name: model.id, api,
+        reasoning: model.reasoning ?? false,
+        input: model.supportsImages ? ["text", "image"] : ["text"],
+        contextWindow: model.contextWindow ?? 128_000,
+        maxTokens: model.maxTokens ?? Math.min(8192, model.contextWindow ?? 128_000),
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        // 档位原样下发（参考实现同样不做改名与 token 换算）；未勾选档位与已退场的 minimal 置 null。
+        ...(model.reasoning ? { thinkingLevelMap: Object.fromEntries(PI_THINKING_LEVELS.map((level) => [level,
+          level !== "minimal" && levels.includes(level) ? level : null,
+        ])) } : {}),
+        // 自适应 effort 是缺省下发方式，只有模型显式选择 token 预算时才不发这个标记。
+        ...(adaptive ? { compat: { forceAdaptiveThinking: true } } : {}),
+        ...(api === "openai-completions" ? { compat: { supportsStore: false, supportsDeveloperRole: false, supportsStrictMode: false } } : {}),
+      };
+    }),
   };
 }

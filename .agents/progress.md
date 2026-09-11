@@ -638,15 +638,6 @@
 - 图块无背景、文字保留气泡背景，分离感由「独立块 + 气泡」自然呈现；交互不变（单图大图/多图 280px、hover 保存、点击大图）。
 - pnpm typecheck 通过；pnpm test 全量 352/352 通过。未提交/发布，未改AGENTS.md。
 
-## 2026-09-11：模型级「推理下发方式」开关（自动 / 自适应 / Token 预算）（11:45，Asia/Shanghai）
-
-- 背景：anthropic_messages 服务此前用「是否勾选极高/最大档」推断自适应 effort，勾了六档但只实现 budget_tokens 的网关会硬失败，只勾四档但支持 adaptive 的网关会被静默降级成 token 预算。
-- types.ts：ProviderModelBinding 新增 `thinkingDispatch?: "adaptive" | "budget"`，缺省表示按已勾选等级推断（与升级前行为一致）。
-- provider-config.ts：新增 `THINKING_DISPATCHES`、`THINKING_BUDGET_TOKENS`、`serviceThinkingBudget()`（xhigh/max 收敛到 16384）、`serviceThinkingDispatch()`（显式优先，其次按等级推断，非 anthropic 一律 budget）；serviceRuntimeConfig 的 forceAdaptiveThinking 改由该函数决定；validateService 校验枚举值。
-- provider-dialog.tsx：新增 ThinkingDispatchField（三态单选：自动/自适应/Token 预算 + 实际下发说明与预算 token 提示），仅 anthropic_messages 且勾了支持推理时出现；未启用模型走只读「当前下发：X」；styles.css 增加 .provider-thinking-dispatch 系规则（复用档位 pill 样式）。
-- i18n.ts：新增 settings.thinkingDispatch* 中英文案（含预算表与「不静默换算」说明）。
-- 验证：pnpm typecheck 通过；pnpm test 全量 74 文件 / 658 用例通过（provider-config.test.ts 新增显式覆盖、预算表与非法值用例，provider-thinking-runtime.test.ts 新增 forced-adaptive-4 / forced-budget-6 两个真实请求断言）；另用临时 React harness 渲染真实组件，四种状态截图人工确认。未提交/发布，未改 AGENTS.md。
-
 ## 2026-09-11：「停止」点了没反应（12:10，Asia/Shanghai）
 
 - 现象：turn 停在「等用户应答」的卡片上（ask_user、权限确认、访问边界选择）时，点停止完全没效果，按钮一直停在停止态。
@@ -661,4 +652,18 @@
   - renderer/ui.tsx + styles.css + shared/i18n.ts：停止按钮新增 stopping 态（disabled + 方块脉冲 + aria-label「停止中…」），消除「点了没反应」的观感。
 - 测试：新增 src/runtime/tools/ask-user.test.ts（4 例：选项/文本提问可中止、已中止不弹窗、正常应答不受影响）；src/main/agent-lifecycle.test.ts 新增「abort 带外、不被队列里的 compact 拖住」1 例，并让 FakeHost.blockNextRequest 支持按命令类型挂起。
 - 验证：pnpm typecheck 通过；pnpm test 662/663 通过。唯一失败 src/main/agent-subagents.test.ts「runs a subagent and returns its report to the parent turn」（details 期望 {total:1,done:1} 实得 {}），已用 git stash 移除本次全部改动复跑确认是既有失败，与本次修复无关。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：思考深度对齐 cursor-byok-main（五档 + Anthropic 恒自适应）（13:45，Asia/Shanghai）
+
+- 参考 /Users/yfdl/Downloads/cursor-byok-main 的做法：模型选择器只提供五档 Low/Medium/High/Extra High/Max（server/src/cursor/services/model_catalog.rs 的 EFFORTS）；OpenAI 线路把档位原样塞进顶层 reasoning_effort 或嵌套 reasoning.effort，Anthropic 线路恒发 thinking:{type:"adaptive"} + output_config.effort（server/src/provider/anthropic.rs 的 apply_model），服务端没有 budget_tokens 分支。
+- 改动前的差距：档位六档（多一个上游 API 不接受的 minimal）；Anthropic 服务默认只勾四档，且要手工勾上极高/最大才切自适应，否则 pi 走 budget_tokens；「最低 → low」特判散落在 provider-config、界面与内置 map。
+- 改法：
+  - shared/provider-config.ts：`SERVICE_THINKING_LEVELS` 收敛五档，`serviceThinkingLevels` 不再按协议给四档默认；新增 `serviceThinkingDispatch`（anthropic + reasoning 缺省自适应，只有显式 budget 才回落）决定 `compat.forceAdaptiveThinking`；`thinkingLevelMap` 档位同名透传、minimal 恒 null；`validateService` 把历史 minimal 折算 low 并校验 thinkingDispatch 枚举。
+  - shared/types.ts：ProviderModelBinding 加回 `thinkingDispatch?: "adaptive" | "budget"`（缺省自适应）。
+  - renderer/provider-dialog.tsx + styles.css + shared/i18n.ts：档位 chips 收敛五档；新增「思考下发」两态单选（自适应默认 / Token 预算）带当前下发说明，未启用模型只读展示；「可用推理等级」文案改为「思考深度档位」。
+  - shared/thinking.ts：`EXTENDED_THINKING_LEVELS` 去 minimal，`normalizeEffort` 把历史 minimal 折算 low；shared/subagents.ts 档位去 minimal（老角色文档写 minimal 仍按 low 解析）；runtime/extension.ts 的 /effort 白名单同步并接受 minimal→low。
+  - runtime/tools/deepseek-provider.ts 的内置 map 本来就把 minimal 置 null，无需改动。
+- 取舍：OpenAI 线路也不再提供「最低」档（参考的显示即如此）；只认 budget_tokens 的第三方 Anthropic 网关靠模型级「Token 预算」显式兜底，不再有按档位推断的「自动」态，也不在 TACode 里维护第二份 token 换算表。
+- 验证：pnpm typecheck 通过；pnpm test 75 文件 / 665 用例全过。provider-thinking-runtime.test.ts 新增 chat_completions 顶层 reasoning_effort 与 responses 嵌套 reasoning.effort 两条真实请求断言，原 Anthropic 用例改为覆盖默认自适应、xhigh/max 原样透传、显式预算回落 budget_tokens；另用 linkedom + react-dom 客户端渲染真实 ModelSelectionPanes，七项断言确认五档 chips、默认选中自适应、预算模型与只读预览、OpenAI 线路无下发字段。
 - 未提交/发布，未改 AGENTS.md。

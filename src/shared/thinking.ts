@@ -16,7 +16,6 @@ export interface ModelReasoningCapabilities {
 
 const EXTENDED_THINKING_LEVELS = [
   "off",
-  "minimal",
   "low",
   "medium",
   "high",
@@ -64,7 +63,6 @@ export function thinkingMapForModelId(modelId: string): ThinkingLevelMap | undef
   const id = modelId.toLowerCase();
   const base: ThinkingLevelMap = {
     off: null,
-    minimal: null,
     low: "low",
     medium: "high",
     high: "high",
@@ -109,7 +107,9 @@ export function effortLabelKey(level: string): MessageKey {
 
 export function normalizeEffort(value: string, levels: string[]): string {
   const options = pickThinkingOptions(levels);
-  if (options.includes(value)) return value;
+  // 历史「最低」档已退场，折算为「低」，避免旧配置把选择器留在空档。
+  const requested = value === "minimal" ? "low" : value;
+  if (options.includes(requested)) return requested;
   if (options.includes(DEFAULT_EFFORT)) return DEFAULT_EFFORT;
   if (options.includes("high")) return "high";
   return options.find((level) => level !== "off") ?? "off";

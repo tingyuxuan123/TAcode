@@ -401,8 +401,8 @@ export interface ProviderModelBinding {
   maxTokens?: number;
   reasoning?: boolean;
   thinkingLevels?: string[];
-  /** anthropic_messages 专属：推理档位的下发方式。“adaptive” 走 output_config.effort，
-   * “budget” 走 thinking.budget_tokens；缺省表示按已勾选的推理等级推断。 */
+  /** anthropic_messages 专属：思考档位的下发方式。"adaptive" 走 output_config.effort，
+   * "budget" 走 thinking.budget_tokens；缺省（含历史配置）一律自适应。 */
   thinkingDispatch?: "adaptive" | "budget";
   supportsImages?: boolean;
 }
