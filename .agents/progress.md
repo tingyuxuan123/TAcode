@@ -1,5 +1,17 @@
 # 模型供应商管理进度
 
+## 2026-09-12：思考行对齐 ZCode——默认收起 / 预览 / 微光 / 纯文本展开 + 工具行调色（08:00-09:50，Asia/Shanghai）
+
+- 起因：用户逐条对照 ZCode（本机 /Applications/ZCode.app，直接解包它的 asar 拿到渲染层组件与样式做参照）迭代会话过程区的观感。共五条反馈，逐条落地：
+  1. **思考默认收起**（此前流式中全文展开、结束后裁成 800 字预览）：收起成一行「🧠 思考 · 预览」，点击展开；`expanded[item.id]` 状态与工具行共用。收起态零内容渲染——93k 字符思考在折叠态不再白付那帧 127ms 的整段渲染（CLIPPED_PREVIEW_CHARS 路径连同 ResizeObserver 溢出测量一并删除，i18n 的展开/收起两个 key 移除）。
+  2. **预览**：取思考文本最后一个非空行（尾部 600 字符内，>140 字截断），流式时实时跟着「正在想的那句」走；标签 flex:none+nowrap，修复长预览把「思考」两个字挤成竖排的 bug。
+  3. **微光动画替代加载圈**：进行中整行文字 shimmer（去掉 LoaderCircle）。第一版用 --ink-2/--ink 两端，用户反馈「浅色主题看不见」——改为 color-mix 朝透明推的端点（亮带=--ink，基色=--ink 30% 透明度），对比度从主题文字色派生，任何主题都有强扫过感；专用 keyframe 每周期完整划过一次。
+  4. **展开态 = 纯文本 pre-wrap**（对齐 ZCode ReasoningContent 的 whitespace-pre-wrap：思考是草稿不是正文，代码块就是原始字符，不做 markdown/Shiki）：320px 高度上限 + 块内滚动（隐藏滚动条）+ 上/下 20px 渐隐遮罩（对齐 ZCode 的 scroll-mask，滚动位置实时切换 top/bottom/both/none）+ 流式中贴底自动跟随、上翻即停（ResizeObserver 同时观察容器与内容层）；已结束的思考展开时从顶部读起。废弃的 .flow-thought-text 全套规则与落字光标选择器清理干净。
+  5. **工具行调色**：静态预览（plan/preview/tool-rows.html + 真实 styles.css）与 ZCode 截图并排对比——结构/文案本来就逐字一致（`写入 N 行 · 文件名`、`执行 N 条命令 · 命令`），差在标签用了 --ink-2 显得重；调成 --ink-3 统一弱灰（字重 500 保留）。用户随即指出层级又反了：思考展开正文（--ink-2）比工具行（--ink-3）还深——正文与「思考」标签一并统一到 --ink-3，最终层级：回复正文(--ink) > 工具行/思考行/思考内容(--ink-3)。
+- 顺带修上一轮遗留的跳转回归：`scrollToAnchor` 校正循环全部改走 virtua 自己的 `scrollToIndex`、只在测量安静 120ms 后间歇补正（最多 8 轮）——直接写 box.scrollTop 会跟 virtua 的待定补偿互相拉锯（带栈追踪实测每帧 0↔226px 互写、297 次不收敛且位置单调漂移，根因是测量补偿按跳转前的旧内部偏移计算）；冒烟断言改为「等收敛后的落点」（跳进未测量区域首次可见时带一次估算误差的回弹，不能当契约）。
+- ZCode 参照要点（解包 app.asar 实证，非猜测）：ReasoningContent = `max-h-60(240px) overflow-auto whitespace-pre-wrap text-foreground-subtlest`，default 形态 `ml-2 border-l pl-3.5`；折叠态动画类 `animated-gradient-text`；工具行/思考行同为弱灰层级。Electron 主进程 ESM 入口**顶层 await 会永久挂起**（本次又踩一次，探针脚本必须包 async fn）。
+- 验证：`pnpm typecheck` 通过；思考纯文本化前跑过 `pnpm test`（85 文件 775 用例）与 message-list 冒烟（含改后的收敛断言）全绿；之后的微光调色/层级调整是纯 CSS，按用户要求不再跑测试，由用户实测验收。未提交（本次提交一并入库）、未发布、未改 AGENTS.md。
+
 ## 2026-09-12：对齐 ZCode 会话效果——逐词淡入 / 落字光标 / 跳转收敛 / 高度缓存（00:00-00:50，Asia/Shanghai）
 
 - 起因：用户「会话展示卡卡的、不够丝滑，想做成 ZCode 那种效果」。前两轮已修 Markdown 子树重建与流式分段，这轮先量化再动手：新增 `scripts/message-list-perf.mjs`（真实 Electron 窗口跑 150 轮生产组件链路，量流式跟随/翻历史/锚点跳转的帧间隔与 scrollTop 逆向写入）；另用合成会话对 App 每帧重算的 9 个收集器做了微基准（150 轮合计 0.38ms/帧）。

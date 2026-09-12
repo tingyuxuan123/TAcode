@@ -175,22 +175,19 @@ export const MessageList = forwardRef<MessageListHandle, {
       const tick = () => {
         if (settled) return;
         const node = box.querySelector<HTMLElement>(`.message-item[data-index="${index}"]`);
+        const delta = node
+          ? node.getBoundingClientRect().top - box.getBoundingClientRect().top
+          : Number.POSITIVE_INFINITY;
         const idle = performance.now() - lastActivity > 120;
-        if (node) {
-          const delta = node.getBoundingClientRect().top - box.getBoundingClientRect().top;
-          if (Math.abs(delta) <= 1) {
-            stable += 1;
-            if (stable >= 3 && idle) { finish(); return; }
-          } else if (!smooth || idle) {
-            stable = 0;
-            box.scrollTop += delta;
-            lastActivity = performance.now();
-          }
+        if (Math.abs(delta) <= 1) {
+          stable += 1;
+          if (stable >= 3 && idle) { finish(); return; }
         } else if (idle && performance.now() - lastCorrection > 300 && corrections < 8) {
-          // 目标条目还没挂载：跳进「从未测量过」的区域时，virtua 会在测量条目后为
-          // 保持内容位置把 scrollTop 反向推走。逐帧去抢会跟它的内部状态拉锯
-          // （实测永不收敛），所以只在完全安静 150ms 后补一次 scrollToIndex——
-          // 它同步更新 virtua 内部状态和 DOM；每轮修正后测量误差都比上轮小。
+          // 只在测量完全安静后用 virtua 自己的 scrollToIndex 补一次：它同步更新
+          // virtua 的内部状态和 DOM。绝不直接写 box.scrollTop——跳进「从未测量过」
+          // 的区域时，virtua 对新挂载条目的测量补偿是按跳转前的旧内部偏移算的，
+          // 会把落点推走一个估算误差；此时再直接写 scrollTop 会和它的待定补偿
+          // 互相拉锯（实测每帧 0↔226px 互写、数百次不收敛）。
           corrections += 1;
           lastCorrection = performance.now();
           stable = 0;

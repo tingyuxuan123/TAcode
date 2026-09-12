@@ -218,10 +218,17 @@ export async function verifyMessageList(win: BrowserWindow): Promise<void> {
 
   // 6. 跳转到最早的一轮：条目自动挂载并贴到视口顶部。
   //    先上滑离开底部（跟随关闭、锚点指向旧位置），再现跳转，覆盖「跳转被旧锚点拉回」的场景。
+  //    注意断言的是**收敛后**的落点：跳进未测量区域时 virtua 会按跳转前的旧内部偏移
+  //    做一次测量补偿（把落点推走一个估算误差，下一轮校正才落准），首次可见的位置
+  //    可能带一次短暂回弹，不能当契约。
   await evaluate(`(() => { const box = document.querySelector('.conversation'); box.scrollTop -= 2500; })()`);
   await wait((state) => state.viewport.scrollTop < state.viewport.scrollHeight - state.viewport.clientHeight - 100, "离开底部");
   await evaluate("window.__messageListFixture.scrollToAnchor('turn-user-0')");
-  const jumped = await wait((state) => state.anchors.includes("assistant-0"), "跳转到首轮");
+  const jumped = await wait((state) => {
+    if (!state.anchors.includes("assistant-0")) return false;
+    const first = state.rects[0];
+    return Boolean(first) && first!.top >= state.viewport.top - 1 && first!.top <= state.viewport.top + 40;
+  }, "跳转到首轮并收敛");
   const firstItem = jumped.rects[0]!;
   assert(
     firstItem.top >= jumped.viewport.top - 1 && firstItem.top <= jumped.viewport.top + 40,

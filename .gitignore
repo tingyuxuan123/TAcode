@@ -6,3 +6,4 @@ release
 *.log
 .worktrees/
 .local/agent-work/
+plan/

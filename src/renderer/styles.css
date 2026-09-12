@@ -2519,21 +2519,66 @@ textarea::selection,
 @keyframes flow-reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .flow-text { min-width: 0; overflow-wrap: anywhere; }
 .flow-items .flow-text { color: var(--ink-2); font-size: calc(14px * var(--chat-font-scale)); line-height: 1.65; }
-.flow-items .flow-text > :first-child, .flow-thought-text > :first-child { margin-top: 0; }
-.flow-items .flow-text > :last-child, .flow-thought-text > :last-child { margin-bottom: 0; }
-.flow-thought-label { display: flex; align-items: center; gap: 7px; color: var(--ink-2); font-weight: 550; font-size: calc(12px * var(--ui-font-scale)); margin-bottom: 7px; }
-.flow-thought-body { padding: 12px 14px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: 0 1px 2px #1c19170a; }
-.flow-thought-text { color: var(--ink-2); font-size: calc(13.5px * var(--chat-font-scale)); line-height: 1.65; overflow: hidden; overflow-wrap: anywhere; }
-.flow-thought-text.clipped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.flow-thought-text p { margin: 0 0 0.65em; }
-.flow-thought-text pre { border-radius: 6px; }
-.flow-thought-toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 9px; color: var(--ink-3); font-size: calc(12px * var(--ui-font-scale)); }
-.flow-thought-toggle:hover { color: var(--ink); }
-.flow-thought-toggle .rotated { transform: rotate(180deg); }
+.flow-items .flow-text > :first-child { margin-top: 0; }
+.flow-items .flow-text > :last-child { margin-bottom: 0; }
+.flow-thought-label { display: flex; align-items: center; gap: 7px; width: 100%; min-width: 0; min-height: 30px; padding: 4px 5px; border: none; border-radius: 5px; background: none; color: var(--ink-3); font-weight: 550; font-size: calc(12px * var(--ui-font-scale)); text-align: left; cursor: pointer; }
+.flow-thought-label > svg { flex: none; }
+.flow-thought-label > .rotated { transform: rotate(90deg); }
+.flow-thought-label > svg:last-child { margin-left: auto; color: var(--ink-3); transition: transform 160ms ease; }
+.flow-thought-label:hover { background: var(--hover); color: var(--ink); }
+.flow-thought-label[data-pending] { opacity: 0.45; }
+/* 「思考」标签本身禁止被长预览挤压换行（flex 挤压会把两个字竖排） */
+.flow-thought-name { flex: none; white-space: nowrap; }
+/* 收起态的内容预览：占满标签与箭头之间，超长省略号截断 */
+.flow-thought-preview { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--ink-3); }
+/* 进行中的思考行：整行文字微光扫过（对齐 ZCode），替代原来的加载圈。
+   端点用 color-mix 朝透明推：亮带=文字色，基色=文字色 30% 透明度——
+   任何主题下亮带与底色都保持强对比（之前用 --ink-2/--ink 两端，浅色主题下几乎看不出） */
+.flow-thought-label.active .flow-thought-name,
+.flow-thought-label.active .flow-thought-preview {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--ink) 30%, transparent) 40%,
+    var(--ink) 50%,
+    color-mix(in srgb, var(--ink) 30%, transparent) 60%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: flow-thought-shimmer 1.8s linear infinite;
+}
+@keyframes flow-thought-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-thought-label.active .flow-thought-name,
+  .flow-thought-label.active .flow-thought-preview {
+    background: none;
+    color: var(--ink-2);
+  }
+}
+/* 展开态（对齐 ZCode 的弱化内联风格）：不用卡片容器，左侧缩进 + 淡色竖线引导；
+   展开瞬间用一个轻淡的显现动画过渡（内容按条件渲染，纯高度过渡对挂载元素不生效）。
+   高度有上限（对齐 ZCode）：长思考在块内部滚动，不撑开整个对话；隐藏滚动条保留滚轮 */
+.flow-thought-body {
+  margin: 2px 0 2px 5px;
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--line);
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  animation: flow-reveal 180ms ease;
+}
+.flow-thought-body::-webkit-scrollbar { display: none; }
+/* 思考正文：纯文本 pre-wrap（对齐 ZCode 的 ReasoningContent——思考是草稿不是
+   正文，不走 markdown，代码块就是原始字符） */
+.flow-thought-plain { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; color: var(--ink-3); font-size: calc(13.5px * var(--chat-font-scale)); line-height: 1.65; }
 .flow-tool { min-width: 0; }
 .flow-tool-line { display: flex; align-items: center; gap: 7px; width: 100%; min-width: 0; min-height: 30px; padding: 4px 5px; border-radius: 5px; color: var(--ink-3); text-align: left; font-size: calc(12.5px * var(--ui-font-scale)); }
 .flow-tool-line:hover { background: var(--hover); color: var(--ink-2); }
-.flow-tool-label { flex-shrink: 0; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-weight: 500; }
+.flow-tool-label { flex-shrink: 0; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); font-weight: 500; }
 .flow-tool-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-tool-summary.mono { font-family: var(--mono); font-size: calc(12px * var(--code-font-scale)); }
 .flow-separator { opacity: 0.5; }
@@ -2600,8 +2645,8 @@ textarea::selection,
   .flow-status { max-width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .flow-collapse, .flow-header svg, .flow-tool-line > svg:last-child, .flow-earlier-toggle > svg { transition: none; }
-  .flow-earlier-items { animation: none; }
+  .flow-collapse, .flow-header svg, .flow-tool-line > svg:last-child, .flow-thought-label > svg:last-child, .flow-earlier-toggle > svg { transition: none; }
+  .flow-earlier-items, .flow-thought-body { animation: none; }
   .flow-spinner { animation: none; }
 }
 
@@ -2619,8 +2664,7 @@ textarea::selection,
 
 /* 流式落字光标：贴在流式文本最后一个段落之后（.live 由 execution-flow 按流式状态挂）。
    只挑段落收尾，避开表格/代码块等 ::after 位置奇怪的场景。 */
-.markdown.flow-text.live > p:last-child::after,
-.markdown.flow-thought-text.live > p:last-child::after {
+.markdown.flow-text.live > p:last-child::after {
   content: "";
   display: inline-block;
   width: 2px;
@@ -2642,7 +2686,6 @@ textarea::selection,
 }
 
 /* 重内容（思考全文 / 更早的步骤）延迟渲染期间，开关按钮降透明度示意未完成。 */
-.flow-thought-toggle[data-pending],
 .flow-earlier-toggle[data-pending] {
   opacity: 0.45;
 }
@@ -2652,8 +2695,9 @@ textarea::selection,
     animation: none;
   }
   .markdown.flow-text.live > p:last-child::after,
-  .markdown.flow-thought-text.live > p:last-child::after,
-  .flow-tool-line > svg:first-child {
+  .flow-tool-line > svg:first-child,
+  .flow-thought-label.active .flow-thought-name,
+  .flow-thought-label.active .flow-thought-preview {
     animation: none;
   }
 }
