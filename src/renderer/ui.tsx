@@ -1496,7 +1496,7 @@ export const AssistantTurn = memo(function AssistantTurn({
   running = false,
   awaiting = false,
   stopping = false,
-  canAutoCollapse,
+  canAutoCollapse = true,
   onOpenFile,
   onOpenPath,
   errorRecovered = false,
@@ -1507,7 +1507,8 @@ export const AssistantTurn = memo(function AssistantTurn({
   running?: boolean;
   awaiting?: boolean;
   stopping?: boolean;
-  canAutoCollapse(): boolean;
+  /** 结束后是否允许过程区自动收起；主时间线传响应式的 follow.atBottom，侧栏面板传 false 关闭。 */
+  canAutoCollapse?: boolean;
   onOpenFile?(file: FileChange): void;
   /** 过程区文件行（读取/写入/编辑）点击时开右侧文件标签。 */
   onOpenPath?(path: string): void;

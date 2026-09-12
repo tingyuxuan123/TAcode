@@ -227,7 +227,7 @@ export function SideChatPanel({ workspace, provider, model, modelKey, models, ef
         {groups.length === 0 && !running && !starting && <div className="side-chat-empty"><MessageCirclePlus size={24} strokeWidth={1.5} /><p>{t("panel.sideChatEmpty")}</p><p className="side-chat-empty-note">{t("panel.sideChatEphemeral")}</p></div>}
         {groups.map((group) => group.type === "user"
           ? <UserTurn key={group.id} text={group.message.text} images={group.message.images} />
-          : <AssistantTurn key={group.id} messages={group.messages} running={running} canAutoCollapse={() => false} />)}
+          : <AssistantTurn key={group.id} messages={group.messages} running={running} canAutoCollapse={false} />)}
         {ended && (
           <div className="side-chat-ended" role="status">
             <span>{t("panel.sideChatEnded")}</span>

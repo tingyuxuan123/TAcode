@@ -645,7 +645,6 @@ export function App() {
     scroller.current = node;
     follow.viewportRef(node);
   }, [follow.viewportRef]);
-  const canAutoCollapse = useCallback(() => follow.following.current, [follow.following]);
   const recoverableStreaks = useMemo(() => recoverableFailStreaks(groups), [groups]);
   const anchors = useMemo(() => turnAnchors(groups), [groups]);
   const tools = useMemo(() => sessionTools(messages), [messages]);
@@ -1684,7 +1683,6 @@ export function App() {
             running={isLastGroup && running}
             awaiting={isLastGroup && Boolean(uiRequest)}
             stopping={isLastGroup && stopping}
-            canAutoCollapse={canAutoCollapse}
             errorRecovered={recovered}
             recoverableFailStreak={recoverableFailStreak}
             onOpenFile={setPreview}

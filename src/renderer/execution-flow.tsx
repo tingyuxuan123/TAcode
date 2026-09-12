@@ -191,7 +191,7 @@ const FreezeCell = memo(function FreezeCell({ freeze, signature, build }: {
   return cache.current.node;
 });
 
-export function ExecutionFlow({ view, live, streaming, awaiting, stopping, interrupted, error, errorTone, clock, canAutoCollapse, onRetry, onOpenFile, renderText, renderTool }: {
+export function ExecutionFlow({ view, live, streaming, awaiting, stopping, interrupted, error, errorTone, clock, canAutoCollapse = true, onRetry, onOpenFile, renderText, renderTool }: {
   view: Presentation;
   live: boolean;
   streaming: boolean;
@@ -201,7 +201,8 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
   error?: string;
   errorTone: "strong" | "weak";
   clock: ReactNode;
-  canAutoCollapse(): boolean;
+  /** 结束后是否自动收起过程区（默认开）；侧栏面板、性能探针传 false 维持常展开。 */
+  canAutoCollapse?: boolean;
   onRetry?(): void;
   /** 文件类工具行点击时开右侧文件标签（App 层接 browserPanels.openFile）。 */
   onOpenFile?(path: string): void;
@@ -211,15 +212,15 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
   const { t } = useI18n();
   const failed = Boolean(error) || view.tools.some((tool) => tool.status === "error");
   const unknown = view.tools.some((tool) => tool.resultRecorded === false && tool.status !== "running");
-  const [open, setOpen] = useState(() => live || awaiting || failed || interrupted || unknown || !view.reply.length);
+  // 已结束的回合（历史加载、切会话、上一轮）默认收起，过程区只在回合进行中展开；
+  // canAutoCollapse 为 false 的表面（侧栏面板、探针）维持旧的「默认展开」。
+  const [open, setOpen] = useState(() => live || awaiting || !canAutoCollapse);
   const [mounted, setMounted] = useState(open);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [offscreen, setOffscreen] = useState(false);
   const [togglePending, startToggleTransition] = useTransition();
   const interacted = useRef(false);
   const wasLive = useRef(live);
   const root = useRef<HTMLDivElement>(null);
-  const processRef = useRef<HTMLDivElement>(null);
   const id = useId();
   const active = streaming ? view.items.at(-1) : undefined;
   const hasProcess = view.process.length > 0 || (live && !view.reply.length) || awaiting || failed || interrupted;
@@ -230,20 +231,12 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
     return () => window.clearTimeout(timer);
   }, [open]);
 
-  // 过程区是否已完全滚出视口。只有用户看不到它了，才允许自动收起，
-  // 避免展开中的过程在阅读时被抽走。
   useEffect(() => {
-    const node = processRef.current;
-    if (!node || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver((entries) => {
-      const entry = entries.at(-1);
-      setOffscreen(entry ? entry.intersectionRatio === 0 : false);
-    }, { threshold: 0 });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [hasProcess]);
-
-  useEffect(() => {
+    // 关闭自动收起的表面（侧栏面板、性能探针）：维持常展开，只有手动点标题才收起。
+    if (!canAutoCollapse) {
+      if (!interacted.current) setOpen(true);
+      return;
+    }
     if (live) {
       if (!wasLive.current) {
         interacted.current = false;
@@ -252,20 +245,21 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
       wasLive.current = true;
       return;
     }
-    if (failed || interrupted || awaiting || unknown || !view.reply.length) {
+    if (awaiting) {
       if (!interacted.current) setOpen(true);
       return;
     }
+    // 回合结束（含失败/中断/无回复）就收起，不看滚动位置：长会话里每轮都留一整段
+    // 展开的过程，时间线很快被撑爆。只有用户手动点开过条目/标题（interacted）
+    // 才尊重手动状态不再收。
     if (!wasLive.current || interacted.current) return;
-    // 用户看不到过程区了才静默收起：没有倒计时，不打断阅读的人。
-    if (!offscreen || !canAutoCollapse()) return;
     const timer = window.setTimeout(() => {
-      if (interacted.current || !canAutoCollapse()) return;
+      if (interacted.current) return;
       setOpen(false);
       wasLive.current = false;
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [live, failed, interrupted, awaiting, unknown, view.reply.length, offscreen, canAutoCollapse]);
+  }, [live, awaiting, canAutoCollapse]);
 
   const toggleItem = useCallback((key: string, defaultOpen = false) => {
     interacted.current = true;
@@ -319,7 +313,7 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
 
   return (
     <div className="execution-flow" ref={root}>
-      {hasProcess && <div className="flow-process" ref={processRef}>
+      {hasProcess && <div className="flow-process">
         <button type="button" className="flow-header" aria-expanded={open} aria-controls={id} onClick={() => {
           interacted.current = true;
           setOpen((value) => !value);

@@ -61,7 +61,7 @@ function Fixture({ turns }: { turns: number }) {
   const grownRef = useRef(0);
   const [tail, setTail] = useState(() => turnMessages(turns - 1, `### 第 ${turns} 轮\n\n${PARAGRAPHS[0]!}`));
 
-  const canAutoCollapse = useCallback(() => follow.following.current, []);
+  // 探针测的是长历史展开内容的窗口化与滚动定位，关闭自动收起保持历史轮次展开。
   const onOpenFile = useCallback(() => undefined, []);
 
   const items: MessageListItem[] = [];
@@ -79,7 +79,7 @@ function Fixture({ turns }: { turns: number }) {
           <AssistantTurn
             messages={tail}
             running
-            canAutoCollapse={canAutoCollapse}
+            canAutoCollapse={false}
             onOpenFile={onOpenFile}
           />
         ),
@@ -90,7 +90,7 @@ function Fixture({ turns }: { turns: number }) {
         render: () => (
           <AssistantTurn
             messages={turnMessages(index, `### 第 ${index + 1} 轮\n\n${PARAGRAPHS[index % PARAGRAPHS.length]!}\n\n- 一条要点\n- 另一条要点`)}
-            canAutoCollapse={canAutoCollapse}
+            canAutoCollapse={false}
             onOpenFile={onOpenFile}
           />
         ),

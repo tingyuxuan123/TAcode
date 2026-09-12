@@ -144,7 +144,7 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
               key={group.id}
               messages={group.messages}
               running={false}
-              canAutoCollapse={() => false}
+              canAutoCollapse={false}
             />
           ))}
         {info.report?.trim() && (

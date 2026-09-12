@@ -253,10 +253,10 @@ function Fixture() {
           <button type="button" data-fixture-start-delegation onClick={startDelegation}>模拟委派开始</button>
           <button type="button" data-fixture-advance-delegation onClick={advanceDelegation}>模拟委派完成</button>
           <div data-fixture-delegate-turn>
-            <AssistantTurn messages={[delegateTurn]} canAutoCollapse={() => false} />
+            <AssistantTurn messages={[delegateTurn]} canAutoCollapse={false} />
           </div>
           <div data-fixture-inline-turn>
-            <AssistantTurn messages={[inlineTurn]} canAutoCollapse={() => false} />
+            <AssistantTurn messages={[inlineTurn]} canAutoCollapse={false} />
           </div>
         </div>
       </Chat>

@@ -223,7 +223,7 @@ function Probe({ scenario }: { scenario: Scenario }) {
   }], [scenario, text, work]);
   const turns = Number(new URLSearchParams(location.search).get("turns") ?? "") || 40;
   const history = useMemo(() => historicalTurns(scenario === "long" ? turns : 0), [scenario, turns]);
-  const canAutoCollapse = useCallback(() => true, []);
+  // 探针测的是「历史轮次全部展开 + 流式」的真实渲染负载，关闭自动收起保持展开。
   const onOpenFile = useCallback(() => undefined, []);
 
   useEffect(() => {
@@ -236,9 +236,9 @@ function Probe({ scenario }: { scenario: Scenario }) {
       <div className="conversation" style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
         <div className="messages" data-perf-root>
           {history.map((group, index) => (
-            <AssistantTurn key={`history-${index}`} messages={group} canAutoCollapse={canAutoCollapse} onOpenFile={onOpenFile} />
+            <AssistantTurn key={`history-${index}`} messages={group} canAutoCollapse={false} onOpenFile={onOpenFile} />
           ))}
-          <AssistantTurn messages={messages} running canAutoCollapse={canAutoCollapse} onOpenFile={onOpenFile} />
+          <AssistantTurn messages={messages} running canAutoCollapse={false} onOpenFile={onOpenFile} />
         </div>
       </div>
     </div>
