@@ -1639,6 +1639,7 @@ export function App() {
             errorRecovered={recovered}
             recoverableFailStreak={recoverableFailStreak}
             onOpenFile={setPreview}
+            onOpenPath={(path) => browserPanels.openFile(path)}
             onRetry={showRetry ? () => {
               void sendMessage(t("composer.retryContinue"));
             } : undefined}
@@ -1920,7 +1921,7 @@ export function App() {
           messageList.current?.scrollToAnchor(id, { onSettled: follow.reanchor });
         }} />}
         inspect={workspace ? (
-          <WorkbenchPanels panels={browserPanels} onError={setToast} inspect={
+          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace} inspect={
             <InspectPanel
               files={workingFiles}
               todos={todos}

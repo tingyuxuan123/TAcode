@@ -1453,6 +1453,10 @@ export interface TraceRow {
   tool?: ToolActivity;
   /** 本会话全部工具：委派卡片用它回填生命周期工具给出的状态。 */
   tools?: ToolActivity[];
+  /** 文件类工具的目标路径：过程区的文件行点击时用它开右侧文件标签。 */
+  path?: string;
+  /** 编辑/补丁行的增删统计（对齐 ZCode 的 diffCount），行内以 +N −M 展示。 */
+  diff?: { added: number; removed: number };
 }
 
 /**
@@ -1552,11 +1556,16 @@ export function toolRow(tool: ToolActivity, index = 0, tools?: ToolActivity[]): 
   const file = toolPath(tool) || patchTarget(stringField(args, "input"))?.path || "";
   if (/write|edit|patch/.test(name)) {
     const lines = writtenLines(tool);
+    const patch = stringField(args, "input");
+    const isEdit = /edit|patch/.test(name);
     return {
       ...base,
       kind: "write",
-      label: lines > 0 ? ct("trace.writeLines", { n: lines }) : ct("trace.write"),
+      // 编辑/补丁行：ZCode 式「编辑 · 文件 +N −M」；整文件写入行保持「写入 N 行」
+      label: isEdit ? ct("trace.edit") : lines > 0 ? ct("trace.writeLines", { n: lines }) : ct("trace.write"),
       chip: baseName(file),
+      path: file || undefined,
+      diff: isEdit && patch.trim() ? patchStats(patch) : undefined,
     };
   }
   if (/grep|glob|search|find/.test(name)) {
@@ -1567,8 +1576,17 @@ export function toolRow(tool: ToolActivity, index = 0, tools?: ToolActivity[]): 
       chip: stringField(args, "pattern") || stringField(args, "query") || baseName(file) || ct("trace.workspace"),
     };
   }
-  if (/read|cat|view/.test(name)) return { ...base, kind: "read", label: ct("trace.read"), chip: baseName(file) || ct("trace.file") };
-  return { ...base, kind: "tool", label: tool.title, chip: baseName(file), mono: Boolean(file) };
+  if (/read|cat|view/.test(name)) return { ...base, kind: "read", label: ct("trace.read"), chip: baseName(file) || ct("trace.file"), path: file || undefined };
+  return { ...base, kind: "tool", label: tool.title, chip: baseName(file), mono: Boolean(file), path: file || undefined };
+}
+
+/** 补丁的增删行数（对齐 ZCode 行内的 diffCount；只数 add/del，上下文与 hunks 不算）。 */
+function patchStats(patch: string): { added: number; removed: number } {
+  const rows = splitPatch(patch);
+  return {
+    added: rows.filter((row) => row.kind === "add").length,
+    removed: rows.filter((row) => row.kind === "del").length,
+  };
 }
 
 export function webSearchCard(tool: ToolActivity) {

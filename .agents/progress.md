@@ -1,5 +1,15 @@
 # 模型供应商管理进度
 
+## 2026-09-12：文件行对齐 ZCode——右侧文件标签 + 增删统计 + 文件名微高亮（09:50-10:15，Asia/Shanghai）
+
+- 起因：用户贴了两张 ZCode 截图（第二张就是 ZCode 里跑本会话的转录）指出三处差异：①ZCode 点「读取/写入/编辑」行会在右侧面板打开文件查看器，TACode 是行内展开；②ZCode 的文件名比标签亮一点（微高亮）；③ZCode 编辑行有 +N −M 增删统计。解包 ZCode asar 实证：工具行组件带 `diffCount`（`hideDiffCountWhenOpen`、挂载动画）与 `onOpenCodeViewer/onOpenFileLink`。
+- 落地：
+  1. **行数据**（conversation.ts）：`TraceRow` 新增 `path`（文件类工具的目标路径）与 `diff`（`patchStats`：splitPatch 的 add/del 行数，不含上下文与 hunks 头）；apply_patch/edit 行文案单独为「编辑」（i18n `trace.edit`），整文件写入行保持「写入 N 行」；read/write/edit/默认分支都带 path。
+  2. **行渲染**（execution-flow.tsx）：ToolLine 接 `onOpenFile(path)`——文件行点击改开右侧文件标签（不再行内展开；无回调时回退旧行为），chevron 不再旋转；行内 chip 后渲染 `+N −M`（复用绿/红 token）；ExecutionFlow → AssistantTurn 新增 `onOpenPath` 穿线（AssistantTurn 原有的 `onOpenFile`（FileChange→FileDrawer）保持不动，变更摘要与 markdown 里的文件 chip 仍走抽屉）。
+  3. **文件标签**（panel-state/use-browser-panels/workbench-panels/file-panel）：新 `FilePanelTab`（`file-<path>` 为 id，同路径复用同一标签，重复点击只激活）；`FilePanel` 复用 FileDrawer 的读取逻辑——文本文件 Shiki 高亮 + 行号（HighlightedFileCode），HTML 走 `harness-preview://` 内嵌预览，二进制/读取失败给提示；标签名 = 文件名、title = 完整路径；全出血形态（同子代理标签），`workspace` 由 App 透传给 WorkbenchPanels。
+  4. **样式**：`.flow-tool-summary.mono` 提到 --ink-2（文件名微高亮，比标签亮一档）；`.flow-tool-diff` 用 --green/--red；`.file-panel` 全出血滚动容器。静态预览（plan/preview/tool-rows.html）截图核对：`写入 196 行 · _ab_sim.mjs +12 −3 >` 与 ZCode 同调。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 85 文件 775 用例全绿（更新了一个断言旧行为的用例：apply_patch 行现为「编辑」+ diff/path，并补了 patchStats 的正反例断言）；文件标签的端到端交互由用户实测。未提交（本条随本次提交入库）、未发布、未改 AGENTS.md。
+
 ## 2026-09-12：思考行对齐 ZCode——默认收起 / 预览 / 微光 / 纯文本展开 + 工具行调色（08:00-09:50，Asia/Shanghai）
 
 - 起因：用户逐条对照 ZCode（本机 /Applications/ZCode.app，直接解包它的 asar 拿到渲染层组件与样式做参照）迭代会话过程区的观感。共五条反馈，逐条落地：

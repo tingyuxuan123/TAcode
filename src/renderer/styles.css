@@ -2581,6 +2581,12 @@ textarea::selection,
 .flow-tool-label { flex-shrink: 0; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); font-weight: 500; }
 .flow-tool-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-tool-summary.mono { font-family: var(--mono); font-size: calc(12px * var(--code-font-scale)); }
+/* 文件名比标签亮一档（对齐 ZCode 的「微高亮」文件名） */
+.flow-tool-summary.mono { color: var(--ink-2); }
+/* 编辑/补丁行的 +N −M 增删统计（对齐 ZCode 的 diffCount） */
+.flow-tool-diff { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.flow-tool-diff .add { color: var(--green); font-weight: 500; }
+.flow-tool-diff .del { color: var(--red); font-weight: 500; }
 .flow-separator { opacity: 0.5; }
 .flow-tool-state { margin-left: auto; flex: none; font-size: calc(11px * var(--ui-font-scale)); }
 .flow-tool.error > .flow-tool-line { color: var(--red); }
@@ -7732,6 +7738,11 @@ kbd {
 }
 
 /* 子代理只读标签：内容区沿用审查面板的滚动/内边距语言 */
+/* 右侧面板的文件查看标签（过程区文件行打开） */
+.file-panel { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 14px 18px 28px; }
+.file-panel-code { margin: 0; font-family: var(--mono); font-size: calc(12.5px * var(--code-font-scale)); line-height: 1.6; }
+.file-panel-error { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: calc(12.5px * var(--ui-font-scale)); }
+.file-panel-frame { flex: 1; width: 100%; height: 100%; border: none; background: #fff; }
 .child-session-host {
   flex: 1;
   min-width: 0;

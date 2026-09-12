@@ -18,6 +18,11 @@ export function useBrowserPanels() {
     if (type === "inspect") dispatch({ type: "open-inspect" });
     else if (type === "browser") openBrowser();
   }, [openBrowser]);
+  /** 打开/激活文件查看标签；同一路径复用同一个标签（过程区文件行的点击入口）。 */
+  const openFile = useCallback((path: string) => {
+    const trimmed = path.trim();
+    if (trimmed) dispatch({ type: "open-file", path: trimmed });
+  }, []);
   const closePanel = useCallback((id: string) => dispatch({ type: "close", id }), []);
   const selectPanel = useCallback((id: string) => dispatch({ type: "select", id }), []);
   /**
@@ -53,5 +58,5 @@ export function useBrowserPanels() {
     return () => { offRestore(); offClosed(); offPresentation(); };
   }, []);
 
-  return { ...state, dispatch, openPanel, openBrowser, openChildSession, closePanel, selectPanel };
+  return { ...state, dispatch, openPanel, openBrowser, openChildSession, openFile, closePanel, selectPanel };
 }

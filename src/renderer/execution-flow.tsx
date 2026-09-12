@@ -134,8 +134,11 @@ const Thought = memo(function Thought({ itemId, text, active, expanded, pending,
 });
 
 const toolIcons = { think: Brain, run: SquareTerminal, write: FilePenLine, read: FileText, search: Search, look: Globe, tool: Wrench };
-const ToolLine = memo(function ToolLine({ itemId, tool, expanded, onToggle, render }: {
-  itemId: string; tool: ToolActivity; expanded: boolean; onToggle(id: string, defaultOpen?: boolean): void; render(tool: ToolActivity): ReactNode;
+const ToolLine = memo(function ToolLine({ itemId, tool, expanded, onToggle, onOpenFile, render }: {
+  itemId: string; tool: ToolActivity; expanded: boolean; onToggle(id: string, defaultOpen?: boolean): void;
+  /** 文件类工具行点击时在右侧面板开文件标签（对齐 ZCode 的 code viewer）；缺省回退行内展开。 */
+  onOpenFile?(path: string): void;
+  render(tool: ToolActivity): ReactNode;
 }) {
   const { t } = useI18n();
   const row = toolRow(tool);
@@ -145,16 +148,25 @@ const ToolLine = memo(function ToolLine({ itemId, tool, expanded, onToggle, rend
   const unknown = tool.resultRecorded === false && !pending;
   const state = tool.interrupted ? t("flow.interrupted") : pending ? t("flow.running") : error ? t("flow.failed") : unknown ? t("flow.unrecorded") : "";
   const id = useId();
+  // 文件行（读取/写入/编辑）点击开右侧文件标签，不做行内展开——对齐 ZCode 的
+  // code viewer 交互；没有 onOpenFile（探针环境）时保持旧行为。
+  const fileRow = Boolean(row.path) && Boolean(onOpenFile);
   return (
     <div className={`flow-tool${error ? " error" : ""}`} data-tool-id={tool.id}>
-      <button type="button" className="flow-tool-line" aria-expanded={expanded} aria-controls={id} onClick={() => onToggle(itemId, error)} title={[tool.name, row.label, row.chip, state].filter(Boolean).join(" · ")}>
+      <button type="button" className="flow-tool-line" aria-expanded={fileRow ? undefined : expanded} aria-controls={fileRow ? undefined : id} onClick={() => { if (fileRow) onOpenFile?.(row.path!); else onToggle(itemId, error); }} title={[tool.name, row.label, row.chip, state].filter(Boolean).join(" · ")}>
         {pending ? <LoaderCircle size={15} className="flow-spinner" aria-hidden="true" /> : error ? <CircleAlert size={15} aria-hidden="true" /> : unknown ? <CircleHelp size={15} aria-hidden="true" /> : <Glyph size={15} aria-hidden="true" />}
         <span className="flow-tool-label">{row.label}</span>
         {row.chip && <><span className="flow-separator" aria-hidden="true">·</span><span className={`flow-tool-summary${row.mono ? " mono" : ""}`}>{row.chip}</span></>}
+        {row.diff && (row.diff.added > 0 || row.diff.removed > 0) && (
+          <span className="flow-tool-diff">
+            {row.diff.added > 0 && <b className="add">+{row.diff.added}</b>}
+            {row.diff.removed > 0 && <b className="del">−{row.diff.removed}</b>}
+          </span>
+        )}
         {state && <span className="flow-tool-state">{state}</span>}
-        <ChevronRight size={13} className={expanded ? "rotated" : ""} aria-hidden="true" />
+        <ChevronRight size={13} className={fileRow ? "" : expanded ? "rotated" : ""} aria-hidden="true" />
       </button>
-      {expanded && <div id={id} className="flow-tool-detail">{render(tool) || <span className="flow-empty-detail">{t(pending ? "flow.awaitingResult" : "flow.noOutput")}</span>}</div>}
+      {!fileRow && expanded && <div id={id} className="flow-tool-detail">{render(tool) || <span className="flow-empty-detail">{t(pending ? "flow.awaitingResult" : "flow.noOutput")}</span>}</div>}
     </div>
   );
 });
@@ -182,7 +194,7 @@ const FreezeCell = memo(function FreezeCell({ freeze, signature, build }: {
   return cache.current.node;
 });
 
-export function ExecutionFlow({ view, live, streaming, awaiting, stopping, interrupted, error, errorTone, clock, canAutoCollapse, onRetry, renderText, renderTool }: {
+export function ExecutionFlow({ view, live, streaming, awaiting, stopping, interrupted, error, errorTone, clock, canAutoCollapse, onRetry, onOpenFile, renderText, renderTool }: {
   view: Presentation;
   live: boolean;
   streaming: boolean;
@@ -194,6 +206,8 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
   clock: ReactNode;
   canAutoCollapse(): boolean;
   onRetry?(): void;
+  /** 文件类工具行点击时开右侧文件标签（App 层接 browserPanels.openFile）。 */
+  onOpenFile?(path: string): void;
   renderText: TextRenderer;
   renderTool(tool: ToolActivity): ReactNode;
 }) {
@@ -310,7 +324,7 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
           : item.type === "text" ? <FlowText text={item.text} streaming={item.id === active?.id && live} render={renderText} />
             : (() => {
               const tool = toolMap.get(item.toolId);
-              return tool ? <ToolLine itemId={item.id} tool={tool} expanded={expanded[item.id] ?? tool.status === "error"} onToggle={toggleItem} render={renderTool} /> : null;
+              return tool ? <ToolLine itemId={item.id} tool={tool} expanded={expanded[item.id] ?? tool.status === "error"} onToggle={toggleItem} onOpenFile={onOpenFile} render={renderTool} /> : null;
             })()}
       </div>
     );

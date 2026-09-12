@@ -4,14 +4,17 @@ import { PanelPicker, PanelTabs } from "../ui";
 import { useI18n } from "../i18n";
 import { BrowserPanel } from "./browser-panel";
 import { ChildSessionPanel } from "./child-session-panel";
-import { browserPanelLabel, childSessionPanelLabel } from "./panel-state";
+import { FilePanel } from "./file-panel";
+import { browserPanelLabel, childSessionPanelLabel, filePanelLabel } from "./panel-state";
 import type { useBrowserPanels } from "./use-browser-panels";
 
 /** 网页与审查共用顶部标签栏，切换标签时所有网页保持挂载。 */
-export function WorkbenchPanels({ panels, inspect, onError }: {
+export function WorkbenchPanels({ panels, inspect, onError, workspace }: {
   panels: ReturnType<typeof useBrowserPanels>;
   inspect: ReactNode;
   onError(message: string): void;
+  /** 文件标签读取内容用（过程区文件行打开的标签）。 */
+  workspace?: string;
 }) {
   const { t } = useI18n();
   const { tabs, active, dispatch, openPanel, openBrowser, closePanel, selectPanel } = panels;
@@ -34,7 +37,9 @@ export function WorkbenchPanels({ panels, inspect, onError }: {
       ? { id: tab.id, label: t("inspect.title") }
       : tab.type === "child-session"
         ? { id: tab.id, label: childSessionPanelLabel(tab.info, t("delegate.detailChildSession")), title: tab.info.sessionPath ?? tab.info.task ?? "" }
-        : { id: tab.id, label: browserPanelLabel(tab.page, t("browser.newTab")), title: [tab.page?.title, tab.page?.url].filter(Boolean).join("\n") })}
+        : tab.type === "file"
+          ? { id: tab.id, label: filePanelLabel(tab.path), title: tab.path }
+          : { id: tab.id, label: browserPanelLabel(tab.page, t("browser.newTab")), title: [tab.page?.title, tab.page?.url].filter(Boolean).join("\n") })}
     active={active}
     onSelect={selectPanel}
     onCloseTab={closePanel}
@@ -51,6 +56,11 @@ export function WorkbenchPanels({ panels, inspect, onError }: {
     {tabs.filter((tab) => tab.type === "child-session").map((tab) => (
       <div key={tab.id} className="child-session-host" style={{ display: tab.id === active ? "flex" : "none" }}>
         <ChildSessionPanel info={tab.info} isActive={tab.id === active} />
+      </div>
+    ))}
+    {tabs.filter((tab) => tab.type === "file").map((tab) => (
+      <div key={tab.id} className="child-session-host" style={{ display: tab.id === active ? "flex" : "none" }}>
+        <FilePanel path={tab.path} workspace={workspace} />
       </div>
     ))}
     {tabs.filter((tab) => tab.type === "browser").map((tab) => (

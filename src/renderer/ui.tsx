@@ -1495,6 +1495,7 @@ export const AssistantTurn = memo(function AssistantTurn({
   stopping = false,
   canAutoCollapse,
   onOpenFile,
+  onOpenPath,
   errorRecovered = false,
   recoverableFailStreak = 0,
   onRetry,
@@ -1505,6 +1506,8 @@ export const AssistantTurn = memo(function AssistantTurn({
   stopping?: boolean;
   canAutoCollapse(): boolean;
   onOpenFile?(file: FileChange): void;
+  /** 过程区文件行（读取/写入/编辑）点击时开右侧文件标签。 */
+  onOpenPath?(path: string): void;
   errorRecovered?: boolean;
   recoverableFailStreak?: number;
   onRetry?(): void;
@@ -1540,6 +1543,7 @@ export const AssistantTurn = memo(function AssistantTurn({
         clock={live || ended ? <Elapsed start={started} end={ended || undefined} live={live} /> : null}
         canAutoCollapse={canAutoCollapse}
         onRetry={onRetry}
+        onOpenFile={onOpenPath}
         renderText={renderFlowText}
         renderTool={renderFlowTool}
       />

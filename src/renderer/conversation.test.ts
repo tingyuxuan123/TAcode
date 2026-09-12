@@ -835,8 +835,21 @@ describe("conversation events", () => {
     ).map((row) => [row.kind, row.label, row.chip])).toEqual([
       ["think", "思考", "先看结构"],
       ["run", "执行命令", "npm run freeze"],
-      ["write", "写入 2 行", "App.tsx"],
+      ["write", "编辑", "App.tsx"],
     ]);
+    // 编辑/补丁行带增删统计（对齐 ZCode 的 diffCount），路径供右侧文件标签打开
+    const editRow = traceRows(
+      [{ type: "tool", id: "w2", toolId: "2" }],
+      [{
+        id: "2",
+        name: "apply_patch",
+        title: "Edited App.tsx",
+        status: "complete" as const,
+        args: { input: "*** Update File: src/App.tsx\n+const a = 1\n+const b = 2\n-const c = 3\n" },
+      }],
+    )[0]!;
+    expect(editRow.diff).toEqual({ added: 2, removed: 1 });
+    expect(editRow.path).toBe("src/App.tsx");
   });
 
   it("shows collapsed thinking when the final message only left tool steps", () => {

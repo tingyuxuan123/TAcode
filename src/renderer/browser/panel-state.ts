@@ -12,7 +12,18 @@ export type BrowserPanelTab = {
 export type WorkbenchPanelTab =
   | { id: string; type: "inspect" }
   | BrowserPanelTab
-  | ChildSessionPanelTab;
+  | ChildSessionPanelTab
+  | FilePanelTab;
+
+/**
+ * 文件查看标签：过程区的读取/写入/编辑行点击时打开（对齐 ZCode 的 code viewer）。
+ * 同一路径只开一个标签，再次点击激活已有的那个。
+ */
+export interface FilePanelTab {
+  id: string;
+  type: "file";
+  path: string;
+}
 
 /**
  * 子代理子会话的只读标签：按父会话里的委派信息开标签，正文是子会话转录。
@@ -71,6 +82,8 @@ export function delegationPanelKey(id?: string, sessionPath?: string): string {
   return "";
 }
 
+export const filePanelId = (path: string): string => `file-${path}`;
+export const filePanelLabel = (path: string): string => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? path;
 export const childSessionPanelId = (key: string): string => `child-session-${key}`;
 export const createChildSessionPanel = (key: string, info: ChildSessionPanelInfo): ChildSessionPanelTab => ({
   id: childSessionPanelId(key),
@@ -82,6 +95,7 @@ export type PanelState = { tabs: WorkbenchPanelTab[]; active: string };
 export type PanelAction =
   | { type: "open-inspect" }
   | { type: "open-child-session"; panel: ChildSessionPanelTab; activate?: boolean }
+  | { type: "open-file"; path: string; activate?: boolean }
   | { type: "open-browser"; tab: BrowserPanelTab; activate: boolean }
   | { type: "select"; id: string }
   | { type: "close"; id: string }
@@ -129,6 +143,12 @@ export function panelReducer(state: PanelState, action: PanelAction): PanelState
       }
       // 自动开标签时抢焦点；后台更新（activate=false）只建标签不切换。
       return { tabs: [...state.tabs, action.panel], active: action.activate === false ? state.active : action.panel.id };
+    }
+    case "open-file": {
+      const id = filePanelId(action.path);
+      const exists = state.tabs.some((tab) => tab.id === id);
+      if (exists) return { ...state, active: action.activate === false ? state.active : id };
+      return { tabs: [...state.tabs, { id, type: "file", path: action.path }], active: action.activate === false ? state.active : id };
     }
     case "open-browser":
       return {
