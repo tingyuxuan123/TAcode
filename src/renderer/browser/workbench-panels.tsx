@@ -3,6 +3,7 @@ import { ClipboardCheck, FolderOpen, Globe, MessageCirclePlus, SquareTerminal } 
 import { ConfirmDialog, PanelPicker, PanelTabs } from "../ui";
 import { useI18n } from "../i18n";
 import type { PermissionMode, ProviderStatus } from "../../shared/types";
+import type { ModelOption } from "../../shared/model-selection";
 import { BrowserPanel } from "./browser-panel";
 import { ChildSessionPanel } from "./child-session-panel";
 import { FilePanel } from "./file-panel";
@@ -22,12 +23,15 @@ const readSideChatDontAskClose = (): boolean => {
   }
 };
 
-/** 侧边聊天实例共享的启动参数（cwd/模型/权限等在首条消息时快照生效）。 */
+/** 侧边聊天实例共享的启动参数（cwd/模型/权限在首条消息时快照，模型/深度/权限可随后调整）。 */
 export type SideChatPanelProps = {
   workspace?: string;
   provider?: ProviderStatus;
   model: string;
+  modelKey: string;
+  models: ModelOption[];
   effort: string;
+  effortLevels: string[];
   permission: PermissionMode;
 };
 

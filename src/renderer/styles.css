@@ -8054,31 +8054,36 @@ kbd {
   margin: 10px 0 0;
   font-size: calc(12px * var(--ui-font-scale));
 }
+/* 侧边聊天输入框：对齐主会话 composer 的卡片视觉（圆角卡片 + focus 加深投影 + 圆形发送）。
+   内边距/输入区最小高/底部留白都与 .prompt + .prompt-wrap 完全一致，两张卡片等高、底边对齐。 */
 .side-chat-composer {
   flex: none;
+  margin: 0 12px 18px;
+  padding: 12px 14px 8px;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px 10px 10px;
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-}
-.side-chat-composer textarea {
-  min-width: 0;
-  flex: 1;
-  min-height: 34px;
-  max-height: 120px;
-  resize: vertical;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 14px;
+  box-shadow: var(--shadow-card);
+}
+.side-chat-composer:focus-within { box-shadow: var(--shadow-overlay); }
+.side-chat-composer textarea {
+  width: 100%;
+  min-height: 46px;
+  max-height: 160px;
+  resize: none;
+  border: 0;
   outline: 0;
-  padding: 8px 9px;
-  background: var(--inset);
+  padding: 4px 6px 6px;
+  background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: calc(12.5px * var(--ui-font-scale));
+  font-size: calc(15px * var(--chat-font-scale));
+  line-height: 1.55;
 }
-.side-chat-composer textarea:focus { border-color: var(--line-strong); }
+.side-chat-composer textarea::placeholder { color: var(--ink-3); }
+.side-chat-composer textarea:disabled { color: var(--ink-3); }
 .child-session-host {
   flex: 1;
   min-width: 0;

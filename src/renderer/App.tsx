@@ -1972,7 +1972,16 @@ export function App() {
         }} />}
         inspect={workspace ? (
           <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace}
-            sideChatProps={{ workspace, provider: connected, model, effort, permission }}
+            sideChatProps={{
+              workspace,
+              provider: connected,
+              model,
+              modelKey: modelOptionKey(connected?.serviceId, model),
+              models: modelOptions,
+              effort,
+              effortLevels: thinkingLevels,
+              permission,
+            }}
             review={
             <InspectPanel
               files={workingFiles}
