@@ -71,6 +71,7 @@ const api: DesktopApi = {
   terminal: {
     start: (cwd) => ipcRenderer.invoke("terminal:start", cwd),
     write: (id, data) => ipcRenderer.invoke("terminal:write", id, data),
+    resize: (id, cols, rows) => ipcRenderer.invoke("terminal:resize", id, cols, rows),
     stop: (id) => ipcRenderer.invoke("terminal:stop", id),
     list: () => ipcRenderer.invoke("terminal:list"),
     onEvent: (listener) => subscribe("terminal:event", listener),

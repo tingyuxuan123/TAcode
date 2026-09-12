@@ -284,6 +284,7 @@ export interface DesktopApi {
   terminal: {
     start(cwd: string): Promise<TerminalInfo>;
     write(id: string, data: string): Promise<void>;
+    resize(id: string, cols: number, rows: number): Promise<void>;
     stop(id: string): Promise<void>;
     list(): Promise<TerminalInfo[]>;
     onEvent(listener: (event: TerminalEvent) => void): () => void;

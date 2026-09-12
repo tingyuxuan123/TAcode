@@ -72,7 +72,6 @@ import { MessageList, type MessageListHandle, type MessageListItem } from "./mes
 import { WorkbenchPanels } from "./browser/workbench-panels";
 import { useBrowserPanels } from "./browser/use-browser-panels";
 import { FilesPanel } from "./browser/files-panel";
-import { TerminalPanel } from "./browser/terminal-panel";
 import { useDelegationTabs } from "./browser/use-delegation-tabs";
 import { useSidebarLayout } from "./sidebar-layout";
 import { branchAutoExpanded, groupDelegatedSessions } from "./session-tree";
@@ -1987,7 +1986,6 @@ export function App() {
             />
           }
             files={<FilesPanel workspace={workspace} files={workingFiles} onOpen={browserPanels.openFile} />}
-            terminal={<TerminalPanel workspace={workspace} />}
           />
         ) : undefined}
       >

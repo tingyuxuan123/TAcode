@@ -7,6 +7,7 @@ import { BrowserPanel } from "./browser-panel";
 import { ChildSessionPanel } from "./child-session-panel";
 import { FilePanel } from "./file-panel";
 import { SideChatPanel } from "./side-chat-panel";
+import { TerminalPanel } from "./terminal-panel";
 import { browserPanelLabel, childSessionPanelLabel, filePanelLabel, isSideChatVisible, visiblePanelTabs, type SideChatPanelTab } from "./panel-state";
 import type { useBrowserPanels } from "./use-browser-panels";
 
@@ -31,11 +32,10 @@ export type SideChatPanelProps = {
 };
 
 /** 网页与审查共用顶部标签栏，切换标签时所有网页保持挂载。 */
-export function WorkbenchPanels({ panels, review, files, terminal, sideChatProps, onError, workspace }: {
+export function WorkbenchPanels({ panels, review, files, sideChatProps, onError, workspace }: {
   panels: ReturnType<typeof useBrowserPanels>;
   review: ReactNode;
   files: ReactNode;
-  terminal: ReactNode;
   sideChatProps: SideChatPanelProps;
   onError(message: string): void;
   /** 文件标签读取内容用（过程区文件行打开的标签）。 */
@@ -145,7 +145,9 @@ export function WorkbenchPanels({ panels, review, files, terminal, sideChatProps
         <div key={tab.id} className="panel-host" style={{ display: tab.id === active ? "flex" : "none" }}>{files}</div>
       ))}
       {tabs.filter((tab) => tab.type === "terminal").map((tab) => (
-        <div key={tab.id} className="panel-host" style={{ display: tab.id === active ? "flex" : "none" }}>{terminal}</div>
+        <div key={tab.id} className="panel-host" style={{ display: tab.id === active ? "flex" : "none" }}>
+          <TerminalPanel key={tab.id} workspace={workspace} isActive={tab.id === active} />
+        </div>
       ))}
       {panels.tabs.filter((tab) => tab.type === "side-chat").map((tab) => (
         <div key={tab.id} className="panel-host" style={{ display: tab.id === active && isSideChatVisible(tab, panels.session) ? "flex" : "none" }}>

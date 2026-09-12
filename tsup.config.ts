@@ -8,7 +8,8 @@ export default defineConfig([
     outDir: "dist-electron",
     sourcemap: true,
     clean: false,
-    external: ["electron"],
+    // node-pty 是原生模块：不打包进 bundle，运行时从 node_modules 按平台加载。
+    external: ["electron", "node-pty"],
     outExtension: () => ({ js: ".mjs" }),
   },
   {

@@ -841,6 +841,12 @@ function registerIpc(): void {
     const data = requireString(rawData, "终端输入", { allowEmpty: true, maxLength: 32_000 });
     terminalManager.write(id, data);
   });
+  ipcMain.handle("terminal:resize", (_event, rawId: unknown, rawCols: unknown, rawRows: unknown) => {
+    const id = requireString(rawId, "终端 id", { maxLength: 128 });
+    const cols = typeof rawCols === "number" ? rawCols : Number.NaN;
+    const rows = typeof rawRows === "number" ? rawRows : Number.NaN;
+    terminalManager.resize(id, cols, rows);
+  });
   ipcMain.handle("terminal:stop", (_event, rawId: unknown) => {
     terminalManager.stop(requireString(rawId, "终端 id", { maxLength: 128 }));
   });

@@ -7839,7 +7839,6 @@ kbd {
   color: var(--ink);
 }
 .files-panel,
-.terminal-panel,
 .side-chat-panel {
   flex: 1;
   min-width: 0;
@@ -7848,8 +7847,17 @@ kbd {
   flex-direction: column;
   background: var(--page);
 }
+/* 终端整面板统一深色（与聊天代码块同款代码屏），浅色主题下也不做深浅拼接。 */
+.terminal-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--code-screen);
+}
 .files-panel-toolbar,
-.terminal-panel-toolbar,
 .side-chat-toolbar {
   flex: none;
   min-height: 40px;
@@ -7858,6 +7866,15 @@ kbd {
   gap: 8px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--line);
+}
+.terminal-panel-toolbar {
+  flex: none;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--code-screen-ink) 14%, transparent);
 }
 .files-search {
   min-width: 0;
@@ -7946,38 +7963,45 @@ kbd {
 }
 .terminal-panel-title svg,
 .side-chat-title svg { color: var(--ink-3); }
+.terminal-panel-title {
+  color: color-mix(in srgb, var(--code-screen-ink) 78%, transparent);
+}
+.terminal-panel-title svg {
+  color: color-mix(in srgb, var(--code-screen-ink) 48%, transparent);
+}
+.terminal-shell-chip {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--code-screen-ink) 22%, transparent);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--code-screen-ink) 62%, transparent);
+  font: calc(11px * var(--ui-font-scale))/1.5 var(--mono);
+}
 .terminal-panel-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
-.terminal-panel-output {
+.terminal-panel .panel-icon-button {
+  color: color-mix(in srgb, var(--code-screen-ink) 55%, transparent);
+}
+.terminal-panel .panel-icon-button:hover {
+  background: color-mix(in srgb, var(--code-screen-ink) 12%, transparent);
+  color: var(--code-screen-ink);
+}
+.terminal-panel-body {
   flex: 1;
   min-height: 0;
-  margin: 0;
-  overflow: auto;
-  padding: 14px;
-  background: var(--code-screen);
-  color: var(--code-screen-ink);
-  font: calc(12px * var(--code-font-scale))/1.55 var(--mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  padding: 6px 10px 10px;
 }
-.terminal-panel-input {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-top: 1px solid var(--line);
-  background: var(--surface);
+.terminal-panel-body .xterm { height: 100%; }
+.terminal-panel-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: color-mix(in srgb, var(--code-screen-ink) 55%, transparent);
+  font-size: calc(12px * var(--ui-font-scale));
 }
-.terminal-panel-prompt { color: var(--green); font: 12px var(--mono); }
-.terminal-panel-input input {
-  min-width: 0;
-  flex: 1;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--ink);
-  font: 12px var(--mono);
-}
+.terminal-panel-overlay p { margin: 0; }
+.terminal-panel-overlay .is-error { color: #ff8a80; }
 .side-chat-body {
   flex: 1;
   min-height: 0;

@@ -6,5 +6,6 @@ allowBuilds:
   electron-winstaller: true
   protobufjs: true
   "@google/genai": false
+  node-pty: true
 minimumReleaseAgeExclude:
   - tether-agent-core
