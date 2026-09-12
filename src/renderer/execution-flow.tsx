@@ -9,9 +9,6 @@ type TextRenderer = (text: string, streaming?: boolean) => ReactNode;
 /** 流式中仅让最近这些项参与高频更新（对齐 Proma-main PROCESS_GROUP_LIVE_CHILD_WINDOW）。 */
 const LIVE_CHILD_WINDOW = 4;
 
-/** 折叠态默认完整展开的最近步数；更早的收成一行「更早的 N 步」，点击才渲染。 */
-const RECENT_STEP_WINDOW = 4;
-
 const FlowText = memo(function FlowText({ text, streaming, render }: { text: string; streaming?: boolean; render: TextRenderer }) {
   // `live` 供流式光标的 CSS 使用（贴在最后一个段落之后的伪元素）。
   return <div className={streaming ? "markdown flow-text live" : "markdown flow-text"}>{render(text, streaming)}</div>;
@@ -187,7 +184,7 @@ const FreezeCell = memo(function FreezeCell({ freeze, signature, build }: {
     cache.current = { sig: signature, node };
     return node;
   }
-  // 首次就以冻结状态挂载（例如用户展开「更早的 N 步」时旧项才被渲染）不能返回空缓存。
+  // 首次以冻结状态挂载旧项时也需要构建内容，不能返回空缓存。
   if (!cache.current || cache.current.sig !== signature) {
     cache.current = { sig: signature, node: build() };
   }
@@ -218,14 +215,12 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
   const [mounted, setMounted] = useState(open);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [offscreen, setOffscreen] = useState(false);
-  const [showEarlier, setShowEarlier] = useState(false);
   const [togglePending, startToggleTransition] = useTransition();
   const interacted = useRef(false);
   const wasLive = useRef(live);
   const root = useRef<HTMLDivElement>(null);
   const processRef = useRef<HTMLDivElement>(null);
   const id = useId();
-  const earlierId = useId();
   const active = streaming ? view.items.at(-1) : undefined;
   const hasProcess = view.process.length > 0 || (live && !view.reply.length) || awaiting || failed || interrupted;
 
@@ -252,7 +247,6 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
     if (live) {
       if (!wasLive.current) {
         interacted.current = false;
-        setShowEarlier(false);
         setOpen(true);
       }
       wasLive.current = true;
@@ -281,12 +275,6 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
       setExpanded((current) => ({ ...current, [key]: !(current[key] ?? defaultOpen) }));
     });
   }, []);
-  const toggleEarlier = useCallback(() => {
-    interacted.current = true;
-    startToggleTransition(() => {
-      setShowEarlier((value) => !value);
-    });
-  }, []);
   const toolMap = useMemo(() => new Map(view.tools.map((tool) => [tool.id, tool])), [view.tools]);
   const status = stopping ? t("flow.stopping") : awaiting ? t("flow.awaiting") : interrupted ? t("flow.interrupted") : live ? t("flow.running") : failed ? t("flow.failed") : unknown ? t("flow.unrecorded") : !view.reply.length ? t("flow.ended") : "";
   const runningCount = view.tools.filter((tool) => tool.status === "running").length;
@@ -312,8 +300,6 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
   const visibleToolGlyphs = processToolGlyphs.slice(0, 4);
   const hiddenToolCount = Math.max(0, processToolGlyphs.length - visibleToolGlyphs.length);
   const processEntries = useMemo(() => view.process.map((item, index) => ({ item, index })), [view.process]);
-  const earlierCount = Math.max(0, processEntries.length - RECENT_STEP_WINDOW);
-  const recentEntries = processEntries.slice(earlierCount);
 
   const renderEntry = ({ item, index }: { item: WorkItem; index: number }) => {
     const liveStart = Math.max(0, view.process.length - LIVE_CHILD_WINDOW);
@@ -353,14 +339,7 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
             {mounted && <div className="flow-viewport-wrap">
               <div id={id} className="flow-viewport scrollbar-none" aria-label={t("flow.process")}>
                 <div className="flow-items">
-                  {earlierCount > 0 && <div className="flow-earlier">
-                    <button type="button" className="flow-earlier-toggle" data-pending={togglePending || undefined} aria-expanded={showEarlier} aria-controls={earlierId} onClick={toggleEarlier}>
-                      <ChevronRight size={13} className={showEarlier ? "rotated" : ""} aria-hidden="true" />
-                      <span>{t(showEarlier ? "flow.collapseEarlier" : "flow.earlierSteps", { n: earlierCount })}</span>
-                    </button>
-                    {showEarlier && <div id={earlierId} className="flow-earlier-items">{processEntries.slice(0, earlierCount).map(renderEntry)}</div>}
-                  </div>}
-                  {recentEntries.map(renderEntry)}
+                  {processEntries.map(renderEntry)}
                   {live && !view.items.length && <div className="flow-pending"><LoaderCircle size={14} className="flow-spinner" aria-hidden="true" />{t("think.waiting")}</div>}
                 </div>
               </div>

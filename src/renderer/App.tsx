@@ -19,6 +19,7 @@ import {
   writeStoredEffort,
 } from "../shared/thinking";
 import { modelSupportsVision, toPromptImages, visionAgentPrompt } from "../shared/vision-api";
+import { fallbackSessionTitle } from "../shared/session-title";
 import {
   applyAgentEvent,
   baseName,
@@ -816,6 +817,9 @@ export function App() {
       runtimeIdRef.current = snapshot.runtimeId;
       const file = sessionFileOf(snapshot) ?? sessionPath;
       if (file) sessionRef.current = file;
+      if (file && typeof snapshot.state.sessionName === "string" && snapshot.state.sessionName.trim() && !sessionTitlesRef.current.has(file)) {
+        sessionTitlesRef.current.set(file, snapshot.state.sessionName);
+      }
       // snapshot 与实时事件流之间可能漏事件：先套快照，再按序号补齐缓冲事件。
       const replay = snapshot.replay ?? [];
       const replaySeq = replay.reduce(
@@ -900,7 +904,7 @@ export function App() {
         // row visible during the first turn so the sidebar updates immediately.
         if (seedMessage && file) {
           const cwdForSeed = snapshot.cwd ?? cwd ?? workspace;
-          const seedTitle = seedMessage.text || t("common.unnamed");
+          const seedTitle = sessionTitlesRef.current.get(file) || fallbackSessionTitle(seedMessage.text) || t("common.unnamed");
           // Phase 1：缓存首次消息标题，切走/刷新后 `setSessionList` 会用它覆写主进程
           // 合成的占位标题（否则占位只能显示 cwd 兜底名）。
           sessionTitlesRef.current.set(file, seedTitle);
@@ -1453,10 +1457,18 @@ export function App() {
     });
     eventQueue.current = queue;
     const offEvent = window.harness.agent.onEvent((event) => {
+      // 标题是会话元数据：切换/加载期间及后台会话也要接收，不能被消息流路由丢弃。
+      const eventSession = event.__sessionId;
+      if (event.type === "session_info_changed" && eventSession && typeof event.name === "string" && event.name.trim()) {
+        const title = event.name.trim();
+        sessionTitlesRef.current.set(eventSession, title);
+        setSessions((current) => current.map((session) => isSameSession(session, eventSession) ? { ...session, title } : session));
+        void window.harness.sessions.list().then(setSessionList).catch(() => undefined);
+        return;
+      }
       if (!live.current) { queue.clear(); return; }
       // Phase 3a：按活动会话路由。后台会话（__sessionId ≠ 当前视图）的事件不套到
       // 当前 messages/stats，避免污染；但维护运行中徽标，并在其结束时提示完成。
-      const eventSession = (event as { __sessionId?: string }).__sessionId;
       if (eventSession && eventSession !== sessionRef.current) {
         if (event.type === "agent_start") {
           markSessionRunning(eventSession, true);

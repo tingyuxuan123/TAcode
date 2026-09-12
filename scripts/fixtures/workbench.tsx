@@ -246,7 +246,7 @@ function Fixture() {
           <ContextOpenButton />
         </div>
       </SidebarNav>
-      <Chat inspect={content} title="浏览器宽度测试" onSidebarAutoCollapse={sidebarLayout.collapseAutomatically}>
+      <Chat inspect={content} title={new URLSearchParams(location.search).get("title") || "浏览器宽度测试"} onSidebarAutoCollapse={sidebarLayout.collapseAutomatically}>
         <div className="conversation" style={{ padding: 24 }}>
           <p>对话区保持可用，拖动分隔线可为网页分配更多空间。</p>
           <p role="status">{action}</p>

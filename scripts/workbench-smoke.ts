@@ -111,6 +111,7 @@ async function smoke() {
     await wait(async () => (await labels()).includes("审查"));
     const inlineTabHeight = await host("document.querySelector('.inspect-tabs').getBoundingClientRect().height");
 
+    if (!process.env.TACODE_TITLE_ONLY) {
     stage = "Agent creates a single top-level page";
     const first = (await run("browser_new_tab", { url })).tabId;
     await wait(async () => (await labels()).includes("页面甲"));
@@ -180,15 +181,23 @@ async function smoke() {
     await host("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     if (process.env.TACODE_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TACODE_BROWSER_ARTIFACTS, "single-tabs-electron.png"), (await main.webContents.capturePage()).toPNG());
     console.log("Workbench smoke passed: one tab bar, titles, Agent/manual/link creation, native background click, preserved input/guest, close, committed URLs, detached multi-page restore and narrow tab overflow.");
+    }
 
     stage = "actual Chat panel expands beyond 480px and adapts to its container";
     main = createWindow(true);
     main.setSize(1440, 620);
-    await main.loadFile(process.env.TACODE_WORKBENCH_FIXTURE!, { query: { chat: "true" } });
+    await main.loadFile(process.env.TACODE_WORKBENCH_FIXTURE!, { query: {
+      chat: "true",
+      title: "请使用 Three.js 制作一个完整的博丽神社微缩三维场景。场景必须建立在一个完整的正方形底座上，底座拥有清晰的石砌侧面。",
+    } });
     await wait(async () => (await labels()).includes("审查"));
     await run("browser_new_tab", { url });
     stage = "tabs occupy the window header and release vertical content space";
-    await verifyWorkbenchHeader(main, inlineTabHeight);
+    await verifyWorkbenchHeader(main, inlineTabHeight, { titleOnly: Boolean(process.env.TACODE_TITLE_ONLY) });
+    if (process.env.TACODE_TITLE_ONLY) {
+      if (process.env.TACODE_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TACODE_BROWSER_ARTIFACTS, "session-title-header-electron.png"), (await main.webContents.capturePage()).toPNG());
+      return;
+    }
     stage = "adaptive widths and automatic sidebar collapse with top header";
     const expandedScreenshot = await verifyAdaptivePanelWidth(main);
     if (process.env.TACODE_BROWSER_ARTIFACTS) await writeFile(path.join(process.env.TACODE_BROWSER_ARTIFACTS, "expanded-panel-electron.png"), expandedScreenshot);

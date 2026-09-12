@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { AgentHost } from "./agent-host";
 import type { AgentEvent } from "../shared/types";
 import { serviceRuntimeConfig } from "../shared/provider-config";
+import { composeSubagentSystemPrompt, DELEGATE_PROMPT_GUIDELINES } from "../shared/subagent-prompts";
+import { BUILTIN_SUBAGENTS } from "../runtime/subagents";
 
 /**
  * 真实 RPC worker 的委派冒烟：父模型调用 `delegate`，子代理跑完，报告回到父上下文。
@@ -143,6 +145,17 @@ describe("subagent delegation through the real RPC worker", () => {
       // 子代理目录注入系统上下文：模型看不到 ~/.tacode/subagents 目录，只能猜角色名。
       expect(requests.some((item) => item.body.includes("Subagent catalog for the `delegate` tool"))).toBe(true);
       expect(requests.some((item) => item.body.includes("- explorer:") && item.body.includes("maxTurns 40"))).toBe(true);
+      // 检查真实模型请求：派发规则进入父系统提示，通用约束进入子系统提示。
+      for (const guideline of DELEGATE_PROMPT_GUIDELINES) {
+        expect(requests[0].system).toContain(guideline);
+      }
+      const childRequest = requests.find((item) => item.system.includes("subagent inside TACode"))!;
+      const explorer = BUILTIN_SUBAGENTS.find((item) => item.name === "explorer")!;
+      expect(childRequest.system).toBe(composeSubagentSystemPrompt(explorer, await realpath(dir)));
+      expect(childRequest.body).toContain("Report the entry point");
+      expect(childRequest.body).not.toContain("Delegate the exploration.");
+      const childBody = JSON.parse(childRequest.body) as { tools: Array<{ function: { name: string } }> };
+      expect(childBody.tools.some((tool) => tool.function.name.startsWith("delegate"))).toBe(false);
     } finally {
       await host.stop();
       await new Promise<void>((done) => server.close(() => done()));

@@ -931,3 +931,15 @@
 - 回归测试：新增 provider 请求净化、真实 RPC 失败后继续、死 worker 生命周期测试。
 - 验证：`pnpm typecheck` 通过；`pnpm test` 86 文件 / 784 用例通过；`git diff --check` 通过。未改 `.agents/features.json`（仓库不存在该文件）。
 - 下一步：重建并完整重启 TACode，在原失败会话上点击「继续」确认实际 provider 配置下恢复正常。
+
+## 2026-09-12：优化 TACode 现有子代理工作流
+
+- 按用户澄清，以现有 `explorer` / `code-reviewer` / `test-runner` / `fixer` 为基础吸收参考方案的分工规则，保留角色名、工具权限、模型选择和轮次配置。
+- [x] 定位角色定义、用户覆盖文件和两条委派路径；确认新任务不继承父对话、子代理不能继续委派。
+- [x] 抽出 `shared/subagent-prompts.ts`，统一桌面桥接与 CLI fallback 的通用约束和主代理派发规则：通常 1–3 个独立任务（运行时硬上限仍为 8）、自包含任务、复用已完成代理、按依赖等待、避免重复检索与复验。
+- [x] 收紧四个角色职责：explorer 先窄范围取证并修正「没有 shell」的旧文案；reviewer 独立审查且区分推断/复现；test-runner 仅运行指定验证；fixer 只做规则明确的机械修改。报告首行统一为 complete / partial / blocked，保留结论、证据与限制，缺少前提时提前返回。
+- [x] 补充真实 RPC 请求及桌面任务注入验证、只读命令角色提示分支测试；更新 README.zh-CN 和 `docs/subagent-workflow.md`。
+- 本机 `~/.tacode/subagents/code-reviewer.md` 原正文是旧内置模板，已同步职责与报告约束；保留 `deepseek-v4-flash`、`thinkingLevel: max`、工具清单和轮次上限。原文件备份为 `~/.tacode/backups/subagents/code-reviewer-20260912-fc0wq_wy.md`。
+- 验证：`pnpm test --reporter=dot` 87 文件 / 799 用例通过；`pnpm typecheck` 通过；`git diff --check` 通过。真实 worker 用本地 mock 网关验证了父提示规则、子提示规则、父对话隔离及无递归委派工具；未调用线上模型评估耗时或成本。
+- 跨层检查：两条路径使用同一提示生成器，新增共享模块无循环依赖；报告首行是语义约定，不改变运行时状态字段、IPC 或持久化结构。
+- 生效：使用更新后的构建完整重启 TACode，再启动新 Agent 会话。CLI fallback 的续跑仍只重放原任务与后续指令，需要主代理在后续指令中附上已采纳事实；子代理没有独立消息工具，阻塞通过提前结束并回报处理。

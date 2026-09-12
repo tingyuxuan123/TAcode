@@ -20,6 +20,7 @@ import {
 import { getTacodeStorageSettings } from "./settings.js";
 import type { DelegationStatus } from "../shared/delegation.js";
 import type { PermissionMode } from "../shared/types.js";
+import { fallbackSessionTitle } from "../shared/session-title.js";
 
 const require = createRequire(import.meta.url);
 
@@ -565,7 +566,9 @@ async function parseSession(
   return {
     id: typeof header.id === "string" ? header.id : path.basename(file, ".jsonl"),
     cwd: path.resolve(header.cwd),
-    title: crop(normalize(namedTitle ?? firstUserText ?? "New thread"), 96),
+    title: namedTitle !== undefined
+      ? crop(normalize(namedTitle), 96)
+      : fallbackSessionTitle(firstUserText ?? "New thread"),
     ...(preview ? { preview: crop(preview, 240) } : {}),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),

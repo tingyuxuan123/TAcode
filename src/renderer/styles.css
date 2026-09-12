@@ -1043,6 +1043,7 @@ textarea::selection,
 }
 .chat-title {
   min-width: 0;
+  max-width: min(320px, 100%);
   flex: 0 1 auto;
   margin: 0;
   overflow: hidden;
@@ -2532,8 +2533,8 @@ textarea::selection,
 .flow-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-status.error { color: var(--red); }
 .flow-last { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); font-size: calc(12px * var(--ui-font-scale)); }
-.flow-header .rotated, .flow-tool-line .rotated, .flow-earlier-toggle .rotated { transform: rotate(90deg); }
-.flow-header svg, .flow-tool-line > svg:last-child, .flow-earlier-toggle > svg { transition: transform 160ms ease; }
+.flow-header .rotated, .flow-tool-line .rotated { transform: rotate(90deg); }
+.flow-header svg, .flow-tool-line > svg:last-child { transition: transform 160ms ease; }
 /* 收起/展开用 height 过渡（配合 .execution-flow 上的 interpolate-size），
    而不是 grid-template-rows 的 0fr/1fr —— 后者会把子内容压扁，超长过程收起时
    会挤成一团再弹开，视觉上就是「跳动」。height 过渡只裁剪，不变形。 */
@@ -2543,10 +2544,6 @@ textarea::selection,
 .flow-viewport-wrap { position: relative; }
 .flow-viewport { min-width: 0; }
 .flow-items { display: flex; flex-direction: column; gap: 12px; padding: 8px 2px 12px 0; }
-.flow-earlier { min-width: 0; }
-.flow-earlier-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 2px 8px 2px 4px; border-radius: 6px; color: var(--ink-3); font-size: calc(12px * var(--ui-font-scale)); }
-.flow-earlier-toggle:hover { background: var(--hover); color: var(--ink); }
-.flow-earlier-items { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; animation: flow-reveal 180ms ease; }
 @keyframes flow-reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .flow-text { min-width: 0; overflow-wrap: anywhere; }
 .flow-items .flow-text { color: var(--ink-2); font-size: calc(14px * var(--chat-font-scale)); line-height: 1.65; }
@@ -2682,8 +2679,8 @@ textarea::selection,
   .flow-status { max-width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .flow-collapse, .flow-header svg, .flow-tool-line > svg:last-child, .flow-thought-label > svg:last-child, .flow-earlier-toggle > svg { transition: none; }
-  .flow-earlier-items, .flow-thought-body { animation: none; }
+  .flow-collapse, .flow-header svg, .flow-tool-line > svg:last-child, .flow-thought-label > svg:last-child { transition: none; }
+  .flow-thought-body { animation: none; }
   .flow-spinner { animation: none; }
 }
 
@@ -2720,11 +2717,6 @@ textarea::selection,
 @keyframes flow-glyph-in {
   from { opacity: 0; }
   to { opacity: 1; }
-}
-
-/* 重内容（思考全文 / 更早的步骤）延迟渲染期间，开关按钮降透明度示意未完成。 */
-.flow-earlier-toggle[data-pending] {
-  opacity: 0.45;
 }
 
 @media (prefers-reduced-motion: reduce) {

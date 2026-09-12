@@ -15,13 +15,16 @@ import {
   MAX_SUBAGENT_CONCURRENCY,
   MAX_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_REPORT_CHARS,
-  subagentCanMutate,
-  subagentEditsFiles,
   unknownSubagentMessage,
   type SubagentDefinition,
   type SubagentModelPin,
   type SubagentThinkingLevel,
 } from "../../shared/subagents.js";
+import {
+  composeSubagentSystemPrompt,
+  DELEGATE_PROMPT_GUIDELINES,
+} from "../../shared/subagent-prompts.js";
+export { composeSubagentSystemPrompt } from "../../shared/subagent-prompts.js";
 import {
   boundedDelegationText,
   DELEGATION_LOCAL_WAIT_TIMEOUT_SECONDS,
@@ -127,16 +130,16 @@ const delegateParameters = Type.Object({
   tasks: Type.Array(
     Type.Object({
       role: Type.String({ minLength: 1, description: "Subagent name from the catalog" }),
-      task: Type.String({ minLength: 1, description: "Self-contained instruction for that subagent" }),
+      task: Type.String({ minLength: 1, description: "Self-contained goal, paths, known facts, constraints, and completion criteria; for edits include file ownership, transformation rules, exclusions, and acceptance checks" }),
     }),
     { minItems: 1, maxItems: MAX_SUBAGENT_CONCURRENCY },
   ),
-  background: Type.Optional(Type.Boolean({ description: "Return immediately and deliver reports later" })),
+  background: Type.Optional(Type.Boolean({ description: "Return immediately and deliver reports later; use true when the main agent has independent work to do" })),
 });
 
 const waitParameters = Type.Object({
   delegationIds: Type.Optional(Type.Array(Type.String(), { maxItems: MAX_SUBAGENT_CONCURRENCY })),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: DELEGATION_MAX_TIMEOUT_SECONDS })),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: DELEGATION_MAX_TIMEOUT_SECONDS, description: "Bounded wait for required unfinished results, usually 30–60 seconds; reassess progress and dependencies after a timeout" })),
 });
 
 const stopParameters = Type.Object({
@@ -145,7 +148,7 @@ const stopParameters = Type.Object({
 
 const continueParameters = Type.Object({
   delegationId: Type.String({ minLength: 1 }),
-  message: Type.String({ minLength: 1 }),
+  message: Type.String({ minLength: 1, description: "Related follow-up with accepted findings, the remaining question, constraints, and completion criteria" }),
 });
 
 function boundedReport(value: string): string {
@@ -161,26 +164,6 @@ function describeToolCall(name: string, args: unknown): string {
     (typeof record.input === "string" && record.input.split("\n")[0]) ||
     "";
   return target ? `${name} ${target.slice(0, 120)}` : name;
-}
-
-export function composeSubagentSystemPrompt(definition: SubagentDefinition, cwd: string): string {
-  const toolList = definition.tools.join(", ") || "none";
-  return [
-    `You are the "${definition.name}" subagent inside TACode, working on one task delegated by the main agent.`,
-    `You cannot see the user, ask questions, or delegate further. Finish the task with the tools you have: ${toolList}.`,
-    subagentEditsFiles(definition)
-      ? "You may change files, but only the ones the task is about; leave everything else untouched."
-      : subagentCanMutate(definition)
-        ? "You may run commands, but you must not change files: report what should change instead of editing it."
-        : "You have no tools that change files or run commands, so never report an edit you could not have made.",
-    "Your final message is the report the main agent receives when you finish. Make it self-contained: what you did, what you found with exact paths and line numbers, and anything you could not finish.",
-    "Keep the report tight. Report findings, not narration, and never pad it with a summary of your own process.",
-    // 上游只回灌有限字符（delegation 报告上限），超长报告会被首尾截断：明确给预算，
-    // 让子代理把关键结论放在开头，而不是写到一半被砍。
-    "Aim for at most about 1500 characters; if the task is larger, lead with the conclusion and list the rest as short bullets.",
-    `Working directory: ${cwd}`,
-    definition.prompt,
-  ].filter((block) => block.trim()).join("\n\n");
 }
 
 function statusLabel(status: DelegationStatus): string {
@@ -520,7 +503,7 @@ export function registerDelegateTools(pi: ExtensionAPI, deps: DelegateToolDeps):
     label: "Delegate",
     description: "Run subagents, one per task. Each subagent has its own system prompt and tool set; only final reports return.",
     promptSnippet: "delegate: run subagents and collect reports",
-    promptGuidelines: ["Delegate independent work with self-contained tasks.", "Use background when other work can proceed."],
+    promptGuidelines: DELEGATE_PROMPT_GUIDELINES,
     parameters: delegateParameters,
     renderShell: "self",
     executionMode: "parallel",
@@ -544,7 +527,7 @@ export function registerDelegateTools(pi: ExtensionAPI, deps: DelegateToolDeps):
       publish();
       if (background) {
         signal?.removeEventListener("abort", onAbort);
-        return { content: [{ type: "text", text: `Started ${started.length} subagent(s): ${started.map((record) => `${record.definition.name} (${record.id})`).join(", ")}. Use delegate_wait or delegate_stop.` }], details: delegateDetails(started) };
+        return { content: [{ type: "text", text: `Started ${started.length} subagent(s): ${started.map((record) => `${record.definition.name} (${record.id})`).join(", ")}. Continue independent work; use delegate_wait only when a next step depends on unfinished reports.` }], details: delegateDetails(started) };
       }
       await Promise.all(started.map((record) => record.completion));
       signal?.removeEventListener("abort", onAbort);
@@ -555,7 +538,7 @@ export function registerDelegateTools(pi: ExtensionAPI, deps: DelegateToolDeps):
   pi.registerTool({
     name: DELEGATE_WAIT_TOOL_NAME,
     label: "Wait for subagents",
-    description: "Wait for background subagents to finish and return reports.",
+    description: "Wait for required unfinished background subagents and return reports. Skip this if their reports have already arrived.",
     promptSnippet: "delegate_wait: converge on background subagents",
     parameters: waitParameters,
     renderShell: "self",
@@ -647,7 +630,7 @@ export function registerRemoteDelegateTools(pi: ExtensionAPI, deps: RemoteDelega
     label: "Delegate",
     description: "Start persistent child sessions managed by TACode and collect their reports.",
     promptSnippet: "delegate: start persistent child sessions",
-    promptGuidelines: ["Delegate independent work with self-contained tasks.", "Use background when other work can proceed."],
+    promptGuidelines: DELEGATE_PROMPT_GUIDELINES,
     parameters: delegateParameters,
     renderShell: "self",
     executionMode: "parallel",
@@ -669,7 +652,7 @@ export function registerRemoteDelegateTools(pi: ExtensionAPI, deps: RemoteDelega
         onUpdate?.({ content: [{ type: "text", text: remoteProgressText(started) }], details: remoteDelegateDetails(started) });
         if (params.background === true) {
           for (const item of started) backgroundDelegations.add(item.delegationId);
-          return { content: [{ type: "text", text: `Started ${started.length} persistent subagent session(s): ${started.map((item) => `${item.role} (${item.delegationId})`).join(", ")}. Use delegate_wait to collect reports.` }], details: remoteDelegateDetails(started) };
+          return { content: [{ type: "text", text: `Started ${started.length} persistent subagent session(s): ${started.map((item) => `${item.role} (${item.delegationId})`).join(", ")}. Continue independent work; use delegate_wait only when a next step depends on unfinished reports.` }], details: remoteDelegateDetails(started) };
         }
         const onAbort = () => { void deps.client.request("stop", { delegationIds: started.map((item) => item.delegationId) }); };
         signal?.addEventListener("abort", onAbort, { once: true });
@@ -683,7 +666,7 @@ export function registerRemoteDelegateTools(pi: ExtensionAPI, deps: RemoteDelega
   pi.registerTool({
     name: DELEGATE_WAIT_TOOL_NAME,
     label: "Wait for subagents",
-    description: "Wait for persistent child sessions and return reports.",
+    description: "Wait for required unfinished persistent child sessions and return reports. Skip this if their reports have already arrived.",
     promptSnippet: "delegate_wait: wait for child sessions",
     parameters: waitParameters,
     renderShell: "self",

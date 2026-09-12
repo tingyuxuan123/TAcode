@@ -339,7 +339,7 @@ export function Chat({
     <section className={home ? "chat home" : "chat"}>
       <header className="chat-bar">
         <div className="chat-heading">
-          {!home && title && <h1 className="chat-title">{title}</h1>}
+          {!home && title && <h1 className="chat-title" title={title}>{title}</h1>}
           {!home && crumb}
           {!home && nav}
         </div>

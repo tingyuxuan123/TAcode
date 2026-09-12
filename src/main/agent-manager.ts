@@ -42,6 +42,8 @@ const OUT_OF_BAND_COMMANDS = new Set(["abort"]);
 /** 主进程启动宿主时补充的壳层参数（扩展路径、桌面服务凭据等）。 */
 export type AgentHostStartOptions = AgentStartOptions & {
   cwd: string;
+  /** 桌面主会话首条消息自动生成短标题。 */
+  autoTitle?: boolean;
   visionExtension?: string;
   browserExtension?: string;
   visionConfig?: string;

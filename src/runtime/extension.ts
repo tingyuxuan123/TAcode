@@ -27,6 +27,7 @@ import {
 import { loadEnabledSubagents } from "./subagents.js";
 import { tacodeEnv } from "./env.js";
 import { createTurnLimiter, parseTurnLimit } from "./turn-limit.js";
+import { registerSessionTitle } from "./session-title.js";
 import type { PermissionMode, TacodeRuntimeOptions } from "./options.js";
 import { registerAskUserTool, ASK_USER_TOOL } from "./tools/ask-user.js";
 import { capturePatchCheckpoint, type Checkpoint } from "./tools/checkpoint.js";
@@ -194,6 +195,7 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
       };
 
       const childDepth = Number(process.env.SUBAGENT_DEPTH ?? "0");
+      if (childDepth < 1 && tacodeEnv("AUTO_TITLE") === "1") registerSessionTitle(pi);
       const delegateBridge = process.env.TACODE_DELEGATION_BRIDGE === "1" && childDepth < 1
         ? createRuntimeDelegationClient()
         : undefined;

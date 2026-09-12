@@ -64,6 +64,7 @@ import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { TerminalManager } from "./terminal-manager";
 import { apiBaseUrl, listModels } from "../shared/openai-models";
+import { fallbackSessionTitle as firstMessageTitle } from "../shared/session-title";
 import {
   activeChat,
   activeCustomProfile,
@@ -198,6 +199,9 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
   const host = new AgentHost(
     (event) => {
       if (delegated) return;
+      if (!sideChat && event.type === "session_info_changed" && typeof event.name === "string") {
+        touchLoadedSession(event.__sessionId, { title: event.name });
+      }
       mainWindow?.webContents.send(sideChat ? "side-chat:event" : "agent:event", event);
     },
     (message, sessionKey, errorRuntimeId) => {
@@ -1078,20 +1082,24 @@ function registerIpc(): void {
       try {
         await store.refresh();
         const thread = store.get(id);
-        if (!thread) throw new Error("Conversation not found");
-        await fsp.appendFile(
-          thread.storagePath,
-          `${JSON.stringify({
-            type: "session_info",
-            name,
-            timestamp: new Date().toISOString(),
-          })}\n`,
-        );
-        await store.indexSession(thread.storagePath);
+        const runtime = agentManager.list().find((item) => item.sessionKey && sessionIdFromPath(item.sessionKey) === id);
+        const host = agentManager.findBySession(thread?.sessionPath) ?? agentManager.findRuntime(runtime?.runtimeId);
+        if (host?.isRunning()) {
+          // 同步 worker 内存，防止尚未返回的自动标题覆盖手动命名；也支持首轮未落盘的会话。
+          await host.request("set_session_name", { name });
+        } else {
+          if (!thread) throw new Error("Conversation not found");
+          await fsp.appendFile(
+            thread.storagePath,
+            `${JSON.stringify({ type: "session_info", name, timestamp: new Date().toISOString() })}\n`,
+          );
+        }
+        if (thread) await store.indexSession(thread.storagePath);
         for (const [key] of loadedSessions) {
           if (
-            key === thread.sessionPath ||
-            key === thread.storagePath ||
+            key === thread?.sessionPath ||
+            key === thread?.storagePath ||
+            key === host?.sessionKey ||
             sessionIdFromPath(key) === id
           ) {
             touchLoadedSession(key, { title: name });
@@ -1243,6 +1251,7 @@ function registerIpc(): void {
     // 每个会话独立 host：已有实例（同会话重启）则复用，否则新建，绝不停止其它会话。
     const started = await agentManager.start({
       ...startOptions,
+      autoTitle: !delegatedSession,
       ...(delegatedSession ? { delegationDepth: 1 } : {}),
       ...(sessionPath ? { sessionPath } : {}),
       cwd,
@@ -1840,7 +1849,7 @@ function recordPromptInLoadedSession(
     messageCount: (current.messageCount ?? 0) + 1,
   };
   if (!current.title) {
-    const title = message.trim().split("\n")[0]?.trim().slice(0, 96);
+    const title = firstMessageTitle(message);
     if (title) patch.title = title;
   }
   touchLoadedSession(sessionKey, patch);

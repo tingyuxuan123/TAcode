@@ -5,6 +5,8 @@ import { join } from "node:path";
 import type { AgentSnapshot } from "../shared/types";
 import type { DelegationBridgeRequest, DelegationRecordSnapshot, DelegationStartPayload } from "../shared/delegation";
 import { DELEGATION_MAX_CONCURRENCY, DELEGATION_MAX_REPORT_CHARS } from "../shared/delegation";
+import { composeSubagentSystemPrompt } from "../shared/subagent-prompts";
+import { loadEnabledSubagents } from "../runtime/subagents";
 import type { DiagnosticSink } from "./local-logger";
 import { TacodeStateStore } from "../runtime/state";
 import type { AgentHostStartOptions } from "./agent-manager";
@@ -257,7 +259,7 @@ afterEach(() => {
 
 describe("DelegationCoordinator", () => {
   it("creates one persistent child for an idempotent request and returns its report", async () => {
-    const { coordinator, state, parent } = await fixture();
+    const { coordinator, state, parent, hosts } = await fixture();
     try {
       const first = await coordinator.handleRequest(startRequest(), parent) as { delegationId: string };
       const replay = await coordinator.handleRequest(startRequest("request-1"), parent) as { delegationId: string };
@@ -271,6 +273,12 @@ describe("DelegationCoordinator", () => {
       expect(waited.delegations[0]).toMatchObject({
         status: "completed",
         report: "Found src/main/index.ts:1",
+      });
+      // 桌面子会话也必须收到通用职责/权限约束，不能只发送角色正文。
+      const [role] = await loadEnabledSubagents();
+      expect(hosts[0].messages[0]).toEqual({
+        role: "user",
+        content: `${composeSubagentSystemPrompt(role!, startPayload.cwd)}\n\nDelegated task:\n\n${startPayload.task}`,
       });
       expect(state.list({ parentSessionPath: "/tmp/parent.jsonl" })[0]).toMatchObject({
         sourceDelegationId: first.delegationId,

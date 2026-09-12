@@ -233,6 +233,7 @@ export class AgentHost {
 
   async start(options: AgentStartOptions & {
     cwd: string;
+    autoTitle?: boolean;
     visionExtension?: string;
     browserExtension?: string;
     visionConfig?: string;
@@ -282,6 +283,8 @@ export class AgentHost {
         ELECTRON_RUN_AS_NODE: "1",
         PI_TELEMETRY: "0",
         PI_SKIP_VERSION_CHECK: "1",
+        // 显式覆盖继承值：子代理和旁聊不能意外启动自动命名请求。
+        TACODE_AUTO_TITLE: options.autoTitle ? "1" : "0",
         ...(options.desktopProvider ? {
           // The CLI checks built-in auth before loading the service extension.
           // Bootstrap only this worker; the extension supplies the real credential.

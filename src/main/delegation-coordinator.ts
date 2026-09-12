@@ -31,6 +31,7 @@ import {
   type DelegatedThreadInput,
 } from "../runtime/state.js";
 import { unknownSubagentMessage, type SubagentDefinition } from "../shared/subagents.js";
+import { composeSubagentSystemPrompt } from "../shared/subagent-prompts.js";
 import { delegationTurnLimit } from "./delegation-run-options.js";
 import type { AgentHostStartOptions } from "./agent-manager.js";
 import type { DiagnosticSink } from "./local-logger.js";
@@ -1005,13 +1006,7 @@ export function effectivePermission(parent: PermissionMode | undefined, requeste
 
 function composeChildTask(definition: SubagentDefinition, task: string, cwd: string): string {
   return [
-    `You are the ${definition.name} subagent inside TACode. You cannot ask questions or delegate further.`,
-    `Use only these tools: ${definition.tools.join(", ") || "none"}.`,
-    definition.prompt,
-    `Working directory: ${cwd}`,
-    "Return a concise, self-contained final report with exact paths and line numbers where relevant.",
-    // 报告有字符上限（`DELEGATION_MAX_REPORT_CHARS`），超长会被首尾截断后再回灌父上下文。
-    "Keep the report under about 1500 characters: lead with the conclusion, then short bullets.",
+    composeSubagentSystemPrompt(definition, cwd),
     "Delegated task:",
     task,
   ].filter((part) => part.trim()).join("\n\n");

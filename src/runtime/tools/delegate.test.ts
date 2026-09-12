@@ -137,6 +137,16 @@ describe("composeSubagentSystemPrompt", () => {
     expect(prompt).not.toContain("You may change files");
   });
 
+  it("只读命令角色不会收到普通命令角色的临时写入许可", () => {
+    const prompt = composeSubagentSystemPrompt(
+      definition({ tools: ["read_file", "exec_command"], execPolicy: "readonly" }),
+      "/tmp/ws",
+    );
+    expect(prompt).toContain("commands permitted by the read-only allowlist");
+    expect(prompt).not.toContain("checks may produce normal temporary artifacts");
+    expect(prompt).not.toContain("You may change files");
+  });
+
   it("真正能改文件的角色才拿到写权限文案", () => {
     const prompt = composeSubagentSystemPrompt(
       definition({ name: "fixer", tools: ["read_file", "edit_file", "apply_patch"] }),

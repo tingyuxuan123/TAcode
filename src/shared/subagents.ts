@@ -212,7 +212,7 @@ export function subagentCatalogText(
   return [
     "Subagent catalog for the `delegate` tool (roles are fixed; subagents cannot delegate further):",
     ...lines,
-    "Give each subagent one self-contained task, and ask for `path:line` evidence with short verbatim quotes.",
+    "Choose an enabled role exactly as listed. Give it a self-contained goal, paths, known facts, constraints, and completion criteria; new delegations do not inherit the parent conversation.",
   ].join("\n");
 }
 

@@ -2,7 +2,7 @@ import { webContents, type BrowserWindow } from "electron";
 import assert from "node:assert/strict";
 
 /** Verify the production Chat header using native clicks in the frameless title-bar area. */
-export async function verifyWorkbenchHeader(win: BrowserWindow, formerTabHeight: number): Promise<void> {
+export async function verifyWorkbenchHeader(win: BrowserWindow, formerTabHeight: number, options: { titleOnly?: boolean } = {}): Promise<void> {
   const evaluate = (script: string) => win.webContents.executeJavaScript(script);
   const wait = async (predicate: () => Promise<boolean>) => {
     const deadline = Date.now() + 5000;
@@ -34,6 +34,27 @@ export async function verifyWorkbenchHeader(win: BrowserWindow, formerTabHeight:
   assert.equal(initial.guest.height, initial.height - initial.header.height - initial.toolbar.height);
   assert(formerTabHeight > 0, "standalone panel supplies the previous extra tab-row height");
   assert(await evaluate("getComputedStyle(document.querySelector('.inspect-tab-list')).webkitAppRegion==='no-drag' && getComputedStyle(document.querySelector('.inspect-tab-add')).webkitAppRegion==='no-drag'"));
+  const verifyTitle = async () => {
+    const title = await evaluate(`(() => {
+      const node=document.querySelector('.chat-title'), rect=node.getBoundingClientRect(), heading=node.parentElement.getBoundingClientRect();
+      return { width:rect.width, right:rect.right, headingRight:heading.right, overflow:getComputedStyle(node).textOverflow, clipped:node.scrollWidth>node.clientWidth, text:node.textContent, tooltip:node.title };
+    })()`);
+    assert(title.width > 0 && title.width <= 320, "conversation title must have a compact maximum width");
+    assert(title.right <= title.headingRight, "title must shrink with the chat heading");
+    assert.equal(title.overflow, "ellipsis");
+    assert(title.clipped, "long first messages must be visually truncated");
+    assert.equal(title.tooltip, title.text, "the full title must remain available on hover");
+  };
+  await verifyTitle();
+  if (options.titleOnly) {
+    win.setSize(900, 620);
+    await wait(async () => await evaluate("innerWidth===900"));
+    await verifyTitle();
+    win.setSize(1440, 620);
+    await wait(async () => await evaluate("innerWidth===1440"));
+    console.log("Conversation title passed: 320px maximum width, ellipsis, full tooltip and responsive layout at 1440px and 900px.");
+    return;
+  }
 
   const guest = webContents.fromId(initial.guestId)!;
   await guest.executeJavaScript("document.querySelector('input').value='顶部标签切换后保留'");
@@ -70,6 +91,7 @@ export async function verifyWorkbenchHeader(win: BrowserWindow, formerTabHeight:
   await wait(async () => await evaluate("document.querySelector('.inspect-tab.active').title.includes('超长网页标题')"));
   win.setSize(900, 620);
   await wait(async () => await evaluate("innerWidth===900"));
+  await verifyTitle();
   assert(await evaluate("(() => {const add=document.querySelector('.inspect-tab-add').getBoundingClientRect(), toggle=document.querySelector('.inspect-toggle').getBoundingClientRect(), list=document.querySelector('.inspect-tab-list');return add.width===28&&add.right<=toggle.left&&list.scrollWidth>list.clientWidth})()"));
   win.setSize(1440, 620);
   await guest.executeJavaScript("document.title='页面甲'");

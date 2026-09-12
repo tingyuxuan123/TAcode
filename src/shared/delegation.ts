@@ -75,7 +75,7 @@ export const DELEGATION_COMPLETION_CONTRACT = "idle-then-last-assistant-text" as
 export const DELEGATION_REPORT_NUDGE = [
   "Your session settled without any final report text, so the parent agent received nothing.",
   "Do not call any more tools. Reply now with one self-contained final report: what you inspected, what you found (with exact paths and line numbers), and what remains unknown or unfinished.",
-  "If you could not complete the task, say so explicitly and why. Keep it under about 1500 characters.",
+  "Start with exactly complete, partial, or blocked on the first line. State the conclusion, evidence, and limitations in Simplified Chinese; preserve paths and commands. If you could not complete the task, explain why. Keep it under about 1500 characters.",
 ].join(" ");
 
 /** 从消息数组里提取最后一条带文本的 assistant 消息作为最终报告；没有则返回空串。 */
