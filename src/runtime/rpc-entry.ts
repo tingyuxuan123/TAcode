@@ -20,6 +20,7 @@ import { installTacodeCredentialStore } from "./credential-store.js";
 import { createTacodeExtension } from "./extension.js";
 import { initializeTacodeHome } from "./home.js";
 import { parseRuntimeArgs } from "./options.js";
+import { installProviderFetchSanitizer } from "./provider-sanitize.js";
 
 process.env.PI_CODING_AGENT = "true";
 process.env.PI_TELEMETRY ??= "0";
@@ -32,6 +33,9 @@ try {
   await initializeTacodeHome();
   await installTacodeCredentialStore();
   await ensureProviderConfigured(parsed.options.providerId);
+  // GLM 的 Anthropic 兼容接口拒收回放历史里的过短 thinking 块（400 长度不足），
+  // 在 worker 内包一层 fetch 净化出站请求体（详见 provider-sanitize.ts）。
+  installProviderFetchSanitizer();
   await main(parsed.piArgs, {
     extensionFactories: [createTacodeExtension(parsed.options)],
   });

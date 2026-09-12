@@ -105,7 +105,11 @@ export class AgentManager {
 
   async start(options: AgentHostStartOptions): Promise<AgentStartResult> {
     const existing = this.findBySession(options.sessionPath);
-    if (existing) return this.enqueue(existing.runtimeId, () => this.startOn(existing, options));
+    if (existing?.isRunning()) return this.enqueue(existing.runtimeId, () => this.startOn(existing, options));
+    // A worker can exit before the renderer gets a chance to call stop(). Do not
+    // reuse that dead host: a queued stop followed by a restart could otherwise
+    // remove the restarted host from the manager map.
+    if (existing) this.removeHost(existing);
     // 没有现存宿主：按请求路径串行化，避免同一会话被并发启动两次。
     const key = `start:${options.sessionPath ?? options.cwd ?? "new"}`;
     return this.enqueue(key, () => {
@@ -136,10 +140,7 @@ export class AgentManager {
     const host = this.activeHost(runtimeId);
     if (!host) return Promise.resolve();
     return this.enqueue(host.runtimeId, async () => {
-      this.runtimes.delete(host.runtimeId);
-      for (const [key, id] of this.index)
-        if (id === host.runtimeId) this.index.delete(key);
-      if (this.activeRuntimeId === host.runtimeId) this.activeRuntimeId = undefined;
+      this.removeHost(host);
       await host.stop();
     });
   }
@@ -151,6 +152,10 @@ export class AgentManager {
   ): Promise<T> {
     const host = this.activeHost(runtimeId);
     if (!host) return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
+    if (!host.isRunning()) {
+      this.removeHost(host);
+      return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
+    }
     // 停止类命令绕开队列：用户的「停止」不能被队列里的长请求拖住（见 OUT_OF_BAND_COMMANDS）。
     if (OUT_OF_BAND_COMMANDS.has(type)) return host.request<T>(type, data);
     return this.enqueue(host.runtimeId, async () => {
@@ -198,6 +203,13 @@ export class AgentManager {
     host.runtimeId = runtimeId;
     this.runtimes.set(runtimeId, host);
     return host;
+  }
+
+  private removeHost(host: AgentHost): void {
+    this.runtimes.delete(host.runtimeId);
+    for (const [key, id] of this.index)
+      if (id === host.runtimeId) this.index.delete(key);
+    if (this.activeRuntimeId === host.runtimeId) this.activeRuntimeId = undefined;
   }
 
   private async startOn(

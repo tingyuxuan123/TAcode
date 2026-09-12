@@ -558,6 +558,13 @@ export function App() {
   const runtimeIdRef = useRef<string | undefined>(undefined);
   /** 每个会话已应用到的最高事件序号，用于丢弃 snapshot 回放与实时流的重复事件。 */
   const eventSeqRef = useRef<Map<string, number>>(new Map());
+  /** 所有报错出口统一走这里：原始错误先落诊断日志（friendlyAgentError 会折叠细节），再弹友好文案。 */
+  const agentErrorToast = useCallback((error: unknown): string => {
+    const detail = error instanceof Error ? error.message : String(error);
+    void window.harness.app.logDiagnostic("agent-error", detail).catch(() => undefined);
+    return friendlyAgentError(detail);
+  }, []);
+
   /** 宿主已停止或重启失败：清掉陈旧的会话引用，避免后续命令打到已不存在的会话。 */
   const dropAgentSession = useCallback(() => {
     live.current = false;
@@ -746,7 +753,7 @@ export function App() {
     try {
       accounts = await window.harness.auth.status();
     } catch (error) {
-      setToast(friendlyAgentError(error));
+      setToast(agentErrorToast(error));
       setLoading(false);
       return false;
     }
@@ -915,14 +922,17 @@ export function App() {
       if (sessionPath) {
         setToast(t("toast.sessionOpenFailed", { error: friendlyAgentError(error) }));
       } else if (!/Agent session closed/.test(message)) {
-        setToast(friendlyAgentError(error));
+        setToast(agentErrorToast(error));
+      }
+      if (/Agent stopped\b|Agent session closed|No workspace session is active|No active agent session/i.test(message)) {
+        dropAgentSession();
       }
       if (/not configured|credential|login|api key/i.test(message)) setLoginOpen(true);
       return false;
     } finally {
       if (seq === startSeq.current) setLoading(false);
     }
-  }, [applyThinkingForModel, permission, refreshAgentSkills, resolveSandbox, syncAgentThinking, t]);
+  }, [agentErrorToast, applyThinkingForModel, dropAgentSession, permission, refreshAgentSkills, resolveSandbox, syncAgentThinking, t]);
 
   /**
    * 委派子会话：默认在右侧面板开一个只读标签（不再抢占中间主会话区）。
@@ -974,7 +984,11 @@ export function App() {
         await syncAgentThinking();
         return true;
       } catch (error) {
-        setToast(friendlyAgentError(error));
+        const detail = error instanceof Error ? error.message : String(error);
+        if (/Agent session closed|No workspace session is active|No active agent session/i.test(detail)) {
+          dropAgentSession();
+        }
+        setToast(agentErrorToast(error));
         return false;
       }
     }
@@ -1011,7 +1025,7 @@ export function App() {
       }
       setToast(agentCwd.current ? t("toast.modelNextTurn", { model: next }) : t("toast.modelSwitched", { model: next }));
     } catch (error) {
-      setToast(friendlyAgentError(error));
+      setToast(agentErrorToast(error));
     } finally {
       modelSwitchBusy.current = false;
       setModelSwitchPending(false);
@@ -1253,7 +1267,7 @@ export function App() {
       setPermission(target);
       setToast(t("plan.approved"));
     } catch (error) {
-      setToast(friendlyAgentError(error));
+      setToast(agentErrorToast(error));
     } finally {
       setLoading(false);
     }
@@ -1268,7 +1282,7 @@ export function App() {
         message: `Refine the current plan using update_plan. Requested changes:\n${text}`,
       });
     } catch (error) {
-      setToast(friendlyAgentError(error));
+      setToast(agentErrorToast(error));
     } finally {
       setLoading(false);
     }
@@ -1295,7 +1309,7 @@ export function App() {
         setToast(t("toast.steered"));
       } catch (error) {
         fillPrompt(text);
-        setToast(friendlyAgentError(error));
+        setToast(agentErrorToast(error));
       }
       return;
     }
@@ -1325,7 +1339,18 @@ export function App() {
       setRunning(true);
 
       if (!agentCwd.current) {
-        const started = await startAgent(cwd, undefined, true, false, permission, optimistic);
+        // A failed worker is deliberately dropped by the error handler, but the
+        // session path remains so retry can restart the same transcript instead
+        // of silently creating a new conversation.
+        const sessionPath = sessionRef.current;
+        const started = await startAgent(
+          cwd,
+          sessionPath,
+          true,
+          Boolean(sessionPath),
+          permission,
+          optimistic,
+        );
         if (!started) {
           setMessages((current) => current.filter((item) => item.id !== optimistic!.id));
           fillPrompt(text);
@@ -1367,11 +1392,14 @@ export function App() {
       if (optimisticId) setMessages((current) => current.filter((item) => item.id !== optimisticId));
       fillPrompt(text);
       setRunning(false);
-      if (!/Agent session closed/.test(detail)) setToast(friendlyAgentError(error));
+      if (/Agent session closed|No workspace session is active|No active agent session/i.test(detail)) {
+        dropAgentSession();
+      }
+      if (!/Agent session closed/.test(detail)) setToast(agentErrorToast(error));
     } finally {
       sending.current = false;
     }
-  }, [ensureModelReady, fillPrompt, loading, openFolder, permission, running, startAgent, t, undoLastTurn, workspace]);
+  }, [dropAgentSession, ensureModelReady, fillPrompt, loading, openFolder, permission, running, startAgent, t, undoLastTurn, workspace]);
 
   useEffect(() => {
     void refresh().then((status) => {
@@ -1512,12 +1540,26 @@ export function App() {
       // Phase 3a：后台会话的错误不 fail 当前视图。
       const errorSession = payload?.__sessionId;
       if (errorSession && errorSession !== sessionRef.current) return;
+      const errorRuntime = payload?.__runtimeId;
+      if (errorRuntime && errorRuntime !== runtimeIdRef.current) return;
       if (!live.current) return;
-      if (/Agent session closed/.test(message) || isTransientStreamError(message)) return;
+      const workerStopped = /Agent stopped\b|No workspace session is active|No active agent session/i.test(message);
+      const sessionKey = errorSession ?? sessionRef.current;
+      if (workerStopped) {
+        // Stop removes the dead host from AgentManager/preload. Keep sessionRef so
+        // the next prompt can resume this transcript with a fresh worker.
+        live.current = false;
+        dropAgentSession();
+        void window.harness.agent.stop(payload?.__runtimeId).catch(() => undefined);
+      }
+      if (!workerStopped && (/Agent session closed/.test(message) || isTransientStreamError(message))) return;
       queue.flush();
       setStopping(false);
       setRunning(false);
-      markSessionRunning(errorSession ?? sessionRef.current, false);
+      markSessionRunning(sessionKey, false);
+      // 原始错误落诊断日志：friendlyAgentError 会把细节折叠成友好文案，
+      // 没有这行就诊断不了「连接模型服务失败」到底是断在哪一层。
+      void window.harness.app.logDiagnostic("agent-error", message).catch(() => undefined);
       const text = friendlyAgentError(message);
       setMessages((current) => failActiveTurn(current, text || message));
       if (text) setToast(text);
@@ -1537,7 +1579,7 @@ export function App() {
       offError();
       offCommand();
     };
-  }, [newThread, openFolder, syncAgentThinking, t, workspace]);
+  }, [dropAgentSession, newThread, openFolder, syncAgentThinking, t, workspace]);
 
   useEffect(() => {
     if (!workspace) {
@@ -1742,7 +1784,7 @@ export function App() {
           }
           if (outcome instanceof Error) {
             setStopping(false);
-            setToast(friendlyAgentError(outcome));
+            setToast(agentErrorToast(outcome));
             return;
           }
           if (!live.current) return;
@@ -1779,7 +1821,7 @@ export function App() {
             await window.harness.agent.command("prompt", { message: `/permissions ${mode}` });
             setToast(mode === "full" ? t("toast.sandboxOff") : t("toast.permissionChanged"));
           } catch (error) {
-            setToast(friendlyAgentError(error));
+            setToast(agentErrorToast(error));
           }
         })();
       }}
@@ -2071,7 +2113,7 @@ export function App() {
                 setModel(current.defaultModel);
                 applyThinkingForModel(current.defaultModel, status);
               }
-            }).catch((error) => setToast(friendlyAgentError(error)));
+            }).catch((error) => setToast(agentErrorToast(error)));
           }}
           onSaved={async () => {
             const status = await window.harness.auth.status();

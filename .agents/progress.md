@@ -923,3 +923,11 @@
   3. 每次注入前先停掉上一轮的 rAF 循环，并在主流程开头清掉内联覆盖，避免状态残留。
 - 因此可采信的滚动数据只有最早那次反向对照：默认锚定下 14s/835 帧出现 1 次 1121px 逆向移动、距底平均 6.5px（139 帧 >2px）；`overflow-anchor: none` 下 839 帧 0 次回退。两处修复（`overflow-anchor: none` + `SNAP_DISTANCE = 96` 近距贴底）仍然保留，但「修复后真实生成是否完全不抖」还需要一次干净测量。
 - 另外那次采到的 9618px 大回退已定位为**内容变矮被夹回**（折叠/过程区收起，高度 -7222px），不是出字期间的抖动；新版探针把「出字增长段」和「内容变矮帧」分开统计。
+
+## 2026-09-12：失败会话点击继续无法恢复
+
+- 根因：失败轮次留下的短 `thinking` 块会被 Anthropic 兼容接口拒绝；净化请求体后若保留旧 `content-length`，undici 又会在请求发出前报 `Connection error`；同时已退出的 worker 仍可能被 manager 复用，导致继续命令打到死会话。
+- 修复：`App.tsx` 在 worker 失效时清理运行时引用但保留 `sessionRef`，下一次继续用原会话路径 `resume`；`agent-manager.ts` 不复用死 host，并在命令路由前移除死 host；`provider-sanitize.ts` 出站时移除历史/过短 `thinking`，改写 body 后删除旧 `content-length`；`rpc-entry.ts` 为 worker 安装净化层。
+- 回归测试：新增 provider 请求净化、真实 RPC 失败后继续、死 worker 生命周期测试。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 86 文件 / 784 用例通过；`git diff --check` 通过。未改 `.agents/features.json`（仓库不存在该文件）。
+- 下一步：重建并完整重启 TACode，在原失败会话上点击「继续」确认实际 provider 配置下恢复正常。

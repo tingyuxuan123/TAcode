@@ -19,6 +19,21 @@ function reply(model: string): string {
   ].map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
 }
 
+function replyWithShortThinking(model: string): string {
+  return [
+    { type: "message_start", message: { id: "thinking-test", type: "message", role: "assistant", model, content: [], usage: { input_tokens: 5, output_tokens: 0 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "先检查现有状态。" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "准备好了" } },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 2 } },
+    { type: "message_stop" },
+  ].map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+}
+
 afterEach(() => vi.unstubAllEnvs());
 
 function openAiChatReply(): string {
@@ -172,6 +187,67 @@ it("dispatches configured Anthropic reasoning tiers verbatim, defaulting to adap
     await host.request("set_thinking_level", { level: "max" });
     expect(await host.request("get_state")).toMatchObject({ thinkingLevel: "off" });
     expect(await prompt()).not.toHaveProperty("thinking");
+    expect(errors).toEqual([]);
+  } finally {
+    await host.stop();
+    await new Promise<void>((done) => server.close(() => done()));
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30000);
+
+it("can continue after a provider error with short thinking in replay history", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tacode-thinking-retry-"));
+  const requests: Array<Record<string, unknown>> = [];
+  const events: AgentEvent[] = [];
+  const errors: string[] = [];
+  const host = new AgentHost((event) => events.push(event), (error) => errors.push(error));
+  let requestNumber = 0;
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body) as Record<string, unknown>);
+    requestNumber += 1;
+    if (requestNumber === 2) {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "thinking length insufficient" } }));
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(requestNumber === 1 ? replyWithShortThinking("thinking-retry") : reply("thinking-retry"));
+  });
+  try {
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const { port } = server.address() as { port: number };
+    await writeFile(join(dir, "settings.json"), JSON.stringify({ credentialStore: "file", retry: { enabled: false } }));
+    vi.stubEnv("TACODE_HOME", dir);
+    vi.stubEnv("OPENAI_API_KEY", undefined);
+    const config = serviceRuntimeConfig({ id: "thinking-retry", name: "Thinking retry gateway", vendorKey: "custom", apiStyle: "anthropic_messages",
+      baseUrl: `http://127.0.0.1:${port}/v1`, isEnabled: true, createdAt: "", updatedAt: "", models: [
+        { id: "thinking-retry", reasoning: true, thinkingLevels: ["low", "medium", "high"], contextWindow: 128000, maxTokens: 64000 },
+      ] });
+    await host.start({ cwd: dir, provider: "openai", model: "thinking-retry", permission: "plan", sandbox: "read-only",
+      providerExtension: resolve("src/extensions/provider.ts"), desktopProvider: { config, apiKey: "test-service-key" } });
+    await host.request("set_auto_retry", { enabled: false });
+    const waitForEnds = async (count: number) => {
+      await vi.waitFor(() => expect(events.filter((event) => event.type === "agent_end")).toHaveLength(count), { timeout: 10000 });
+    };
+
+    await host.request("prompt", { message: "建立一段带短 thinking 的历史" });
+    await waitForEnds(1);
+    await host.request("prompt", { message: "触发一次 provider 错误" });
+    await waitForEnds(2);
+    expect(host.isRunning()).toBe(true);
+    await host.request("prompt", { message: "继续" });
+    await waitForEnds(3);
+
+    expect(requests).toHaveLength(3);
+    for (const payload of requests.slice(1)) {
+      const messages = payload.messages as Array<{ content?: Array<{ type?: string }> }>;
+      expect(messages.flatMap((message) => message.content ?? []).some((part) => part.type === "thinking")).toBe(false);
+    }
+    const agentEnds = events.filter((event) => event.type === "agent_end");
+    expect(JSON.stringify(agentEnds[1])).toContain("thinking length insufficient");
+    expect(JSON.stringify(agentEnds.at(-1))).toContain('"text":"OK"');
     expect(errors).toEqual([]);
   } finally {
     await host.stop();

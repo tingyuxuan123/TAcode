@@ -274,6 +274,27 @@ describe("AgentManager", () => {
     expect(hosts).toHaveLength(1);
     expect(again.runtimeId).toBe(first.runtimeId);
   });
+
+  it("replaces a dead host when the same session is started again", async () => {
+    const first = await manager.start(options("/a.jsonl"));
+    hosts[0].running = false;
+
+    const restarted = await manager.start(options("/a.jsonl"));
+
+    expect(hosts).toHaveLength(2);
+    expect(hosts[0].stops).toBe(0);
+    expect(restarted.runtimeId).not.toBe(first.runtimeId);
+    expect(manager.findBySession("/a.jsonl")).toBe(asHost(hosts[1]));
+  });
+
+  it("drops a dead host instead of routing commands to it", async () => {
+    const started = await manager.start(options("/a.jsonl"));
+    hosts[0].running = false;
+
+    await expect(manager.command(started.runtimeId, "get_state")).rejects.toThrow(NO_ACTIVE_SESSION_MESSAGE);
+    expect(manager.findRuntime(started.runtimeId)).toBeUndefined();
+    expect(manager.active).toBeUndefined();
+  });
 });
 
 describe("AgentManager error handling", () => {
