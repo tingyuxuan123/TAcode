@@ -2318,6 +2318,12 @@ function isPromptEmpty(root: HTMLElement): boolean {
   return !serializePrompt(root).trim();
 }
 
+function stripHtml(html: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return template.content.textContent ?? "";
+}
+
 export function PromptBar({
   fillText,
   fillToken = 0,
@@ -2784,6 +2790,12 @@ export function PromptBar({
               void addUploads(images);
               return;
             }
+            // 只收纯文本：富文本剪贴板（如复制的会话气泡）默认会把带样式的 DOM 整块插进输入框。
+            const text = event.clipboardData.getData("text/plain");
+            const html = event.clipboardData.getData("text/html");
+            if (!text && !html) return;
+            event.preventDefault();
+            document.execCommand("insertText", false, (text || stripHtml(html)).replace(/\r\n?/g, "\n"));
           }}
         />
         {slash && (
