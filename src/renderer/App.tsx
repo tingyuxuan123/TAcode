@@ -44,7 +44,6 @@ import {
   parseFeaturesJson,
   planAwaitingApproval,
   sessionTools,
-  sessionTerminals,
   turnAnchorId,
   turnAnchors,
   upsertSessionSummary,
@@ -63,6 +62,7 @@ import {
   InspectPanel,
   Login,
   PromptBar,
+  SelectionAskBar,
   SidebarNav,
   Thinking,
   TurnNav,
@@ -71,6 +71,8 @@ import {
 import { MessageList, type MessageListHandle, type MessageListItem } from "./message-list";
 import { WorkbenchPanels } from "./browser/workbench-panels";
 import { useBrowserPanels } from "./browser/use-browser-panels";
+import { FilesPanel } from "./browser/files-panel";
+import { TerminalPanel } from "./browser/terminal-panel";
 import { useDelegationTabs } from "./browser/use-delegation-tabs";
 import { useSidebarLayout } from "./sidebar-layout";
 import { branchAutoExpanded, groupDelegatedSessions } from "./session-tree";
@@ -532,7 +534,6 @@ export function App() {
   }, [t]);
   const [featureTodos, setFeatureTodos] = useState<SessionTodo[]>([]);
   const [agentSkills, setAgentSkills] = useState<AgentSkillCommand[]>([]);
-  const [stoppedJobs, setStoppedJobs] = useState<string[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
   const messageList = useRef<MessageListHandle>(null);
   const agentCwd = useRef<string | undefined>(undefined);
@@ -642,10 +643,6 @@ export function App() {
   const recoverableStreaks = useMemo(() => recoverableFailStreaks(groups), [groups]);
   const anchors = useMemo(() => turnAnchors(groups), [groups]);
   const tools = useMemo(() => sessionTools(messages), [messages]);
-  const terminals = useMemo(
-    () => sessionTerminals(messages).filter((job) => !stoppedJobs.includes(job.id)),
-    [messages, stoppedJobs],
-  );
   const workingFiles = useMemo(() => collectWorkingFiles(tools, mentionedFiles(messages)), [messages, tools]);
   const chatTodos = useMemo(() => collectTodos(messages, tools), [messages, tools]);
   const todos = chatTodos.length ? chatTodos : featureTodos;
@@ -1101,7 +1098,6 @@ export function App() {
       sessionRef.current = undefined;
       setRunning(false);
       setUiRequest(undefined);
-      setStoppedJobs([]);
     }
     try {
       await window.harness.sessions.remove(session.id);
@@ -1174,13 +1170,6 @@ export function App() {
     }
     void window.harness.sessions.list().then(setSessionList);
   }, [workspace]);
-
-  const stopJobs = useCallback(async (message: string) => {
-    const data = await window.harness.agent.command<{ commands: Array<{ name: string }> }>("get_commands");
-    const names = new Set((data.commands ?? []).map((item) => item.name.replace(/^\//, "")));
-    if (!names.has("stop-job") && !names.has("stop-jobs")) throw new Error(t("toast.needJobCommands"));
-    await window.harness.agent.command("prompt", { message });
-  }, [t]);
 
   const undoLastTurn = useCallback(async () => {
     if (running) return;
@@ -1831,7 +1820,9 @@ export function App() {
         if (command === "/undo") void undoLastTurn();
         if (command === "/compact") void compactContext();
         if (command === "/login") setLoginOpen(true);
+        if (command === "/side") browserPanels.openSideChat(activeSession);
       }}
+      builtinCommands={[{ id: "/side", description: t("slash.side") }]}
       skillCommands={agentSkills}
       stats={stats}
       onCompact={() => void compactContext()}
@@ -1963,37 +1954,23 @@ export function App() {
           messageList.current?.scrollToAnchor(id, { onSettled: follow.reanchor });
         }} />}
         inspect={workspace ? (
-          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace} inspect={
+          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace}
+            sideChatProps={{ workspace, provider: connected, model, effort, permission }}
+            review={
             <InspectPanel
               files={workingFiles}
               todos={todos}
-              terminals={terminals}
-              folder={baseName(workspace)}
-              workspace={workspace}
-              refresh={running}
               running={running}
               planApproval={planApproval}
               onApprovePlan={() => void approvePlan()}
               onRefinePlan={(text) => void refinePlan(text)}
-              onOpen={setPreview}
+              onOpen={(file) => browserPanels.openFile(file.path)}
               onUndo={() => void undoLastTurn()}
-              onStopTerminal={(id) => {
-                setStoppedJobs((current) => current.includes(id) ? current : [...current, id]);
-                void stopJobs(`/stop-job ${id}`).catch((error) => {
-                  setStoppedJobs((current) => current.filter((item) => item !== id));
-                  setToast(error instanceof Error ? error.message : String(error));
-                });
-              }}
-              onStopAllTerminals={() => {
-                const ids = terminals.map((job) => job.id);
-                setStoppedJobs((current) => [...new Set([...current, ...ids])]);
-                void stopJobs("/stop-jobs").catch((error) => {
-                  setStoppedJobs((current) => current.filter((item) => !ids.includes(item)));
-                  setToast(error instanceof Error ? error.message : String(error));
-                });
-              }}
             />
-          } />
+          }
+            files={<FilesPanel workspace={workspace} files={workingFiles} onOpen={browserPanels.openFile} />}
+            terminal={<TerminalPanel workspace={workspace} />}
+          />
         ) : undefined}
       >
         <div
@@ -2081,6 +2058,9 @@ export function App() {
       </Chat>
       </PanelActionsProvider>
       {preview && <FileDrawer file={preview} workspace={workspace} onClose={() => setPreview(undefined)} />}
+
+      {/* 选中主聊天文字 → 浮出「在侧边聊天中询问」（Codex 模式入口之一）。 */}
+      {workspace && <SelectionAskBar onAsk={(text) => browserPanels.openSideChat(activeSession, text)} />}
 
       {sandboxAsk && (
         <div

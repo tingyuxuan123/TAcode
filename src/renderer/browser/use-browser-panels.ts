@@ -15,14 +15,24 @@ export function useBrowserPanels() {
     dispatch({ type: "open-browser", tab: createBrowserPanel(createBrowserPanelId(), url ? { url, title: "" } : undefined), activate });
   }, []);
   const openPanel = useCallback((type: string) => {
-    if (type === "inspect") dispatch({ type: "open-inspect" });
+    if (type === "review") dispatch({ type: "open-review" });
+    else if (type === "files") dispatch({ type: "open-files" });
+    else if (type === "terminal") dispatch({ type: "open-terminal" });
+    else if (type === "side-chat") dispatch({ type: "open-side-chat" });
     else if (type === "browser") openBrowser();
   }, [openBrowser]);
+  /** 侧边聊天（Codex 模式）：+/菜单、/side、选中工具条每次都新建一个编号实例。 */
+  const openSideChat = useCallback((sourceSession?: string, draft?: string) => {
+    dispatch({ type: "open-side-chat", ...(sourceSession ? { sourceSession } : {}), ...(draft ? { draft } : {}) });
+  }, []);
+  /** 快捷键语义：已有侧边聊天时聚焦最新一个，一个都没有才新建（避免连按爆标签）。 */
+  const focusSideChat = useCallback(() => dispatch({ type: "focus-side-chat" }), []);
   /** 打开/激活文件查看标签；同一路径复用同一个标签（过程区文件行的点击入口）。 */
   const openFile = useCallback((path: string) => {
     const trimmed = path.trim();
     if (trimmed) dispatch({ type: "open-file", path: trimmed });
   }, []);
+  const openFiles = useCallback((path?: string) => dispatch({ type: "open-files", ...(path ? { path } : {}) }), []);
   const closePanel = useCallback((id: string) => dispatch({ type: "close", id }), []);
   const selectPanel = useCallback((id: string) => dispatch({ type: "select", id }), []);
   /**
@@ -58,5 +68,29 @@ export function useBrowserPanels() {
     return () => { offRestore(); offClosed(); offPresentation(); };
   }, []);
 
-  return { ...state, dispatch, openPanel, openBrowser, openChildSession, openFile, closePanel, selectPanel };
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable || target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
+      const key = event.key.toLowerCase();
+      const primary = event.metaKey || event.ctrlKey;
+      if (primary && key === "p") {
+        event.preventDefault();
+        dispatch({ type: "open-files" });
+      } else if (event.ctrlKey && key === "`") {
+        event.preventDefault();
+        dispatch({ type: "open-terminal" });
+      } else if (event.metaKey && event.altKey && key === "s") {
+        event.preventDefault();
+        focusSideChat();
+      } else if (event.ctrlKey && event.shiftKey && key === "g") {
+        event.preventDefault();
+        dispatch({ type: "open-review" });
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [focusSideChat]);
+
+  return { ...state, dispatch, openPanel, openBrowser, openChildSession, openFile, openFiles, openSideChat, focusSideChat, closePanel, selectPanel };
 }

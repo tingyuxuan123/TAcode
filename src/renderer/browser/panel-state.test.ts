@@ -20,7 +20,7 @@ describe("顶部网页标签状态", () => {
     const next = open(first, "background", false);
     expect(next.active).toBe("first");
     expect(next.tabs[1]).toBe(first.tabs[1]);
-    expect(next.tabs.map((tab) => tab.id)).toEqual(["inspect", "first", "background"]);
+    expect(next.tabs.map((tab) => tab.id)).toEqual(["review", "first", "background"]);
   });
 
   it("页面标题和导航更新不改变初始化参数，防止 guest 被重载", () => {
@@ -40,7 +40,7 @@ describe("顶部网页标签状态", () => {
     let state = open(open(initialPanelState, "left"), "right");
     state = panelReducer(state, { type: "close", id: "right" });
     expect(state.active).toBe("left");
-    state = panelReducer(state, { type: "close", id: "inspect" });
+    state = panelReducer(state, { type: "close", id: "review" });
     expect(state.active).toBe("left");
     state = panelReducer(state, { type: "close", id: "left" });
     expect(state).toEqual({ tabs: [], active: "" });
@@ -53,7 +53,7 @@ describe("顶部网页标签状态", () => {
     const restored = panelReducer(state, { type: "restore", id: "detached", tabs: [
       createBrowserPanel("detached", page("active")), createBrowserPanel("extra", page("extra")),
     ] });
-    expect(restored.tabs.map((tab) => tab.id)).toEqual(["inspect", "detached", "extra", "unrelated"]);
+    expect(restored.tabs.map((tab) => tab.id)).toEqual(["review", "detached", "extra", "unrelated"]);
     expect(restored.active).toBe("detached");
     expect(restored.tabs[3]).toBe(unrelated);
     expect(restored.tabs[1]).toMatchObject({ initialTabs: [page("active")], detached: false, revision: 1 });
@@ -65,7 +65,7 @@ describe("顶部网页标签状态", () => {
     const state = panelReducer(initialPanelState, { type: "restore", id: "missing", tabs: [
       createBrowserPanel("missing", page("active")), createBrowserPanel("extra", page("extra")),
     ] });
-    expect(state.tabs.map((tab) => tab.id)).toEqual(["inspect", "missing", "extra"]);
+    expect(state.tabs.map((tab) => tab.id)).toEqual(["review", "missing", "extra"]);
     expect(state.active).toBe("missing");
   });
 
@@ -88,6 +88,54 @@ describe("顶部网页标签状态", () => {
   });
 });
 
+describe("工作台功能面板", () => {
+  it("审查、文件、终端按功能类型单实例打开", () => {
+    let state = panelReducer(initialPanelState, { type: "open-files" });
+    state = panelReducer(state, { type: "open-files", path: "src/App.tsx" });
+    state = panelReducer(state, { type: "open-terminal" });
+    state = panelReducer(state, { type: "open-review" });
+    expect(state.tabs.map((tab) => tab.id)).toEqual(["review", "files", "terminal"]);
+    expect(state.tabs.find((tab) => tab.type === "files")).toMatchObject({ selectedPath: "src/App.tsx" });
+    expect(state.active).toBe("review");
+  });
+
+  it("重复打开面板只激活，不创建重复标签", () => {
+    const once = panelReducer(initialPanelState, { type: "open-terminal" });
+    const twice = panelReducer(once, { type: "open-terminal" });
+    expect(twice.tabs).toHaveLength(2);
+    expect(twice.active).toBe("terminal");
+  });
+});
+
+describe("侧边聊天多实例（Codex 模式）", () => {
+  it("每次打开都新建编号标签，来源会话与草稿随身携带", () => {
+    let state = panelReducer(initialPanelState, { type: "open-side-chat", sourceSession: "/sessions/a.jsonl", draft: "解释这段" });
+    state = panelReducer(state, { type: "open-side-chat" });
+    expect(state.tabs.filter((tab) => tab.type === "side-chat")).toHaveLength(2);
+    const [first] = state.tabs.filter((tab) => tab.type === "side-chat");
+    expect(first).toMatchObject({ ordinal: 1, sourceSession: "/sessions/a.jsonl", draft: "解释这段" });
+    expect(state.active).toBe(state.tabs[2].id);
+  });
+
+  it("编号取未使用的最小正整数，关闭中间编号后新开补位且不重排已开的", () => {
+    let state = panelReducer(initialPanelState, { type: "open-side-chat" });
+    state = panelReducer(state, { type: "open-side-chat" });
+    state = panelReducer(state, { type: "open-side-chat" });
+    const sideTabs = () => state.tabs.filter((tab) => tab.type === "side-chat");
+    expect(sideTabs().map((tab) => tab.ordinal)).toEqual([1, 2, 3]);
+    const middle = sideTabs()[1];
+    state = panelReducer(state, { type: "close", id: middle.id });
+    state = panelReducer(state, { type: "open-side-chat" });
+    expect(sideTabs().map((tab) => tab.ordinal)).toEqual([1, 3, 2]);
+  });
+
+  it("activate=false 只建标签不抢焦点", () => {
+    const state = panelReducer(initialPanelState, { type: "open-side-chat", activate: false });
+    expect(state.tabs).toHaveLength(2);
+    expect(state.active).toBe("review");
+  });
+});
+
 describe("delegationPanelKey", () => {
   it("委派 id 与子会话文件名归一到同一个 key（两个入口因此命中同一个标签）", () => {
     expect(delegationPanelKey("delegation-1")).toBe("delegation-1");
@@ -106,9 +154,9 @@ describe("子代理子会话标签状态", () => {
   const panel = (key: string, info: Partial<ChildSessionPanelInfo> = {}) =>
     createChildSessionPanel(key, { role: "explorer", ...info });
 
-  it("打开标签并激活；不动 inspect 与网页标签", () => {
+  it("打开标签并激活；不动 review 与网页标签", () => {
     const next = panelReducer(initialPanelState, { type: "open-child-session", panel: panel("delegation-1") });
-    expect(next.tabs.map((tab) => tab.id)).toEqual(["inspect", "child-session-delegation-1"]);
+    expect(next.tabs.map((tab) => tab.id)).toEqual(["review", "child-session-delegation-1"]);
     expect(next.active).toBe("child-session-delegation-1");
   });
 

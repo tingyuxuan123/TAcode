@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -61,6 +62,7 @@ import { LocalLogger } from "./local-logger";
 import { readSessionTranscript } from "./session-transcript";
 import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
+import { TerminalManager } from "./terminal-manager";
 import { apiBaseUrl, listModels } from "../shared/openai-models";
 import {
   activeChat,
@@ -190,19 +192,21 @@ const diagnostics = new LocalLogger({
 
 let delegationCoordinator: DelegationCoordinator | undefined;
 
-function createAgentHost(runtimeId: string, delegationId?: string): AgentHost {
+function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | string = "main"): AgentHost {
+  const sideChat = channel === "side-chat";
+  const delegated = Boolean(channel && channel !== "main" && !sideChat);
   const host = new AgentHost(
     (event) => {
-      if (!delegationId) mainWindow?.webContents.send("agent:event", event);
+      if (delegated) return;
+      mainWindow?.webContents.send(sideChat ? "side-chat:event" : "agent:event", event);
     },
     (message, sessionKey, errorRuntimeId) => {
-      if (!delegationId) {
-        mainWindow?.webContents.send("agent:error", {
-          message,
-          __sessionId: sessionKey,
-          __runtimeId: errorRuntimeId,
-        });
-      }
+      if (delegated) return;
+      mainWindow?.webContents.send(sideChat ? "side-chat:error" : "agent:error", {
+        message,
+        __sessionId: sessionKey,
+        __runtimeId: errorRuntimeId,
+      });
     },
     (tool, params, signal) => browserAutomation.execute(tool, params, signal, runtimeId),
     () => browserAutomation.resetAgent(runtimeId),
@@ -222,6 +226,12 @@ function createAgentHost(runtimeId: string, delegationId?: string): AgentHost {
  * 切换会话不再杀其它会话的 host，后台会话继续运行；命令按 runtimeId 路由。 */
 const agentManager = new AgentManager({
   createHost: (runtimeId) => createAgentHost(runtimeId),
+});
+const sideChatManager = new AgentManager({
+  createHost: (runtimeId) => createAgentHost(runtimeId, "side-chat"),
+});
+const terminalManager = new TerminalManager((event) => {
+  mainWindow?.webContents.send("terminal:event", event);
 });
 let activeAgentCwd: string | undefined;
 
@@ -495,8 +505,10 @@ function createWindow(): void {
     // so sandbox shells don't keep burning RAM in the background.
     void Promise.all([
       agentManager.stopAll(),
+      sideChatManager.stopAll(),
       delegationCoordinator?.stopAll() ?? Promise.resolve(),
     ]);
+    terminalManager.stopAll();
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
@@ -817,6 +829,22 @@ function registerIpc(): void {
     watchWorkspace(root);
     return listWorkspaceFiles(root);
   });
+
+  ipcMain.handle("terminal:start", async (_event, rawCwd: unknown) => {
+    const cwd = path.resolve(requireString(rawCwd, "终端工作区", { maxLength: 4_096 }));
+    const stat = await fsp.stat(cwd).catch(() => undefined);
+    if (!stat?.isDirectory()) throw new Error("Terminal workspace is not a directory.");
+    return terminalManager.start(cwd);
+  });
+  ipcMain.handle("terminal:write", (_event, rawId: unknown, rawData: unknown) => {
+    const id = requireString(rawId, "终端 id", { maxLength: 128 });
+    const data = requireString(rawData, "终端输入", { allowEmpty: true, maxLength: 32_000 });
+    terminalManager.write(id, data);
+  });
+  ipcMain.handle("terminal:stop", (_event, rawId: unknown) => {
+    terminalManager.stop(requireString(rawId, "终端 id", { maxLength: 128 }));
+  });
+  ipcMain.handle("terminal:list", () => terminalManager.list());
   ipcMain.handle("vision:config", async () => {
     const result = await readJsonFile<Record<string, unknown>>(
       visionConfigPath(),
@@ -1345,6 +1373,65 @@ function registerIpc(): void {
         requireString(id, "请求 id", { maxLength: 256 }),
         assertPayloadLimit(requireRecord(response, "应答内容"), IPC_LIMITS.uiResponseBytes, "应答内容"),
       ),
+  );
+
+  ipcMain.handle("side-chat:start", async (_event, rawOptions: unknown) => {
+    const options = validateAgentStartOptions(rawOptions);
+    const tasksDir = path.resolve(path.join(userDataPath, "tasks"));
+    const cwd = options.cwd ? path.resolve(options.cwd) : tasksDir;
+    await fsp.mkdir(cwd, { recursive: true });
+    const sideChatDir = path.join(getTacodeHome(), "side-chats");
+    await fsp.mkdir(sideChatDir, { recursive: true, mode: 0o700 });
+    const sessionPath = path.join(sideChatDir, `${randomUUID()}.jsonl`);
+    const requestedSandbox = options.sandbox;
+    const sandbox = cwd === tasksDir
+      ? "read-only"
+      : requestedSandbox === "read-only" ? "workspace-write" : requestedSandbox;
+    const storedUrl = options.provider === "deepseek" ? getStoredDeepSeekBaseUrl() : undefined;
+    const rawUrl = options.baseUrl ?? storedUrl;
+    const profiles = await loadChatProfiles();
+    const maxTokens = activeCustomProfile(profiles)?.maxTokens;
+    const desktopProvider = options.serviceId
+      ? await resolveDesktopProvider(options.serviceId, options.model)
+      : undefined;
+    const baseUrl = desktopProvider?.config.baseUrl ?? (rawUrl ? apiBaseUrl(rawUrl) : undefined);
+    const started = await sideChatManager.start({
+      ...options,
+      cwd,
+      project: cwd !== tasksDir,
+      sandbox,
+      sessionPath,
+      visionExtension: visionExtensionPath(),
+      browserExtension: path.join(currentDirectory, "../extensions/browser.js"),
+      visionConfig: visionConfigPath(),
+      visionUploads: visionUploadsDir(),
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(maxTokens ? { maxTokens } : {}),
+      ...(desktopProvider ? {
+        provider: "openai" as const,
+        model: desktopProvider.model,
+        baseUrl: desktopProvider.config.baseUrl,
+        maxTokens: undefined,
+        providerExtension: path.join(currentDirectory, "../extensions/provider.js"),
+        desktopProvider,
+      } : {}),
+    });
+    return { ...started, cwd };
+  });
+  ipcMain.handle(
+    "side-chat:command",
+    async (_event, rawType: unknown, rawData?: unknown, rawRuntimeId?: unknown) => {
+      const type = requireString(rawType, "侧边聊天命令", { maxLength: 64 });
+      if (!ALLOWED_AGENT_COMMANDS.has(type)) throw new Error(`Unsupported agent command: ${type}`);
+      const data = rawData === undefined ? {} : requireRecord(rawData, "侧边聊天命令内容");
+      assertPayloadLimit(data, IPC_LIMITS.commandPayloadBytes, "侧边聊天命令内容");
+      if (data.message !== undefined) validatePromptMessage(data.message);
+      const runtimeId = rawRuntimeId === undefined ? undefined : requireString(rawRuntimeId, "runtimeId", { maxLength: 128 });
+      return sideChatManager.command(runtimeId, type, data);
+    },
+  );
+  ipcMain.handle("side-chat:stop", (_event, rawRuntimeId?: unknown) =>
+    sideChatManager.stop(rawRuntimeId === undefined ? undefined : requireString(rawRuntimeId, "runtimeId", { maxLength: 128 })),
   );
 }
 
@@ -2022,6 +2109,13 @@ async function addSkillManifests(root: string, files: string[]): Promise<void> {
 
 app.whenReady().then(async () => {
   await initializeTacodeHome();
+  // 侧边聊天是声明式临时会话（Codex 模式）：转录只落盘作崩溃兜底，正常退出后
+  // 下一次启动即清空——「关闭应用后会消失」的语义由这里兑现，UI 永不恢复历史。
+  await fsp.rm(path.join(getTacodeHome(), "side-chats"), { recursive: true, force: true }).catch((error: unknown) => {
+    diagnostics.warn("side-chat", "清理临时侧边聊天目录失败", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   // 启动即记录构建身份：与磁盘 mtime 对照，就能判断这个进程是不是在跑旧产物。
   void (async () => {
     let bundleMtimeMs: number | undefined;

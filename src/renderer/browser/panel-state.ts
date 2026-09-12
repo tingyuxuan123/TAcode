@@ -9,8 +9,20 @@ export type BrowserPanelTab = {
   detached: boolean;
   revision: number;
 };
+export type ReviewPanelTab = { id: "review"; type: "review" };
+export type FilesPanelTab = { id: "files"; type: "files"; selectedPath?: string };
+export type TerminalPanelTab = { id: "terminal"; type: "terminal" };
+/**
+ * 侧边聊天（对齐 Codex 的 side chat）：声明式临时会话，可同主会话并开多个，
+ * `ordinal` 是「侧边聊天 1/2/3」的编号（关闭后补最小空位，不重排已开的）；
+ * `sourceSession` 记录发起时的主会话转录路径，`draft` 携带选中文本预填的草稿。
+ */
+export type SideChatPanelTab = { id: string; type: "side-chat"; ordinal: number; sourceSession?: string; draft?: string };
 export type WorkbenchPanelTab =
-  | { id: string; type: "inspect" }
+  | ReviewPanelTab
+  | FilesPanelTab
+  | TerminalPanelTab
+  | SideChatPanelTab
   | BrowserPanelTab
   | ChildSessionPanelTab
   | FilePanelTab;
@@ -93,7 +105,11 @@ export const createChildSessionPanel = (key: string, info: ChildSessionPanelInfo
 });
 export type PanelState = { tabs: WorkbenchPanelTab[]; active: string };
 export type PanelAction =
-  | { type: "open-inspect" }
+  | { type: "open-review" }
+  | { type: "open-files"; path?: string }
+  | { type: "open-terminal" }
+  | { type: "open-side-chat"; sourceSession?: string; draft?: string; activate?: boolean }
+  | { type: "focus-side-chat" }
   | { type: "open-child-session"; panel: ChildSessionPanelTab; activate?: boolean }
   | { type: "open-file"; path: string; activate?: boolean }
   | { type: "open-browser"; tab: BrowserPanelTab; activate: boolean }
@@ -104,10 +120,27 @@ export type PanelAction =
   | { type: "window-closed"; id: string }
   | { type: "restore"; id: string; tabs: BrowserPanelTab[] };
 
-export const initialPanelState: PanelState = { tabs: [{ id: "inspect", type: "inspect" }], active: "inspect" };
+export const initialPanelState: PanelState = { tabs: [{ id: "review", type: "review" }], active: "review" };
 export const createBrowserPanelId = (): string => `browser-${crypto.randomUUID()}`;
 export const createBrowserPanel = (id: string, page?: BrowserTabSnapshot): BrowserPanelTab => ({
   id, type: "browser", initialTabs: page?.url ? [page] : undefined, page, detached: false, revision: 0,
+});
+
+/** 「侧边聊天 1/2/3」编号取当前未用的最小正整数（关闭中间的编号后新开补位，不重排已开的）。 */
+export function nextSideChatOrdinal(tabs: WorkbenchPanelTab[]): number {
+  const used = new Set(tabs.flatMap((tab) => tab.type === "side-chat" ? [tab.ordinal] : []));
+  let ordinal = 1;
+  while (used.has(ordinal)) ordinal += 1;
+  return ordinal;
+}
+
+export const createSideChatPanelId = (): string => `side-chat-${crypto.randomUUID()}`;
+export const createSideChatPanel = (ordinal: number, options?: { sourceSession?: string; draft?: string }): SideChatPanelTab => ({
+  id: createSideChatPanelId(),
+  type: "side-chat",
+  ordinal,
+  ...(options?.sourceSession ? { sourceSession: options.sourceSession } : {}),
+  ...(options?.draft ? { draft: options.draft } : {}),
 });
 
 export function browserPanelLabel(page: BrowserTabSnapshot | undefined, fallback: string): string {
@@ -125,8 +158,32 @@ export function childSessionPanelLabel(info: ChildSessionPanelInfo, fallback: st
 
 export function panelReducer(state: PanelState, action: PanelAction): PanelState {
   switch (action.type) {
-    case "open-inspect":
-      return { tabs: state.tabs.some((tab) => tab.type === "inspect") ? state.tabs : [...state.tabs, { id: "inspect", type: "inspect" }], active: "inspect" };
+    case "open-review":
+      return { tabs: state.tabs.some((tab) => tab.type === "review") ? state.tabs : [...state.tabs, { id: "review", type: "review" }], active: "review" };
+    case "open-files": {
+      const existing = state.tabs.find((tab): tab is FilesPanelTab => tab.type === "files");
+      if (existing) {
+        return {
+          tabs: action.path ? state.tabs.map((tab) => tab.id === existing.id ? { ...tab, selectedPath: action.path } : tab) : state.tabs,
+          active: existing.id,
+        };
+      }
+      return { tabs: [...state.tabs, { id: "files", type: "files", ...(action.path ? { selectedPath: action.path } : {}) }], active: "files" };
+    }
+    case "open-terminal":
+      return { tabs: state.tabs.some((tab) => tab.type === "terminal") ? state.tabs : [...state.tabs, { id: "terminal", type: "terminal" }], active: "terminal" };
+    case "open-side-chat": {
+      // 侧边聊天是多实例（Codex 模式）：每次 open 都新建编号标签，按 id 而非类型去重。
+      const tab = createSideChatPanel(nextSideChatOrdinal(state.tabs), { sourceSession: action.sourceSession, draft: action.draft });
+      return { tabs: [...state.tabs, tab], active: action.activate === false ? state.active : tab.id };
+    }
+    case "focus-side-chat": {
+      // 快捷键语义：已有侧边聊天时聚焦最新一个，一个都没有才新建（避免连按爆标签）。
+      const existing = state.tabs.filter((tab) => tab.type === "side-chat");
+      if (existing.length > 0) return { ...state, active: existing[existing.length - 1].id };
+      const tab = createSideChatPanel(nextSideChatOrdinal(state.tabs));
+      return { tabs: [...state.tabs, tab], active: tab.id };
+    }
     case "open-child-session": {
       // 同一委派只开一个标签：再次点击时合并信息（两个入口掌握的信息不同，不能互相覆盖）
       // 并激活已有标签。

@@ -74,6 +74,20 @@ export interface SessionTranscript {
   truncated: boolean;
 }
 
+export interface TerminalInfo {
+  id: string;
+  cwd: string;
+  shell: string;
+  running: boolean;
+  startedAt: number;
+  exitCode?: number | null;
+}
+
+export type TerminalEvent =
+  | { id: string; type: "output"; data: string }
+  | { id: string; type: "exit"; exitCode: number | null }
+  | { id: string; type: "error"; message: string };
+
 export interface ProviderStatus {
   id: ProviderId;
   name: string;
@@ -104,6 +118,8 @@ export interface AgentStartOptions {
   sessionPath?: string;
   /** Canonical partitioned transcript; used to repair a missing flat hard-link. */
   storagePath?: string;
+  /** 侧边聊天发起时的主会话转录路径（Codex 模式的来源锚定元数据）。 */
+  sourceSession?: string;
   resume?: boolean;
   extraModels?: string[];
   /** Extra host paths merged into workspace-write sandbox (absolute). */
@@ -265,6 +281,13 @@ export interface DesktopApi {
     pin(id: string, pinned: boolean): Promise<void>;
     rename(id: string, title: string): Promise<void>;
   };
+  terminal: {
+    start(cwd: string): Promise<TerminalInfo>;
+    write(id: string, data: string): Promise<void>;
+    stop(id: string): Promise<void>;
+    list(): Promise<TerminalInfo[]>;
+    onEvent(listener: (event: TerminalEvent) => void): () => void;
+  };
   /** 子代理定义管理（`~/.tacode/subagents/*.md` + 启用状态）。 */
   subagents: {
     list(): Promise<{
@@ -295,6 +318,13 @@ export interface DesktopApi {
     runtimes(): Promise<AgentRuntimeInfo[]>;
     /** 取回序号大于 afterSeq 的事件，用于补齐 snapshot 与实时流之间的缺口。 */
     replay(runtimeId: string | undefined, afterSeq: number): Promise<AgentEvent[]>;
+    onEvent(listener: (event: AgentEvent) => void): () => void;
+    onError(listener: (payload: AgentErrorPayload) => void): () => void;
+  };
+  sideChat: {
+    start(options: AgentStartOptions): Promise<AgentStartResult>;
+    command<T = unknown>(type: string, data?: Record<string, unknown>, runtimeId?: string): Promise<T>;
+    stop(runtimeId?: string): Promise<void>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
     onError(listener: (payload: AgentErrorPayload) => void): () => void;
   };

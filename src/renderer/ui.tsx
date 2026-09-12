@@ -1,6 +1,6 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { Bot, Check, Download, Info, PanelLeftClose, PanelLeftOpen, Target, X } from "lucide-react";
+import { Bot, Check, Download, Info, MessageCirclePlus, PanelLeftClose, PanelLeftOpen, Target, X } from "lucide-react";
 import { Streamdown, defaultRehypePlugins, defaultRemarkPlugins, type Components } from "streamdown";
 import type { AgentSessionStats, ExtensionUiRequest, PermissionMode } from "../shared/types";
 import { workspacePreviewUrl } from "../shared/preview";
@@ -15,7 +15,7 @@ import { effortLabelKey, reasoningLevelsAvailable } from "../shared/thinking";
 import type { ModelOption } from "../shared/model-selection";
 import { EffortPicker, ModelPicker, usePickerPopover } from "./composer-pickers";
 import { PromptToolbar } from "./prompt-toolbar";
-import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, terminalLabel, toolCommand, toolPath, toolSummary, toolWritePreview, toolWriteSource, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type DelegateTaskState, type FileChange, type SessionFile, type SessionTerminal, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
+import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, toolCommand, toolPath, toolSummary, toolWritePreview, toolWriteSource, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type DelegateTaskState, type FileChange, type SessionFile, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
 import { tokenizeCode } from "./highlight";
 import { isTightTableCell } from "./markdown-table";
 import type { AgentSkillCommand } from "../shared/skills";
@@ -1561,13 +1561,9 @@ function fileGlyph(path: string) {
   return /\.(tsx?|jsx?|mjs|cjs|css|json|ya?ml)$/i.test(path) ? "M8 8l-4 4 4 4M16 8l4 4-4 4" : "M6 3h9l5 5v13H6z";
 }
 
-function treeChange(path: string, changes: SessionFile[]) {
-  return changes.find((item) => item.path === path || item.path.endsWith(`/${path}`) || path.endsWith(`/${item.path}`));
-}
-
 export type PanelTab = { id: string; label: string; title?: string };
 
-export type PanelAddItem = { type: string; label: string; icon: ReactNode };
+export type PanelAddItem = { type: string; label: string; icon: ReactNode; hint?: string };
 
 /**
  * Feature tab container for the right-hand panel. Renders a tab bar across the
@@ -1640,7 +1636,7 @@ export function PanelTabs({
   const openAddMenu = (): void => {
     const rect = addWrapRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const width = 184;
+    const width = 200;
     const estimatedHeight = (addItems?.length ?? 0) * 40 + 8;
     let top = rect.bottom + 6;
     if (top + estimatedHeight > window.innerHeight - 8) {
@@ -1726,6 +1722,7 @@ export function PanelTabs({
               >
                 <span className="panel-add-item-icon">{item.icon}</span>
                 <span>{item.label}</span>
+                {item.hint && <span className="panel-add-item-hint">{item.hint}</span>}
               </button>
             ))}
           </div>,
@@ -1783,71 +1780,159 @@ export function PanelPicker({
   );
 }
 
+/**
+ * 通用确认对话框（对齐 App 内 sandboxAsk 的 modal 结构），挂在 body 上避免被面板
+ * 裁剪。可选「不再询问」勾选由调用方持久化。
+ */
+export function ConfirmDialog({ title, detail, confirmLabel, cancelLabel, dontAskLabel, dontAsk, onDontAskChange, onConfirm, onCancel }: {
+  title: string;
+  detail?: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  dontAskLabel?: string;
+  dontAsk?: boolean;
+  onDontAskChange?(next: boolean): void;
+  onConfirm(): void;
+  onCancel(): void;
+}) {
+  return createPortal(
+    <div
+      className="modal"
+      onClick={(event) => {
+        if (event.target !== event.currentTarget) return;
+        onCancel();
+      }}
+    >
+      <div className="panel" role="dialog" aria-modal="true">
+        <h2>{title}</h2>
+        {detail && <p>{detail}</p>}
+        {dontAskLabel && onDontAskChange && (
+          <label className="modal-dont-ask">
+            <input type="checkbox" checked={dontAsk ?? false} onChange={(event) => onDontAskChange(event.target.checked)} />
+            <span>{dontAskLabel}</span>
+          </label>
+        )}
+        <div className="row-actions">
+          <button type="button" className="ghost" onClick={onCancel}>{cancelLabel}</button>
+          <button type="button" className="primary" onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * 主聊天「选中文字 → 在侧边聊天中询问」浮出工具条（对齐 Codex 的
+ * selection overlay）。监听全局 selectionchange，只在转录容器内的非空选区上
+ * 显示；按钮位置跟随选区首行，portal 到 body 避免被虚拟化列表裁剪。
+ */
+export function SelectionAskBar({ containerClassName = "conversation", onAsk }: {
+  /** 转录滚动容器的 className（App 里是 .conversation / .conversation.home）。 */
+  containerClassName?: string;
+  onAsk(text: string): void;
+}) {
+  const { t } = useI18n();
+  const [anchor, setAnchor] = useState<{ top: number; left: number; text: string } | null>(null);
+
+  useEffect(() => {
+    const selector = containerClassName.split(/\s+/).map((name) => `.${name}`).join("");
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const container = document.querySelector(selector);
+      const selection = document.getSelection();
+      if (!container || !selection || selection.isCollapsed || selection.rangeCount === 0) {
+        setAnchor(null);
+        return;
+      }
+      const range = selection.getRangeAt(0);
+      const node = range.commonAncestorContainer;
+      const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node as Element;
+      // 只认转录区里的选区；输入框/命令菜单里的选择不触发。
+      if (!element || !container.contains(element) || element.closest("input, textarea, [contenteditable='true'], .slash-menu")) {
+        setAnchor(null);
+        return;
+      }
+      const text = selection.toString().trim();
+      if (!text) {
+        setAnchor(null);
+        return;
+      }
+      const rect = range.getBoundingClientRect();
+      if (!rect.width && !rect.height) {
+        setAnchor(null);
+        return;
+      }
+      const top = rect.top > 52 ? rect.top - 44 : Math.min(rect.bottom + 10, window.innerHeight - 52);
+      const centered = rect.left + rect.width / 2;
+      const left = Math.min(Math.max(centered, 96), window.innerWidth - 96);
+      setAnchor({ top, left, text });
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    // 任何滚动都可能移动选区的视口位置（含转录内的代码块），rAF 去重后重算即可。
+    const onScroll = () => schedule();
+    document.addEventListener("selectionchange", schedule);
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      document.removeEventListener("selectionchange", schedule);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [containerClassName]);
+
+  if (!anchor) return null;
+  return createPortal(
+    <div className="selection-ask-bar" role="toolbar" style={{ top: anchor.top, left: anchor.left }}>
+      <button
+        type="button"
+        onClick={() => {
+          const text = anchor.text;
+          setAnchor(null);
+          document.getSelection()?.removeAllRanges();
+          onAsk(text);
+        }}
+      >
+        <MessageCirclePlus size={13} strokeWidth={1.8} aria-hidden="true" />
+        <span>{t("selection.askInSideChat")}</span>
+      </button>
+    </div>,
+    document.body,
+  );
+}
+
 export function InspectPanel({
   files = [],
   todos,
-  terminals = [],
-  folder,
-  workspace,
-  refresh,
   running,
   planApproval = false,
   onApprovePlan,
   onRefinePlan,
   onOpen,
   onUndo,
-  onStopTerminal,
-  onStopAllTerminals,
 }: {
   files?: SessionFile[];
   todos: SessionTodo[];
-  terminals?: SessionTerminal[];
-  folder?: string;
-  workspace?: string;
-  refresh?: number | boolean;
   running?: boolean;
   planApproval?: boolean;
   onApprovePlan?(): void;
   onRefinePlan?(text: string): void;
   onOpen(file: FileChange): void;
   onUndo?(): void;
-  onStopTerminal?(id: string): void;
-  onStopAllTerminals?(): void;
 }) {
   const { t } = useI18n();
   const [refineOpen, setRefineOpen] = useState(false);
   const [refineText, setRefineText] = useState("");
   const [changesOpen, setChangesOpen] = useState(true);
-  const [termsOpen, setTermsOpen] = useState(false);
-  const [openTerm, setOpenTerm] = useState<string>();
-  const [working, setWorking] = useState(true);
-  const [treeOpen, setTreeOpen] = useState(true);
-  const [entries, setEntries] = useState<string[]>([]);
-  const [prefix, setPrefix] = useState("");
-  const [tick, setTick] = useState(0);
   const dragging = useRef(false);
   const edits = files.filter((file) => file.kind === "edit");
-  useEffect(() => window.harness.workspace.onChanged(() => {
-    if (workspace) setTick((value) => value + 1);
-  }), [workspace]);
-  useEffect(() => {
-    if (!workspace) {
-      setEntries([]);
-      setPrefix("");
-      return;
-    }
-    let gone = false;
-    void window.harness.workspace.list(workspace).then((next) => {
-      if (!gone) setEntries(next);
-    }).catch(() => {
-      if (!gone) setEntries([]);
-    });
-    return () => {
-      gone = true;
-    };
-  }, [workspace, refresh, tick]);
-  const visible = filterMentionPaths(entries, prefix).filter((file) => file !== prefix);
-  if (!workspace && todos.length === 0 && !planApproval) return null;
+  if (edits.length === 0 && todos.length === 0 && !planApproval) {
+    return <div className="inspect-pane"><p className="panel-empty">{t("inspect.noReview")}</p></div>;
+  }
   return (
     <div className="inspect-pane">
       {planApproval && onApprovePlan && (
@@ -1923,98 +2008,6 @@ export function InspectPanel({
             {onUndo && !running && (
               <button type="button" className="inspect-undo" onClick={onUndo}>{t("inspect.undo")}</button>
             )}
-          </div>
-        </Fold>
-      )}
-      {workspace && (
-        <Fold title={t("inspect.terminals", { n: terminals.length })} open={termsOpen} onToggle={() => setTermsOpen((current) => !current)}>
-          {terminals.length === 0 ? (
-            <p className="sidebar-empty">{t("inspect.noTerminals")}</p>
-          ) : (
-            <div className="inspect-changes">
-              {terminals.map((job) => {
-                const label = terminalLabel(job.command);
-                return (
-                  <div key={job.id} className={openTerm === job.id ? "inspect-term open" : "inspect-term"}>
-                    <button
-                      type="button"
-                      className="inspect-file"
-                      onClick={() => setOpenTerm((current) => current === job.id ? undefined : job.id)}
-                    >
-                      <i className="inspect-live" />
-                      <span title={job.command}>{label}</span>
-                      <small>{t("inspect.terminalLive")}</small>
-                    </button>
-                    {openTerm === job.id && <pre className="inspect-cmd">{job.command}</pre>}
-                    {onStopTerminal && (
-                      <button type="button" className="inspect-stop" onClick={() => onStopTerminal(job.id)}>
-                        {t("inspect.stop")}
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-              {onStopAllTerminals && terminals.length > 1 && (
-                <button type="button" className="inspect-undo" onClick={onStopAllTerminals}>{t("inspect.stopAll")}</button>
-              )}
-            </div>
-          )}
-        </Fold>
-      )}
-      {workspace && (
-        <Fold title={t("inspect.files")} open={working} onToggle={() => setWorking((current) => !current)}>
-          <div className="tree">
-            <button
-              type="button"
-              className={treeOpen ? "tree-dir open" : "tree-dir"}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                void window.harness.workspace.reveal(prefix || ".", workspace);
-              }}
-              onClick={() => {
-                if (prefix) setPrefix(prefix.replace(/[^/]+\/$/, ""));
-                else setTreeOpen((current) => !current);
-              }}
-            >
-              <Icon className="chevron" path="M6 9l6 6 6-6" size={12} />
-              <Icon path="M3 7h6l2 2h10v10H3z" size={14} />
-              <span>{prefix ? prefix.replace(/\/$/, "") : folder ?? t("inspect.workspace")}</span>
-            </button>
-            {treeOpen && visible.length === 0 && <p className="sidebar-empty">{t("inspect.noFiles")}</p>}
-            {treeOpen && visible.map((file) => {
-              const dir = file.endsWith("/");
-              const name = (prefix ? file.slice(prefix.length) : file).replace(/\/$/, "");
-              const change = dir ? undefined : treeChange(file, files);
-              const dirty = change?.kind === "edit" || (dir && files.some((item) => item.kind === "edit" && item.path.startsWith(file)));
-              return (
-                <button
-                  key={file}
-                  type="button"
-                  className={dirty ? "inspect-file edit" : "inspect-file"}
-                  draggable
-                  onDragStart={(event) => {
-                    dragging.current = true;
-                    beginTreeDrag(event, file, name);
-                  }}
-                  onDragEnd={() => {
-                    treeDragPath = "";
-                    requestAnimationFrame(() => { dragging.current = false; });
-                  }}
-                  onClick={() => {
-                    if (dragging.current) return;
-                    if (dir) setPrefix(file);
-                    else onOpen(change ?? { path: file, additions: 0, deletions: 0 });
-                  }}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    void window.harness.workspace.reveal(file, workspace);
-                  }}
-                >
-                  <Icon path={dir ? "M3 7h6l2 2h10v10H3z" : fileGlyph(file)} size={14} />
-                  <span>{name}</span>
-                </button>
-              );
-            })}
           </div>
         </Fold>
       )}
@@ -2344,6 +2337,7 @@ export function PromptBar({
   permission,
   onPermission,
   onCommand,
+  builtinCommands = [],
   stats,
   onCompact,
   skillCommands = [],
@@ -2372,6 +2366,8 @@ export function PromptBar({
   permission: string;
   onPermission(value: string): void;
   onCommand(command: string): void;
+  /** 输入即执行的内建斜杠命令（如 /side）：选中后清空输入并回调 onCommand，而不是插入文本。 */
+  builtinCommands?: Array<{ id: string; description?: string }>;
   stats?: AgentSessionStats;
   onCompact?(): void;
   skillCommands?: AgentSkillCommand[];
@@ -2518,10 +2514,11 @@ export function PromptBar({
     });
   };
 
-  const slash = skillCommands.length > 0 && (value === "/" || /^\/[^\s]*$/.test(value));
-  const commands = skillCommands
-    .map((skill) => ({ id: skillSlashCommand(skill.name) }))
-    .filter((item) => item.id.startsWith(value || "/"));
+  const slash = (skillCommands.length > 0 || builtinCommands.length > 0) && (value === "/" || /^\/[^\s]*$/.test(value));
+  const commands = [
+    ...builtinCommands.map((command) => ({ id: command.id, description: command.description, builtin: true })),
+    ...skillCommands.map((skill) => ({ id: skillSlashCommand(skill.name), description: skill.description, builtin: false })),
+  ].filter((item) => item.id.startsWith(value || "/"));
 
   const insertSkillCommand = (command: string) => {
     const next = `${command} `;
@@ -2533,6 +2530,22 @@ export function PromptBar({
       area.current?.focus();
       if (area.current) placeCaret(area.current, caret);
     });
+  };
+
+  // 内建命令（/side 等）即选即执行：清空输入并回调，不像 skill 那样插入文本。
+  const runBuiltinCommand = (command: string) => {
+    area.current?.replaceChildren();
+    setBlank(true);
+    setValue("");
+    setPicked(0);
+    onCommand(command);
+  };
+
+  const pickSlashCommand = () => {
+    const command = commands[picked] ?? commands[0];
+    if (!command) return;
+    if (command.builtin) runBuiltinCommand(command.id);
+    else insertSkillCommand(command.id);
   };
 
   const sendNow = () => {
@@ -2565,8 +2578,7 @@ export function PromptBar({
       }
       if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey) {
         event.preventDefault();
-        const cmd = commands[picked] ?? commands[0];
-        if (cmd) insertSkillCommand(cmd.id);
+        pickSlashCommand();
         return;
       }
       if (event.key === "Escape") {
@@ -2604,7 +2616,7 @@ export function PromptBar({
     }
     if (slash && event.key === "Enter" && commands[0] && !event.shiftKey) {
       event.preventDefault();
-      insertSkillCommand((commands[picked] ?? commands[0]).id);
+      pickSlashCommand();
       return;
     }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -2708,7 +2720,7 @@ export function PromptBar({
           onSubmit={(event) => {
             event.preventDefault();
             if (slash && commands[0]) {
-              insertSkillCommand((commands[picked] ?? commands[0]).id);
+              pickSlashCommand();
               return;
             }
             sendNow();
@@ -2775,9 +2787,11 @@ export function PromptBar({
                 key={item.id}
                 type="button"
                 className={index === picked ? "on" : ""}
-                onClick={() => insertSkillCommand(item.id)}
+                title={item.description}
+                onClick={pickSlashCommand}
               >
                 <code>{item.id}</code>
+                {item.description && <span className="slash-command-description">{item.description}</span>}
               </button>
             ))}
           </div>

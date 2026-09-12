@@ -4791,6 +4791,15 @@ textarea::selection,
   font: calc(11.5px * var(--ui-font-scale))/1 var(--mono);
   flex: none;
 }
+.slash-command-description {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-3);
+  font-size: calc(11.5px * var(--ui-font-scale));
+}
 .slash-menu.files button span {
   min-width: 0;
   overflow: hidden;
@@ -5230,6 +5239,29 @@ textarea::selection,
   flex-direction: column;
   gap: 12px;
   box-shadow: var(--shadow-overlay);
+}
+/* 「不再询问」勾选行：.panel label 会把弹窗里的 label 强制竖排、.panel input 会给
+   输入框加内嵌底，这里都用更高优先级的选择器翻回来。 */
+.panel .modal-dont-ask {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(12.5px * var(--ui-font-scale));
+  font-weight: 400;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.panel .modal-dont-ask input {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  border-radius: 4px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  accent-color: var(--brand);
+  cursor: pointer;
 }
 .panel.wide {
   width: min(440px, 92vw);
@@ -7743,6 +7775,254 @@ kbd {
 .file-panel-code { margin: 0; font-family: var(--mono); font-size: calc(12.5px * var(--code-font-scale)); line-height: 1.6; }
 .file-panel-error { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: calc(12.5px * var(--ui-font-scale)); }
 .file-panel-frame { flex: 1; width: 100%; height: 100%; border: none; background: #fff; }
+.panel-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+.panel-empty {
+  margin: auto;
+  padding: 24px;
+  color: var(--ink-3);
+  font-size: calc(13px * var(--ui-font-scale));
+  text-align: center;
+}
+.panel-empty.is-error,
+.side-chat-error {
+  color: var(--red);
+}
+.panel-icon-button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-3);
+}
+.panel-icon-button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.files-panel,
+.terminal-panel,
+.side-chat-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--page);
+}
+.files-panel-toolbar,
+.terminal-panel-toolbar,
+.side-chat-toolbar {
+  flex: none;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.files-search {
+  min-width: 0;
+  flex: 1;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink-3);
+}
+.files-breadcrumb {
+  max-width: 92px;
+  min-width: 28px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-3);
+  font: 11px var(--mono);
+  text-align: left;
+}
+.files-breadcrumb:not(:disabled):hover { background: var(--hover); color: var(--ink); }
+.files-breadcrumb:disabled { cursor: default; }
+.files-search:focus-within {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+.files-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: calc(12px * var(--ui-font-scale));
+}
+.files-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px 20px;
+}
+.files-entry {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: calc(12.5px * var(--ui-font-scale));
+  text-align: left;
+}
+.files-entry { cursor: pointer; }
+.files-entry:hover { background: var(--hover); color: var(--ink); }
+.files-entry span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-entry svg { flex: none; color: var(--ink-3); }
+.files-entry.is-dirty span { color: var(--ink); font-weight: 500; }
+.files-dirty-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--green);
+}
+.terminal-panel-title,
+.side-chat-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-2);
+  font-size: calc(12.5px * var(--ui-font-scale));
+  font-weight: 600;
+}
+.terminal-panel-title svg,
+.side-chat-title svg { color: var(--ink-3); }
+.terminal-panel-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.terminal-panel-output {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  padding: 14px;
+  background: var(--code-screen);
+  color: var(--code-screen-ink);
+  font: calc(12px * var(--code-font-scale))/1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.terminal-panel-input {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.terminal-panel-prompt { color: var(--green); font: 12px var(--mono); }
+.terminal-panel-input input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 12px var(--mono);
+}
+.side-chat-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px 20px;
+}
+.side-chat-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--ink-3);
+  text-align: center;
+}
+.side-chat-empty p { max-width: 24ch; margin: 0; font-size: calc(12.5px * var(--ui-font-scale)); line-height: 1.5; }
+.side-chat-empty .side-chat-empty-note { font-size: calc(11.5px * var(--ui-font-scale)); color: var(--ink-3); opacity: 0.85; }
+.side-chat-ended {
+  flex: none;
+  margin: 0 10px 10px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--inset);
+  color: var(--ink-3);
+  font-size: calc(12px * var(--ui-font-scale));
+}
+.side-chat-recreate {
+  margin-left: auto;
+  flex: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 4px 9px;
+  background: var(--hover);
+  color: var(--ink);
+  font-size: calc(12px * var(--ui-font-scale));
+  font-family: inherit;
+  cursor: pointer;
+}
+.side-chat-recreate:hover { background: var(--line); }
+.side-chat-status,
+.side-chat-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 0 0;
+  font-size: calc(12px * var(--ui-font-scale));
+}
+.side-chat-composer {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.side-chat-composer textarea {
+  min-width: 0;
+  flex: 1;
+  min-height: 34px;
+  max-height: 120px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: 0;
+  padding: 8px 9px;
+  background: var(--inset);
+  color: var(--ink);
+  font: inherit;
+  font-size: calc(12.5px * var(--ui-font-scale));
+}
+.side-chat-composer textarea:focus { border-color: var(--line-strong); }
 .child-session-host {
   flex: 1;
   min-width: 0;
@@ -8593,6 +8873,38 @@ kbd {
   font-weight: 400;
 }
 
+/* 主聊天选中文字 → 「在侧边聊天中询问」浮出工具条（portal 到 body） */
+.selection-ask-bar {
+  position: fixed;
+  z-index: 15;
+  transform: translateX(-50%);
+}
+.selection-ask-bar button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+  color: var(--ink-2);
+  font-size: calc(12px * var(--ui-font-scale));
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.selection-ask-bar button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.selection-ask-bar button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* "+" anchored add menu (panel tab bar) */
 .inspect-add-wrap {
   position: relative;
@@ -8605,7 +8917,7 @@ kbd {
 }
 .panel-add-menu {
   position: fixed;
-  width: 184px;
+  width: 200px;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -8638,6 +8950,11 @@ kbd {
   width: 20px;
   flex: none;
   color: var(--ink-2);
+}
+.panel-add-item-hint {
+  margin-left: auto;
+  color: var(--ink-3);
+  font: calc(11px * var(--ui-font-scale)) var(--mono);
 }
 /* Per-tab close control in the panel tab bar */
 .inspect-tab-close {

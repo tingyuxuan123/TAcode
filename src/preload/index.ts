@@ -68,6 +68,13 @@ const api: DesktopApi = {
     pin: (id, pinned) => ipcRenderer.invoke("sessions:pin", id, pinned),
     rename: (id, title) => ipcRenderer.invoke("sessions:rename", id, title),
   },
+  terminal: {
+    start: (cwd) => ipcRenderer.invoke("terminal:start", cwd),
+    write: (id, data) => ipcRenderer.invoke("terminal:write", id, data),
+    stop: (id) => ipcRenderer.invoke("terminal:stop", id),
+    list: () => ipcRenderer.invoke("terminal:list"),
+    onEvent: (listener) => subscribe("terminal:event", listener),
+  },
   subagents: {
     list: () => ipcRenderer.invoke("subagents:list"),
     read: (name) => ipcRenderer.invoke("subagents:read", name),
@@ -115,6 +122,13 @@ const api: DesktopApi = {
       ipcRenderer.invoke("agent:replay", runtimeId ?? activeRuntimeId, afterSeq),
     onEvent: (listener) => subscribe<AgentEvent>("agent:event", listener),
     onError: (listener) => subscribe<AgentErrorPayload>("agent:error", listener),
+  },
+  sideChat: {
+    start: (options) => ipcRenderer.invoke("side-chat:start", options),
+    command: (type, data, runtimeId) => ipcRenderer.invoke("side-chat:command", type, data, runtimeId),
+    stop: (runtimeId) => ipcRenderer.invoke("side-chat:stop", runtimeId),
+    onEvent: (listener) => subscribe<AgentEvent>("side-chat:event", listener),
+    onError: (listener) => subscribe<AgentErrorPayload>("side-chat:error", listener),
   },
   onAppCommand: (listener) => subscribe<string>("app:command", listener),
   providers: {

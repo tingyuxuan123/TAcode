@@ -192,6 +192,7 @@ export function validateAgentStartOptions(value: unknown): AgentStartOptions {
     ...(optionalBoolean(record.network, "network") !== undefined ? { network: record.network as boolean } : {}),
     ...(optionalString(record.sessionPath, "sessionPath", { maxLength: 4_096 }) ? { sessionPath: record.sessionPath as string } : {}),
     ...(optionalString(record.storagePath, "storagePath", { maxLength: 4_096 }) ? { storagePath: record.storagePath as string } : {}),
+    ...(optionalString(record.sourceSession, "sourceSession", { maxLength: 4_096 }) ? { sourceSession: record.sourceSession as string } : {}),
     ...(optionalBoolean(record.resume, "resume") !== undefined ? { resume: record.resume as boolean } : {}),
     ...(optionalStringArray(record.extraModels, "extraModels", { maxItems: 200, maxItemLength: 200 }) ? { extraModels: record.extraModels as string[] } : {}),
     ...(optionalStringArray(record.writableRoots, "writableRoots", { maxItems: 64, maxItemLength: 4_096 }) ? { writableRoots: record.writableRoots as string[] } : {}),
