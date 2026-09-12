@@ -172,7 +172,7 @@ export function EffortPicker({ value, levels, onChange, down }: {
       <button ref={popover.trigger} type="button" lang={locale} className={`effort-trigger${value === "off" ? " off" : ""}`}
         aria-label={`${t("composer.effort")}：${label}`} title={`${t("composer.effort")}：${label}`}
         aria-haspopup="dialog" aria-expanded={popover.open} aria-controls={popover.open ? popover.id : undefined}
-        onClick={() => popover.setOpen(!popover.open)}><Brain size={18} /><span className="toolbar-label">{label}</span></button>
+        onClick={() => popover.setOpen(!popover.open)}><Brain size={16} /><span className="toolbar-label">{label}</span></button>
       {popover.open && popover.placement && createPortal(
         <div ref={popover.panel} data-picker-popover={popover.id} data-toolbar-owner={popover.toolbarOwner} id={popover.id} className="effort-picker-panel picker-panel" role="dialog"
           aria-label={t("composer.effort")} style={popover.placement}>

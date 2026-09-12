@@ -452,20 +452,20 @@ export function ContextStats({
         title={t("context.monitor")}
         onClick={() => setOpen((was) => !was)}
       >
-        <svg width="14" height="14" viewBox="0 0 14 14" className="stats-dial" aria-hidden="true">
-          <circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="2" />
+        <svg width="16" height="16" viewBox="0 0 16 16" className="stats-dial" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="1.34" />
           {percent !== undefined && (
             <circle
-              cx="7"
-              cy="7"
-              r="5.5"
+              cx="8"
+              cy="8"
+              r="6.5"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2"
-              strokeDasharray={34.56}
-              strokeDashoffset={34.56 - (Math.min(100, Math.max(0, percent)) / 100) * 34.56}
+              strokeWidth="1.34"
+              strokeDasharray={40.84}
+              strokeDashoffset={40.84 - (Math.min(100, Math.max(0, percent)) / 100) * 40.84}
               strokeLinecap="round"
-              transform="rotate(-90 7 7)"
+              transform="rotate(-90 8 8)"
             />
           )}
         </svg>
@@ -2859,7 +2859,7 @@ export function PromptBar({
             disabled={attachments.length >= MAX_UPLOAD_IMAGES}
             onClick={() => picker.current?.click()}
           >
-            <Icon path="M12 5v14M5 12h14" size={15} />
+            <Icon path="M12 5v14M5 12h14" size={16} />
             <span className="toolbar-menu-label">{t("composer.uploadImage")}</span>
           </button>
           <ModelPicker value={modelKey} fallback={model} options={models} down={hero} disabled={disabled} onChange={onModel} />
@@ -2967,7 +2967,7 @@ export function PermissionPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
       >
-        <Icon path={selected.icon} size={14} className="permission-trigger-icon" />
+        <Icon path={selected.icon} size={16} className="permission-trigger-icon" />
         <span className="toolbar-label">{selected.label}</span>
         <Icon path="M6 9l6 6 6-6" size={12} className="toolbar-chevron" />
       </button>
