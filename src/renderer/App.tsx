@@ -68,6 +68,7 @@ import {
   TurnNav,
   UserTurn,
 } from "./ui";
+import { MessageList, type MessageListHandle, type MessageListItem } from "./message-list";
 import { WorkbenchPanels } from "./browser/workbench-panels";
 import { useBrowserPanels } from "./browser/use-browser-panels";
 import { useDelegationTabs } from "./browser/use-delegation-tabs";
@@ -533,6 +534,7 @@ export function App() {
   const [agentSkills, setAgentSkills] = useState<AgentSkillCommand[]>([]);
   const [stoppedJobs, setStoppedJobs] = useState<string[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
+  const messageList = useRef<MessageListHandle>(null);
   const agentCwd = useRef<string | undefined>(undefined);
   const sessionRef = useRef<string | undefined>(undefined);
   const sending = useRef(false);
@@ -638,9 +640,9 @@ export function App() {
     [messages, stoppedJobs],
   );
   const workingFiles = useMemo(() => collectWorkingFiles(tools, mentionedFiles(messages)), [messages, tools]);
-  const chatTodos = useMemo(() => collectTodos(messages), [messages]);
+  const chatTodos = useMemo(() => collectTodos(messages, tools), [messages, tools]);
   const todos = chatTodos.length ? chatTodos : featureTodos;
-  const progressTasks = useMemo(() => collectProgressTasks(messages), [messages]);
+  const progressTasks = useMemo(() => collectProgressTasks(messages, tools), [messages, tools]);
   const planApproval = planAwaitingApproval(permission, running, todos);
   const darwin = window.harness.platform === "darwin";
   const connected = activeChatProvider(providers);
@@ -1579,6 +1581,128 @@ export function App() {
     return () => ro.disconnect();
   }, [home, steering.length]);
 
+  // 会话列表条目：窗口化渲染（见 message-list.tsx），只有视口附近的条目会真正挂载。
+  // 这里只负责把「一轮提问/回答」「等待中」「确认卡片」描述成条目；条目内容在进入
+  // 视口时才构造，因此历史轮次在流式期间不再每帧重新创建元素树。
+  //
+  // 条目对象按组缓存：流式期间每帧只有最后一组在变（groupConversation 对未变的
+  // 前缀组返回同一引用），其余条目复用旧对象，让 MessageList 的 `items` 在纯内容
+  // 更新帧保持稳定（配合 MemoItem，已挂载的历史条目整体跳过对账）。
+  const listItemCache = useRef<Array<{ source: unknown; signature: string; item: MessageListItem }>>([]);
+  const lastListItems = useRef<MessageListItem[] | undefined>(undefined);
+  const listItems: MessageListItem[] = useMemo(() => {
+    const cache = listItemCache.current;
+    const items: MessageListItem[] = [];
+    for (let index = 0; index < groups.length; index += 1) {
+      const group = groups[index];
+      const cached = cache[index];
+      if (group.type === "user") {
+        if (cached && cached.source === group.message && cached.signature === "") {
+          items.push(cached.item);
+          continue;
+        }
+        const anchor = turnAnchorId(group.id);
+        const item: MessageListItem = {
+          key: group.id,
+          anchor,
+          render: () => (
+            <UserTurn anchor={anchor} text={group.message.text} images={group.message.images} />
+          ),
+        };
+        items.push(item);
+        cache[index] = { source: group.message, signature: "", item };
+        continue;
+      }
+      const recovered = assistantErrorRecovered(group.messages, groups, index);
+      const isLastGroup = index === groups.length - 1;
+      const showRetry = !running && isLastGroup
+        && assistantGroupHasRecoverableError(group.messages)
+        && !recovered
+        && !assistantGroupSucceeded(group.messages);
+      const recoverableFailStreak = recoverableStreaks[index] ?? 0;
+      const signature = isLastGroup
+        ? `${running}|${Boolean(uiRequest)}|${stopping}|${recovered}|${recoverableFailStreak}|${showRetry}`
+        : `${recovered}|${recoverableFailStreak}|${showRetry}`;
+      if (cached && cached.source === group && cached.signature === signature) {
+        items.push(cached.item);
+        continue;
+      }
+      const item: MessageListItem = {
+        key: group.id,
+        render: () => (
+          <AssistantTurn
+            messages={group.messages}
+            running={isLastGroup && running}
+            awaiting={isLastGroup && Boolean(uiRequest)}
+            stopping={isLastGroup && stopping}
+            canAutoCollapse={canAutoCollapse}
+            errorRecovered={recovered}
+            recoverableFailStreak={recoverableFailStreak}
+            onOpenFile={setPreview}
+            onRetry={showRetry ? () => {
+              void sendMessage(t("composer.retryContinue"));
+            } : undefined}
+          />
+        ),
+      };
+      items.push(item);
+      cache[index] = { source: group, signature, item };
+    }
+    if (waiting) {
+      items.push({
+        key: "waiting",
+        render: () => (
+          <article className="turn">
+            <div className="turn-trace">
+              <Thinking
+                text=""
+                work={[]}
+                tools={[]}
+                live
+                label={loading ? t("think.starting") : t("think.waiting")}
+              />
+            </div>
+          </article>
+        ),
+      });
+    }
+    if (uiRequest) {
+      const request = uiRequest;
+      items.push({
+        key: "approval",
+        render: () => (
+          <ApprovalCard
+            request={request}
+            lastTurn={[...messages].reverse().find((item) => item.role === "user" && item.text.trim() !== "/undo")?.text}
+            onRespond={request.id === "harness:undo" ? async (response) => {
+              if (response.confirmed !== true) {
+                pendingUndo.current = undefined;
+                return;
+              }
+              const pending = pendingUndo.current;
+              if (!pending) return;
+              await applyUndo(pending.files);
+              pendingUndo.current = undefined;
+            } : undefined}
+            onDone={() => {
+              setUiRequest(undefined);
+            }}
+            onError={setToast}
+          />
+        ),
+      });
+    }
+    // 全部命中时保持上一次的数组引用：MessageList / Virtualizer 的 props 在
+    // 流式帧里真正稳定，虚拟列表内部不再做无谓的按帧对账。
+    const previous = lastListItems.current;
+    if (previous && previous.length === items.length
+      && items.every((item, index) => previous[index] === item)) {
+      return previous;
+    }
+    lastListItems.current = items;
+    return items;
+  }, [groups, recoverableStreaks, running, stopping, uiRequest, loading, messages, t]);
+
   const homeRecents = (
     workspace
       ? projects.find((item) => item.item.path === workspace)?.sessions ?? []
@@ -1790,7 +1914,11 @@ export function App() {
         home={home}
         title={sessions.find((session) => isSameSession(session, activeSession))?.title || (workspace ? baseName(workspace) : undefined)}
         composer={home ? undefined : composer}
-        nav={<TurnNav items={anchors} />}
+        nav={<TurnNav items={anchors} onJump={(id) => {
+          // 跳转是一次性改变滚动位置：等窗口化列表把目标条目挂载、测量完再重新取样
+          // 滚动锚点，避免随后按旧锚点补偿把这次跳转拉回（见 use-follow-scroll 的 reanchor）。
+          messageList.current?.scrollToAnchor(id, { onSettled: follow.reanchor });
+        }} />}
         inspect={workspace ? (
           <WorkbenchPanels panels={browserPanels} onError={setToast} inspect={
             <InspectPanel
@@ -1890,75 +2018,14 @@ export function App() {
             </div>
           )}
           {groups.length > 0 && (
-            <div className={progressTasks.length > 0 ? "messages has-progress" : "messages"} ref={follow.contentRef}>
-              {groups.map((group, index) => {
-                if (group.type === "user") {
-                  return (
-                    <UserTurn
-                      key={group.id}
-                      anchor={turnAnchorId(group.id)}
-                      text={group.message.text}
-                      images={group.message.images}
-                    />
-                  );
-                }
-                const recovered = assistantErrorRecovered(group.messages, groups, index);
-                const isLastGroup = index === groups.length - 1;
-                const showRetry = !running && isLastGroup
-                  && assistantGroupHasRecoverableError(group.messages)
-                  && !recovered
-                  && !assistantGroupSucceeded(group.messages);
-                return (
-                  <AssistantTurn
-                    key={group.id}
-                    messages={group.messages}
-                    running={isLastGroup && running}
-                    awaiting={isLastGroup && Boolean(uiRequest)}
-                    stopping={isLastGroup && stopping}
-                    canAutoCollapse={canAutoCollapse}
-                    errorRecovered={recovered}
-                    recoverableFailStreak={recoverableStreaks[index] ?? 0}
-                    onOpenFile={setPreview}
-                    onRetry={showRetry ? () => {
-                      void sendMessage(t("composer.retryContinue"));
-                    } : undefined}
-                  />
-                );
-              })}
-              {waiting && (
-                <article className="turn">
-                  <div className="turn-trace">
-                    <Thinking
-                      text=""
-                      work={[]}
-                      tools={[]}
-                      live
-                      label={loading ? t("think.starting") : t("think.waiting")}
-                    />
-                  </div>
-                </article>
-              )}
-              {uiRequest && (
-                <ApprovalCard
-                  request={uiRequest}
-                  lastTurn={[...messages].reverse().find((item) => item.role === "user" && item.text.trim() !== "/undo")?.text}
-                  onRespond={uiRequest.id === "harness:undo" ? async (response) => {
-                    if (response.confirmed !== true) {
-                      pendingUndo.current = undefined;
-                      return;
-                    }
-                    const pending = pendingUndo.current;
-                    if (!pending) return;
-                    await applyUndo(pending.files);
-                    pendingUndo.current = undefined;
-                  } : undefined}
-                  onDone={() => {
-                    setUiRequest(undefined);
-                  }}
-                  onError={setToast}
-                />
-              )}
-            </div>
+            <MessageList
+              ref={messageList}
+              items={listItems}
+              scrollerRef={scroller}
+              contentRef={follow.contentRef}
+              progressActive={progressTasks.length > 0}
+              cacheKey={`${workspace ?? ""}:${transcriptKey}`}
+            />
           )}
         </div>
         {!home && groups.length > 0 && <ProgressOverlay tasks={progressTasks} streaming={running && !stopping} atBottom={follow.atBottom} onFollowLatest={follow.followLatest} />}

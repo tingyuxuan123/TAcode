@@ -796,13 +796,26 @@ function joinThinking(previous?: string, incoming?: string): string | undefined 
 
 export function collapseThinking(...parts: Array<string | undefined>): string {
   const result: string[] = [];
+  // 快照去重：块必须是「互不为前缀」的（下面的替换/跳过保证了这一点），所以与新块
+  // 精确相等的老块至多只有一个，且它就是线性扫描会命中的第一个。先查表、查不到再扫，
+  // 语义与两两比较完全一致，但追加式快照（每条 message_update 都带完整累积文本）从
+  // O(块数²) 降到 O(块数)：93k 思考 ≈ 848 块，原来每次合并要几十万次 startsWith。
+  const index = new Map<string, number>();
   for (const part of parts) {
     for (const piece of (part ?? "").split(/\n{2,}/)) {
       const text = piece.trim();
       if (!text) continue;
-      const index = result.findIndex((item) => item.startsWith(text) || text.startsWith(item));
-      if (index < 0) result.push(text);
-      else if (text.length > result[index]!.length) result[index] = text;
+      const at = index.get(text) ?? result.findIndex((item) => item.startsWith(text) || text.startsWith(item));
+      if (at < 0) {
+        result.push(text);
+        index.set(text, result.length - 1);
+        continue;
+      }
+      if (text.length > result[at]!.length) {
+        index.delete(result[at]!);
+        result[at] = text;
+        index.set(text, at);
+      }
     }
   }
   return result.join("\n\n");
@@ -1736,11 +1749,14 @@ export function parseFeaturesJson(input: string): SessionTodo[] {
   }
 }
 
-export function collectTodos(messages: ChatMessage[]): SessionTodo[] {
+export function collectTodos(messages: ChatMessage[], precomputedTools?: ToolActivity[]): SessionTodo[] {
+  // App 每帧都会调这里；tools 由调用方复用（sessionTools 本身也要扫全量消息），
+  // 不传时保持原行为。注意 plan 进度覆盖也要用同一份，别再扫一遍。
+  const tools = precomputedTools ?? sessionTools(messages);
   let fromPlan: SessionTodo[] | undefined;
   let lastPlanId: string | undefined;
   const fromTools: SessionTodo[] = [];
-  for (const tool of sessionTools(messages)) {
+  for (const tool of tools) {
     const planned = todosFromPlanTool(tool);
     if (planned) {
       fromPlan = planned;
@@ -1768,7 +1784,7 @@ export function collectTodos(messages: ChatMessage[]): SessionTodo[] {
   }
   if (fromPlan?.length) {
     return lastPlanId
-      ? overlayPlanProgress(fromPlan, turnWork(messages), sessionTools(messages), lastPlanId)
+      ? overlayPlanProgress(fromPlan, turnWork(messages), tools, lastPlanId)
       : fromPlan;
   }
   if (fromTools.length) return fromTools;
@@ -1846,8 +1862,8 @@ export function delegateTaskLabel(role: string, task: string): string {
  * 输出顺序：计划步骤按计划顺序，委派子任务紧跟其所属步骤；两者维度不同（顺序 vs 并行），
  * 浮层据此分层渲染并分开计数。
  */
-export function collectProgressTasks(messages: ChatMessage[]): ProgressTask[] {
-  const tools = sessionTools(messages);
+export function collectProgressTasks(messages: ChatMessage[], precomputedTools?: ToolActivity[]): ProgressTask[] {
+  const tools = precomputedTools ?? sessionTools(messages);
   // update_plan 每推进一步都会被再调一次（同一份计划的不同快照）。只取最后一次有
   // 步骤的规划工具，否则同一份计划会按调用次数在「任务规划」列表里重复出现。
   let latestPlan: { id: string; steps: SessionTodo[] } | undefined;

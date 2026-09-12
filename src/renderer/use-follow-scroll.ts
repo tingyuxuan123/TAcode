@@ -2,6 +2,15 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
+/**
+ * 距离底部多近就直接贴底（不再缓动）。
+ *
+ * 流式期间内容每帧只长高几像素，缓动会一直落后一点点（实测距底平均 6.5px、139/835 帧
+ * 超过 2px），滚动条于是每帧都在小幅追位置，看起来就是「抖」。近距直接贴底、
+ * 远距（跳转/回到底部）仍然缓动滑行。
+ */
+const SNAP_DISTANCE = 96;
+
 /** Calculate one frame of the bottom-follow easing without reading the DOM. */
 export function nextScrollTop(currentTop: number, target: number, dt: number, viewportHeight: number, reduced = false): number {
   const distance = target - currentTop;
@@ -33,13 +42,26 @@ export function useFollowScroll(scope: string, enabled = true) {
     frame.current = undefined;
   }, []);
 
-  const capture = useCallback(() => {
-    if (!viewport || !content || following.current) return;
+  /** 记录视口上沿附近的那个锚点及其相对位置，供内容长高时保持阅读位置。 */
+  const measureAnchor = useCallback(() => {
+    if (!viewport || !content) return;
     const top = viewport.getBoundingClientRect().top;
     const nodes = content.querySelectorAll<HTMLElement>("[data-scroll-anchor]");
     const visible = Array.from(nodes).find((node) => node.getBoundingClientRect().bottom > top);
     anchor.current = visible ? { id: visible.dataset.scrollAnchor!, top: visible.getBoundingClientRect().top - top } : undefined;
   }, [viewport, content]);
+
+  const capture = useCallback(() => {
+    // 跟随中人不在阅读历史，位置本来就跟内容走，不需要锚点。
+    if (following.current) return;
+    measureAnchor();
+  }, [following, measureAnchor]);
+
+  /**
+   * 重新记录锚点。程序化跳转（如轮次导航）会一次性改变滚动位置，之后的内容测量
+   * 如果还按跳转前的锚点补偿，就会把跳转拉回去；跳转后立刻调用这个重新取样。
+   */
+  const reanchor = useCallback(() => { measureAnchor(); }, [measureAnchor]);
 
   const followLatest = useCallback(() => {
     if (!viewport || !enabled) return;
@@ -60,7 +82,9 @@ export function useFollowScroll(scope: string, enabled = true) {
       const dt = Math.min(64, Math.max(1, now - lastFrame));
       lastFrame = now;
       const target = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-      const next = nextScrollTop(viewport.scrollTop, target, dt, viewport.clientHeight, reduced);
+      const next = Math.abs(target - viewport.scrollTop) <= SNAP_DISTANCE
+        ? target
+        : nextScrollTop(viewport.scrollTop, target, dt, viewport.clientHeight, reduced);
       viewport.scrollTop = next;
       lastAssigned.current = viewport.scrollTop;
       currentTop.current = viewport.scrollTop;
@@ -100,21 +124,22 @@ export function useFollowScroll(scope: string, enabled = true) {
       if (resizeShield.current !== 0) return;
       if (lastAssigned.current !== undefined && Math.abs(lastAssigned.current - viewport.scrollTop) < 1) return;
       const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-      let bottom;
+      // 跟随中：位置被动变化就立刻拉回底部。窗口化之后，滚动过程中会不断测量新进入
+      // 视口的条目，虚拟列表会为了“保持内容位置”反方向微调 scrollTop（未测量条目的
+      // 估算高度被真实高度替换时也会这样），单次就有几十到几百像素；如果把它当成
+      // “用户离开了底部”，就会停在离底部一截的位置不再自愈。
+      // 用户的主动滚动一定先经过 intent()（wheel/touchstart/pointerdown/键盘）把跟随
+      // 关掉，所以这里不会和用户抢滚动。
       if (following.current) {
-        // 正在跟随：仅在明显离开底部（超过较大阈值）时翻转，避免阈值边缘抖动。
-        bottom = distance <= 32;
-      } else {
-        // 已离开跟随：回到足够接近底部（较小阈值）才恢复跟随，形成滞回。
-        bottom = distance <= 16;
+        if (distance > 1) followLatest();
+        return;
       }
-      const wasFollowing = following.current;
+      // 已离开跟随：回到足够接近底部（较小阈值）才恢复跟随，形成滞回。
+      const bottom = distance <= 16;
       following.current = bottom;
       setAtBottom(bottom);
       capture();
-      // 用户从历史滚回底部即自动恢复跟随：立即吸附到最底并进入后续自动跟随，
-      // 无需手动点“到最新”。只在“非跟随 → 回到底部”时触发，避免跟随中的重复调用。
-      if (bottom && !wasFollowing) followLatest();
+      if (bottom) followLatest();
     };
     const resize = (entries: ResizeObserverEntry[] = []) => {
       if (following.current && entries.some((entry) => entry.target === viewport)) {
@@ -167,5 +192,5 @@ export function useFollowScroll(scope: string, enabled = true) {
     };
   }, [scope, enabled, viewport, content, capture, cancel, followLatest]);
 
-  return { viewportRef: setViewport, contentRef: setContent, atBottom, following, followLatest };
+  return { viewportRef: setViewport, contentRef: setContent, atBottom, following, followLatest, reanchor };
 }

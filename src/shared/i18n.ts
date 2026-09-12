@@ -238,7 +238,9 @@ const zh = {
 
   "flow.process": "执行过程",
   "flow.summary": "执行过程：{tools} 次工具调用，{messages} 条消息",
-  "flow.collapseIn": "{n}s 后自动收起",
+  "flow.last": "最后：{label}",
+  "flow.earlierSteps": "更早的 {n} 步",
+  "flow.collapseEarlier": "收起更早的 {n} 步",
   "flow.toolCount": "{n} 次工具调用",
   "flow.running": "执行中",
   "flow.parallel": "{n} 项工具运行中",
@@ -964,7 +966,9 @@ const en: Record<MessageKey, string> = {
 
   "flow.process": "Execution process",
   "flow.summary": "Execution process: {tools} tool calls, {messages} messages",
-  "flow.collapseIn": "Collapse in {n}s",
+  "flow.last": "Last: {label}",
+  "flow.earlierSteps": "{n} earlier steps",
+  "flow.collapseEarlier": "Hide {n} earlier steps",
   "flow.toolCount": "{n} tool calls",
   "flow.running": "Running",
   "flow.parallel": "{n} tools running",

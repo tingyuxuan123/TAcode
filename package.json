@@ -11,6 +11,7 @@
     "postinstall": "node scripts/ensure-electron.mjs",
     "predev": "node scripts/ensure-electron.mjs && rm -rf dist-electron && tsup",
     "dev": "concurrently \"vite --host 127.0.0.1 --port 5177 --strictPort\" \"wait-on tcp:5177 && env -u ELECTRON_RUN_AS_NODE cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5177 electron .\"",
+    "dev:attach": "env -u ELECTRON_RUN_AS_NODE cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5177 electron . --remote-debugging-port=9222",
     "build:electron": "rm -rf dist-electron && tsup",
     "build:renderer": "vite build",
     "build": "pnpm build:electron && pnpm build:renderer",
@@ -43,7 +44,10 @@
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "shiki": "^4.4.3"
+    "remend": "^1.3.1",
+    "shiki": "^4.4.3",
+    "streamdown": "^2.6.0",
+    "virtua": "^0.51.2"
   },
   "devDependencies": {
     "@types/node": "^24.0.10",

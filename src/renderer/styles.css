@@ -219,6 +219,9 @@ body,
 html {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* 让 height: auto ↔ 0 也能参与过渡（过程区收起/展开的 240ms 才是真正的平滑高度动画）。
+     仅影响显式声明了 transition 的地方；Chromium 129+ 支持，其余浏览器自动忽略。 */
+  interpolate-size: allow-keywords;
 }
 body {
   background: var(--page);
@@ -1410,6 +1413,10 @@ textarea::selection,
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   background: var(--page);
+  /* 跟随是我们自己写的（use-follow-scroll）：关掉浏览器的滚动锚定，否则内容高度变化时
+     Chrome 会自己改一次 scrollTop，和跟随、虚拟列表的位移补偿在同一帧里互相拉扯，
+     表现出来就是生成过程中滚动条来回跳（codeg-main 同样在滚动容器上关掉锚定）。 */
+  overflow-anchor: none;
 }
 /* Content dissolves at the title bar instead of being cut off mid-line. The mask makes
    this scroller a containing block for fixed children, so the image lightbox is portaled. */
@@ -1420,10 +1427,25 @@ textarea::selection,
   display: flex;
   align-items: center;
 }
+/* 消息列表的内容块：只有左右内边距，纵向留白交给首/尾条目（条目的绝对定位以
+   本块的内容盒为基准，纵向 padding 不会把条目推下去，见 message-list.tsx）。 */
 .messages {
   width: var(--col);
-  padding: 28px 28px 20px;
+  padding: 0 28px 20px;
   margin: 0 auto;
+}
+/* virtua 会在自己的容器上写 pointer-events: none（该属性可继承），
+   整个消息列表会因此不可点、不可选、复制按钮与链接全部失效；内容必须始终可交互。 */
+.messages > div {
+  pointer-events: auto !important;
+}
+/* 窗口化后每个条目是一行：横向铺满内容块，纵向由 virtua 定位。
+   `flow-root` 让条目内 `.turn` 的 margin 不塌陷出去，否则测量高度会偏小、条目互相重叠。 */
+.message-item {
+  display: flow-root;
+}
+.message-item.first {
+  padding-top: 28px;
 }
 /* 进度胶囊（或回到底部箭头）浮在转写底部之上：有任务时多留出它的高度，
    否则滚到底时它会盖住最后几行内容（见 ProgressOverlay 的 bottom 定位）。 */
@@ -2169,7 +2191,9 @@ textarea::selection,
 .inspect-undo:hover {
   color: var(--ink);
 }
-.turn:last-child {
+/* 窗口化后 `.turn` 不再是列表的直接子项，`:last-child` 会命中每一条；
+   末条边距交给 message-list 标记的 `last` 条目。 */
+.message-item.last .turn {
   margin-bottom: 8px;
 }
 .markdown :first-child {
@@ -2460,7 +2484,7 @@ textarea::selection,
   padding: 2px 0;
 }
 
-.execution-flow { min-width: 0; }
+.execution-flow { min-width: 0; interpolate-size: allow-keywords; }
 .flow-process { margin-bottom: 16px; }
 .flow-header {
   display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px;
@@ -2476,16 +2500,23 @@ textarea::selection,
 .flow-tool-icon-more { font-size: calc(11px * var(--ui-font-scale)); font-variant-numeric: tabular-nums; }
 .flow-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-status.error { color: var(--red); }
-.flow-countdown { flex: none; white-space: nowrap; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); font-variant-numeric: tabular-nums; }
-.flow-header .rotated, .flow-tool-line .rotated { transform: rotate(90deg); }
-.flow-header svg, .flow-tool-line > svg:last-child { transition: transform 160ms ease; }
-.flow-collapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 240ms ease, opacity 180ms ease; }
-.flow-collapse.open { grid-template-rows: 1fr; opacity: 1; }
+.flow-last { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); font-size: calc(12px * var(--ui-font-scale)); }
+.flow-header .rotated, .flow-tool-line .rotated, .flow-earlier-toggle .rotated { transform: rotate(90deg); }
+.flow-header svg, .flow-tool-line > svg:last-child, .flow-earlier-toggle > svg { transition: transform 160ms ease; }
+/* 收起/展开用 height 过渡（配合 .execution-flow 上的 interpolate-size），
+   而不是 grid-template-rows 的 0fr/1fr —— 后者会把子内容压扁，超长过程收起时
+   会挤成一团再弹开，视觉上就是「跳动」。height 过渡只裁剪，不变形。 */
+.flow-collapse { height: 0; overflow: hidden; opacity: 0; transition: height 240ms ease, opacity 180ms ease; }
+.flow-collapse.open { height: auto; opacity: 1; }
 .flow-collapse-inner { min-height: 0; overflow: hidden; }
 .flow-viewport-wrap { position: relative; }
 .flow-viewport { min-width: 0; }
-.flow-viewport.bounded { max-height: min(320px, 45vh); overflow-y: auto; overscroll-behavior: contain; }
 .flow-items { display: flex; flex-direction: column; gap: 12px; padding: 8px 2px 12px 0; }
+.flow-earlier { min-width: 0; }
+.flow-earlier-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 2px 8px 2px 4px; border-radius: 6px; color: var(--ink-3); font-size: calc(12px * var(--ui-font-scale)); }
+.flow-earlier-toggle:hover { background: var(--hover); color: var(--ink); }
+.flow-earlier-items { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; animation: flow-reveal 180ms ease; }
+@keyframes flow-reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .flow-text { min-width: 0; overflow-wrap: anywhere; }
 .flow-items .flow-text { color: var(--ink-2); font-size: calc(14px * var(--chat-font-scale)); line-height: 1.65; }
 .flow-items .flow-text > :first-child, .flow-thought-text > :first-child { margin-top: 0; }
@@ -2493,7 +2524,7 @@ textarea::selection,
 .flow-thought-label { display: flex; align-items: center; gap: 7px; color: var(--ink-2); font-weight: 550; font-size: calc(12px * var(--ui-font-scale)); margin-bottom: 7px; }
 .flow-thought-body { padding: 12px 14px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: 0 1px 2px #1c19170a; }
 .flow-thought-text { color: var(--ink-2); font-size: calc(13.5px * var(--chat-font-scale)); line-height: 1.65; overflow: hidden; overflow-wrap: anywhere; }
-.flow-thought-text.clipped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+.flow-thought-text.clipped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .flow-thought-text p { margin: 0 0 0.65em; }
 .flow-thought-text pre { border-radius: 6px; }
 .flow-thought-toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 9px; color: var(--ink-3); font-size: calc(12px * var(--ui-font-scale)); }
@@ -2569,8 +2600,62 @@ textarea::selection,
   .flow-status { max-width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .flow-collapse, .flow-header svg, .flow-tool-line > svg:last-child { transition: none; }
+  .flow-collapse, .flow-header svg, .flow-tool-line > svg:last-child, .flow-earlier-toggle > svg { transition: none; }
+  .flow-earlier-items { animation: none; }
   .flow-spinner { animation: none; }
+}
+
+/* ===== 流式落字的观感层 ===== */
+/* Streamdown 的 animate 插件只给「新增文本」包 data-sd-animate span（已渲染的
+   内容不重放）；keyframes 由宿主提供。变量由插件内联给出：动画名 / 时长 / 缓动 / 延迟。 */
+[data-sd-animate] {
+  animation: var(--sd-animation) var(--sd-duration, 160ms) var(--sd-easing, ease) both;
+  animation-delay: var(--sd-delay, 0ms);
+}
+@keyframes sd-fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 流式落字光标：贴在流式文本最后一个段落之后（.live 由 execution-flow 按流式状态挂）。
+   只挑段落收尾，避开表格/代码块等 ::after 位置奇怪的场景。 */
+.markdown.flow-text.live > p:last-child::after,
+.markdown.flow-thought-text.live > p:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: var(--ink-3);
+  vertical-align: text-bottom;
+  animation: caret-pulse 1.15s ease-in-out infinite;
+}
+
+/* 工具行状态图标切换（spinner→结果图标）或新行挂载时的轻淡入；节点不重建则不重放。 */
+.flow-tool-line > svg:first-child {
+  animation: flow-glyph-in 160ms ease;
+}
+@keyframes flow-glyph-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 重内容（思考全文 / 更早的步骤）延迟渲染期间，开关按钮降透明度示意未完成。 */
+.flow-thought-toggle[data-pending],
+.flow-earlier-toggle[data-pending] {
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-sd-animate] {
+    animation: none;
+  }
+  .markdown.flow-text.live > p:last-child::after,
+  .markdown.flow-thought-text.live > p:last-child::after,
+  .flow-tool-line > svg:first-child {
+    animation: none;
+  }
 }
 
 .trace {

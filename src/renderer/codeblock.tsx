@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import { useI18n } from "./i18n";
 import { getDisplayName, highlightToTokens, isHighlighterReady, onHighlighterReady, type HighlightTokensResult } from "./shiki";
@@ -19,6 +19,15 @@ import { tokenizeCode, type CodeToken } from "./highlight";
  */
 
 const THROTTLE_MS = 80;
+
+/** 高亮结果的行 token 缺失时的共享空数组：保持引用稳定，让 ShikiLines 的 memo 生效。 */
+const EMPTY_LINE_TOKENS: { content: string; color?: string }[] = [];
+
+interface TokenState {
+  result: HighlightTokensResult | null;
+  /** 产生这份高亮结果时的完整代码文本（判断「追加式变化」用）。 */
+  source: string;
+}
 
 /** 代码区固定深色高亮（one-dark-pro），不随界面主题切换，与 --code-screen 配套。 */
 const CODE_APP_THEME = "dark";
@@ -92,9 +101,40 @@ export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockPro
   const langOrText = language || "text";
   const rawLines = useMemo(() => trimmed.split("\n"), [trimmed]);
 
-  const [tokenResult, setTokenResult] = useState<HighlightTokensResult | null>(() =>
-    highlightToTokens(trimmed, langOrText, CODE_APP_THEME));
+  const [tokenState, setTokenState] = useState<TokenState>(() => ({
+    result: highlightToTokens(trimmed, langOrText, CODE_APP_THEME),
+    source: trimmed,
+  }));
   const [copied, setCopied] = useState(false);
+
+  const bodyRef = useRef<HTMLPreElement>(null);
+  // 流式跟随：代码区有 max-height，最新几行会落在块的内部滚动区之外。
+  // 只在「内容在增长」且「用户没有主动滚上去」时跟到底部；用户滚回底部自动恢复跟随。
+  const grownTo = useRef(trimmed.length);
+  const pinned = useRef(true);
+  const selfScroll = useRef(false);
+
+  useEffect(() => {
+    const node = bodyRef.current;
+    if (!node) return;
+    const onScroll = () => {
+      if (selfScroll.current) { selfScroll.current = false; return; }
+      pinned.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 8;
+    };
+    node.addEventListener("scroll", onScroll, { passive: true });
+    return () => node.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useLayoutEffect(() => {
+    const node = bodyRef.current;
+    const previous = grownTo.current;
+    grownTo.current = trimmed.length;
+    if (!node || trimmed.length <= previous || !pinned.current) return;
+    selfScroll.current = true;
+    node.scrollTop = node.scrollHeight;
+    // 已经在底部时不会触发 scroll 事件，兜底把标记清掉，避免吞掉用户的下一次滚动。
+    requestAnimationFrame(() => { selfScroll.current = false; });
+  }, [trimmed]);
 
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastUpdateRef = useRef(Date.now());
@@ -102,13 +142,13 @@ export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockPro
   const latestRef = useRef({ text: trimmed, lang: langOrText });
   latestRef.current = { text: trimmed, lang: langOrText };
 
-  // 高亮器未就绪（tokenResult 为 null）：订阅就绪事件，首次出 token。
+  // 高亮器未就绪（result 为 null）：订阅就绪事件，首次出 token。
   // 未就绪期间 ShikiLines 收到空 token，按纯文本渲染，颜色继承 --code-screen-ink。
   useEffect(() => {
-    if (tokenResult) return;
+    if (tokenState.result) return;
     return onHighlighterReady(() =>
-      setTokenResult(highlightToTokens(trimmed, langOrText, CODE_APP_THEME)));
-  }, [tokenResult, trimmed, langOrText]);
+      setTokenState({ result: highlightToTokens(trimmed, langOrText, CODE_APP_THEME), source: trimmed }));
+  }, [tokenState, trimmed, langOrText]);
 
   // 节流刷新：流式输出时重算 token。
   // 注意：先判节流再分词——整段代码的 token 化与代码长度成正比，流式期间每帧都算一遍
@@ -119,7 +159,7 @@ export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockPro
     if (elapsed >= THROTTLE_MS) {
       lastUpdateRef.current = now;
       const sync = highlightToTokens(trimmed, langOrText, CODE_APP_THEME);
-      if (sync) setTokenResult(sync);
+      if (sync) setTokenState({ result: sync, source: trimmed });
       return;
     }
     if (timeoutRef.current) return;
@@ -128,7 +168,7 @@ export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockPro
       lastUpdateRef.current = Date.now();
       const latest = latestRef.current;
       const tokens = highlightToTokens(latest.text, latest.lang, CODE_APP_THEME);
-      if (tokens) setTokenResult(tokens);
+      if (tokens) setTokenState({ result: tokens, source: latest.text });
     }, THROTTLE_MS - elapsed);
   }, [trimmed, langOrText]);
 
@@ -144,6 +184,26 @@ export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockPro
     }
   }, [trimmed]);
 
+  // 按行稳定 token 引用：流式期间每 80ms 出一份新高亮结果，整段重渲染会让
+  // 未变化的行也跟着重建 span。追加式更新（新文本以旧文本为前缀）下只有尾部
+  // 几行在变——文本相同的行复用上一份的行 token 数组，ShikiLines 的 memo
+  // 就能跳过它们；非追加式变化（编辑/重渲染整段）则全量取新。
+  const stableLinesRef = useRef<{ rawLines: string[]; tokens: ({ content: string; color?: string }[] | null)[] }>({ rawLines: [], tokens: [] });
+  const stableLines = useMemo(() => {
+    const previous = stableLinesRef.current;
+    const previousSource = previous.rawLines.join("\n");
+    const appendOnly = previousSource.length <= trimmed.length
+      && (previousSource === trimmed || trimmed.startsWith(previousSource));
+    const next = rawLines.map((rawLine, index) => {
+      if (appendOnly && rawLine === previous.rawLines[index] && previous.tokens[index]) {
+        return previous.tokens[index]!;
+      }
+      return tokenState.result?.lines[index] ?? null;
+    });
+    stableLinesRef.current = { rawLines, tokens: next };
+    return next;
+  }, [tokenState, rawLines, trimmed]);
+
   return (
     <div className="code-block-wrapper">
       <div className="code-block-bar">
@@ -155,12 +215,13 @@ export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockPro
       </div>
       <pre
         className="code-block-body"
+        ref={bodyRef}
         style={{ maxHeight }}
       >
         <code>
           {rawLines.map((rawLine, index) => (
             <span key={index} className="code-line-plain">
-              <ShikiLines tokens={tokenResult?.lines[index] ?? []} rawLine={rawLine} />
+              <ShikiLines tokens={stableLines[index] ?? EMPTY_LINE_TOKENS} rawLine={rawLine} />
               {index < rawLines.length - 1 && "\n"}
             </span>
           ))}
@@ -174,18 +235,42 @@ export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockPro
  * useShikiTokens — 供「读取文件详情」「文件抽屉」复用的 Shiki token hook。
  * 返回按行 token（Shiki 就绪时）或 null（未就绪），调用方用 tokenizeCode 降级。
  * 主题变化 / 高亮器就绪时自动重算。
+ *
+ * 节流：同步分词与代码长度成正比（实测 5k=6ms / 20k=24ms / 50k=59ms / 100k=118ms），
+ * 而流式输出期间代码每帧都在变——展开中的 `read_file` 行若每帧整段重算，单帧就会被
+ * 拖到几十毫秒。这里与 CodeBlock 一样先判节流再分词；一次性变化（打开文件）仍立即出结果。
  */
+const HIGHLIGHT_THROTTLE_MS = 120;
+
 export function useShikiTokens(code: string, language: string, theme?: string): HighlightTokensResult | null {
   const [result, setResult] = useState<HighlightTokensResult | null>(() =>
     isHighlighterReady() ? highlightToTokens(code, language, theme) : null);
+  const latest = useRef({ code, language, theme });
+  latest.current = { code, language, theme };
+  const lastRun = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!isHighlighterReady()) {
       return onHighlighterReady(() => setResult(highlightToTokens(code, language, theme)));
     }
-    setResult(highlightToTokens(code, language, theme));
+    const elapsed = Date.now() - lastRun.current;
+    if (elapsed >= HIGHLIGHT_THROTTLE_MS) {
+      lastRun.current = Date.now();
+      setResult(highlightToTokens(code, language, theme));
+      return undefined;
+    }
+    if (timer.current) return undefined;
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      lastRun.current = Date.now();
+      const next = latest.current;
+      setResult(highlightToTokens(next.code, next.language, next.theme));
+    }, HIGHLIGHT_THROTTLE_MS - elapsed);
     return undefined;
   }, [code, language, theme]);
+
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
   return result;
 }

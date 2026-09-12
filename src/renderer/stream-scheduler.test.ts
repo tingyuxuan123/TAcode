@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamScheduler } from "./stream-scheduler";
-import { nextStreamText } from "./stream-text";
 
 const update = (value: string) => ({ type: "message_update", value });
 
@@ -60,24 +59,5 @@ describe("stream scheduling", () => {
     expect(dispatch).toHaveBeenCalledExactlyOnceWith([update("new")]);
     scheduler.dispose();
     expect(vi.getTimerCount()).toBe(0);
-  });
-});
-
-describe("stream text", () => {
-  it("advances by complete graphemes and eventually catches up", () => {
-    const target = "中文 e\u0301 👨‍👩‍👧‍👦 complete";
-    let displayed = "";
-    for (let elapsed = 0; displayed !== target && elapsed <= 160; elapsed += 16) {
-      displayed = nextStreamText(displayed, target, elapsed);
-      expect(target.startsWith(displayed)).toBe(true);
-      expect(displayed.endsWith("\ud83d")).toBe(false);
-      expect(displayed.endsWith("\u200d")).toBe(false);
-    }
-    expect(displayed).toBe(target);
-  });
-  it("bounds lag and replaces revised snapshots", () => {
-    expect(nextStreamText("short", "short" + "x".repeat(20000), 160)).toBe("short" + "x".repeat(20000));
-    expect(nextStreamText("old", "replacement", 10)).toBe("replacement");
-    expect(nextStreamText("done", "done", 10)).toBe("done");
   });
 });

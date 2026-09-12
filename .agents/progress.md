@@ -1,5 +1,18 @@
 # 模型供应商管理进度
 
+## 2026-09-12：对齐 ZCode 会话效果——逐词淡入 / 落字光标 / 跳转收敛 / 高度缓存（00:00-00:50，Asia/Shanghai）
+
+- 起因：用户「会话展示卡卡的、不够丝滑，想做成 ZCode 那种效果」。前两轮已修 Markdown 子树重建与流式分段，这轮先量化再动手：新增 `scripts/message-list-perf.mjs`（真实 Electron 窗口跑 150 轮生产组件链路，量流式跟随/翻历史/锚点跳转的帧间隔与 scrollTop 逆向写入）；另用合成会话对 App 每帧重算的 9 个收集器做了微基准（150 轮合计 0.38ms/帧）。
+- 结论修正：**收集器不是主因**（微基准），生产构建下流式跟随与翻历史本来就满帧（p95≈18ms、逆向 0 次）。真正的三个问题：①流式首帧增长有 155ms 的孤立长帧（每帧全量对账已挂载条目）；②锚点跳进「从未测量过」的区域时落点漂移（实测差 38 条 ≈14k px，锚点根本没挂载）；③观感层缺 ZCode 那种「逐词淡入 + 落字光标」。
+- 改动：
+  1. `message-list.tsx`：条目套 `MemoItem`（item 引用不变则整棵子树跳过对账）；新增跨会话的已测高度缓存（按 `cacheKey\0条目key`，virtua 挂载时以 `cache` 快照注入，defaultSize 用已测高度中位数）；`scrollToAnchor` 校正循环重写——目标未挂载时**等安静 150ms 再补一次 `scrollToIndex`（最多 8 轮）**。关键教训：逐帧去抢会跟 virtua 的测量补偿拉锯（实测 0↔226px 每帧互写、297 次不收敛且位置单调漂移），必须让它自己消化测量、间歇校正。
+  2. `App.tsx`：`listItems` 按组缓存（流式帧只重建末条；signature 覆盖 running/awaiting/stopping/recovered/streak/showRetry），全命中时保持数组引用稳定；`collectTodos`/`collectProgressTasks` 复用已算好的 `sessionTools`（原来内部各扫 1-2 遍）。
+  3. `codeblock.tsx`：高亮 token 按行稳定化——追加式更新下文本未变的行复用上一份 token 数组（非追加式编辑全量取新），ShikiLines 的 memo 由此生效，流式中不再每 80ms 全量重建整块 span。
+  4. `ui.tsx` + `execution-flow.tsx` + `styles.css`：启用 Streamdown 自带逐词淡入（`animated` + `isAnimating`——**只传 animated 不生效**，插件挂链要 isAnimating 为真；keyframes 由宿主 CSS 提供，`fill-mode: both` 接错线会导致新文字不可见，已用生产构建验证 `animationName: sd-fadeIn` 且文字可见）；流式文本容器加 `.live`，落字光标用 `p:last-child::after` 伪元素（Streamdown 自带 caret 依赖 Tailwind，本仓库没有）；工具行状态图标切换加淡入；重内容展开（思考全文/更早步骤）改 `useTransition` 延迟渲染 + 按钮降透明度示意；`:root { interpolate-size: allow-keywords }` 让过程区收起的 height auto↔0 过渡真正生效；以上动画全部有 prefers-reduced-motion 降级。
+- 量化对比（同 fixture 同驱动，生产构建）：流式最差帧 **155.1ms → 35.8ms**（>20ms 帧 4→3~4，p50/p95 持平 16.7/18）；滚动 p95 17.8→17.7 持平满帧；锚点跳转落点误差 **~14k px（差 38 条）→ 200px**，重开会话（高度缓存生效）后 **28px**；跳转校正拉锯写入 297→有界（≤8 轮间歇校正）。冒烟回归（窗口化/跳转/底部留白/跟随）通过。
+- 已知边界：①`MemoItem` 缓存靠 groupConversation 的前缀复用，中途插入消息（undo/重试）会整体重建一轮，属预期；②高度缓存在页面整刷（reload）后失效（模块级 Map 在渲染进程内存里），只覆盖会话切换；③探针的「重开跳转」其实是 reload，测不到高度缓存收益，28px 那格来自 virtua 自身测量收敛——缓存收益要在真实「切走再切回」里才可见；④stream-live-text 夹具的自动开播在 StrictMode 下被 started ref 挡掉（既有问题），验证时手动调 `__streamPerf.start()`。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 85 文件 775 用例通过；`TACODE_SMOKE_ONLY=message-list pnpm test:browser` 冒烟通过；探针 A/B 数字见上。逐词淡入/光标需真实流式确认观感（待用户发消息后用 `profile-dev-app.mjs --watch` 收尾）。未提交、未发布、未改 AGENTS.md。
+
 ## 2026-09-11：修「会话运行中很卡」——流式渲染每帧重建 Markdown 子树（11:00-11:25，Asia/Shanghai）
 
 - 起因：用户贴活动监视器截图——`Electron Helper (Renderer)` 101% CPU、常驻内存 ~975MB，父进程是 TACode，说「会话运行中很卡」。
@@ -716,3 +729,175 @@
 - 验证：pnpm typecheck 通过；pnpm test 84 文件 / 752 用例全过；pnpm build 通过。
 - 剩余（未做）：F5（工具集变更写入 session 供事后对齐，目前只有 worker stderr 的 `[tool-set]` 一行）、F6（工具被策略收起时的 turn 内能力说明，本轮只做到了「提示按激活集描述 + 不可用时的诚实说明」）。
 - 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：执行过程折叠体感改进（展开 100% 高度 / 离屏才静默收起 / 折叠态显示最后一步）（16:58，Asia/Shanghai）
+
+- 反馈：用户反馈 ExecutionFlow 的折叠体感差，核心诉求是「展开时高度按内容 100%，不要出现第二个滚动条」，并要求先做出来看效果。
+- 根因：`.flow-viewport.bounded` 在 live 且有回复时给过程区 `max-height: min(320px, 45vh)` + `overflow-y: auto` + `overscroll-behavior: contain`，在消息流里形成嵌套滚动陷阱（滚到底也不传给外层），且该视口带 `tabIndex=0`，Tab 会停在其中。折叠侧则是结束后 3 秒倒计时自动收起，每秒跳动的 `flow.collapseIn` 文案会打断阅读。
+- 改（`src/renderer/execution-flow.tsx`、`src/renderer/styles.css`）：
+  - 删除 `bounded` 状态与 `.flow-viewport.bounded` 规则、`tabIndex`、`onWheelCapture`/`onPointerDownCapture`/`onKeyDownCapture` 的交互标记；过程区改为按内容自然高度展开，整页只保留外层一个滚动条。
+  - 移除 `useFollowScroll`（过程区不再内部滚动，`scroll.atBottom` 这层保护随之失效）。
+  - 自动收起改为 `IntersectionObserver` 观察 `.flow-process`：只有过程区完全滚出视口（`intersectionRatio === 0`）且 `canAutoCollapse()` 为真时静默延迟 600ms 收起；用户手动展开过（`interacted`）、失败/中断/等待确认/缺结果等状态照旧保持展开。删除 `flow.collapseIn` 中英词条。
+  - 折叠态 header 新增「最后：<最后一步工具的 label · chip>」（新增 `flow.last` 中英词条与 `.flow-last` 样式），不展开也能看出刚才做到哪一步。
+- 验证：pnpm typecheck 通过；pnpm test 84 文件 / 773 用例全过。
+- 未做（用户先看效果再定）：思考「超过 4 行才出现展开按钮」的隐藏阈值、`grid-template-rows` 收起动画对超长内容的跳动、折叠摘要文案偏长、`prefix` 里 `flow.summary` 的措辞。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：执行过程第二版（最近 N 步 + 取消思考隐藏阈值 + 高度过渡）（17:05，Asia/Shanghai）
+
+- 背景：上一版把过程区改为按内容 100% 高度后，一轮里思考/输出很长时页面仍会明显变长。用户确认继续处理三件事：过程项「默认只展开最近几步」、思考条目的「超过 4 行才出现展开按钮」隐藏阈值、收起动画对超长内容的跳动。
+- 改（`src/renderer/execution-flow.tsx`）：
+  - 新增 `RECENT_STEP_WINDOW = 4`：过程项按「最近 4 步」分组，更早的收成一行「更早的 N 步」（`flow.earlierSteps` / `flow.collapseEarlier` 中英词条），点击才渲染旧项（收起时不进 DOM，避免长会话的渲染开销）。`live` 开始新一轮时重置为收起。原 `LIVE_CHILD_WINDOW` 保持用于高频更新冻结，两者语义不同故分开常量。
+  - `Thought` 的裁剪判定去掉「4 行 × lineHeight」的手算阈值：改为默认 `-webkit-line-clamp: 2` 预览，用 `scrollHeight > clientHeight + 1` 判断真实溢出，只有真溢出才出现「展开思考」；展开态跳过测量并保留上次判定（否则展开后 `clientHeight` 等于全文高度会误判成「不溢出」，按钮消失）。按钮显示条件为 `overflowing || expanded`。
+  - 顺带修 `FreezeCell` 的空缓存缺陷：原来 `useRef` 初始 `{ sig, node: null }`，若组件首次就以 `freeze=true` 挂载（正是「展开更早的 N 步」时旧项才首次渲染的情况），签名不变会直接返回 `null`、什么都不渲染；改为缓存可为 `null` 并在缺失时 build。
+- 改（`src/renderer/styles.css`）：
+  - `.flow-collapse` 从 `grid-template-rows: 0fr/1fr` 换成 `height: 0 → auto` 过渡（`.execution-flow` 上开 `interpolate-size: allow-keywords`，Electron 37 / Chromium 138 支持）。grid 方案会把子内容压扁，超长过程收起时整块挤成一团再弹开，就是「跳动」的来源；height 过渡只裁剪不变形。不支持的浏览器只是没有动画，`height: auto` 仍正确，不会隐藏内容。
+  - `.flow-thought-text.clipped` 行数 4 → 2；新增 `.flow-earlier*` 样式与 `flow-reveal` 淡入关键帧；`prefers-reduced-motion` 下同时关掉新动画。
+- 验证：pnpm typecheck 通过；pnpm test 84 文件 / 773 用例全过；pnpm build:renderer 通过（未跑 `pnpm build`，避免删除正在被 dev 会话读取的 `dist-electron/runtime/rpc-entry.js`）。
+- 未做：过程里 `text` 类型（中间说明段落）仍不裁剪；流式进行中的当前思考仍全文显示、结束后才收成 2 行；折叠摘要 `flow.summary` 文案偏长。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：会话消息列表窗口化（virtua）——「运行中滚动卡」（20:15，Asia/Shanghai）
+
+- 背景：用户反馈「滚动还是有性能问题」，问下来是**运行中**滚动卡（「暂停运行再滚动就还好」），并要求参考 `~/Downloads/codeg-main`；用户明确选择「按 codeg-main 引入 virtua」。
+- 先量后改（避免大改错方向）：用真实会话 JSONL 量 App 每次渲染的派生计算（`groupConversation` / `recoverableFailStreaks` / `turnAnchors` / `sessionTools` / `sessionTerminals` / `mentionedFiles` / `collectTodos` / `collectProgressTasks` / `collectWorkingFiles`），最大会话（51MB、182 条消息）合计约 0.6ms/帧，**不是**瓶颈。瓶颈是每帧 `groups.map` 把整棵消息列表（全部历史轮 + 当前轮）重新创建元素并交给 React 遍历提交，成本随历史轮数线性增长，运行中与滚动抢主线程。自建滚动探针（合成 40–200 轮、长思考流式、程序化上下滚动）合成数据下都是 60fps 且 0 长任务，测不出差异，用户据此叫停探针路线，直接落地窗口化。
+- 改动：
+  - 新增 `src/renderer/message-list.tsx`：`MessageList` 用 virtua `Virtualizer`（`data` + 函数 children），**只有进入视口（含 `bufferSize` 1200 缓冲）的条目才构造元素与 DOM**；`.messages` 容器仍挂 `useFollowScroll` 的 `contentRef`（高度变化与锚点查找都在它上面）；对外 `scrollToAnchor`（锚点→索引→`scrollToIndex`，再逐帧按真实 DOM 位置校正到稳定后回调 `onSettled`）与 `anchorAt`（按 `getItemOffset` 找当前轮）。
+  - `App.tsx`：`groups.map` 全量渲染改为条目描述数组（用户轮带 `anchor`），等待中与确认卡片也作为条目；`.messages` / `has-progress` 交给 MessageList；轮次导航改 `onJump` → `scrollToAnchor(id, { onSettled: follow.reanchor })`。
+  - `ui.tsx`：`TurnNav` 新增可选 `onJump`（窗口化后目标条目常常没挂载，`scrollIntoView` 找不到节点）；`visibleTurn` 只在已挂载锚点里取（早期轮次不在 DOM 里）。
+  - `use-follow-scroll.ts`：抽出 `measureAnchor`、新增 `reanchor`（程序化跳转后重新取样锚点，避免按跳转前的锚点把跳转拉回去）；scroll 处理器改为「跟随中位置被动变化就拉回底部」——窗口化后滚动会不断测量新进入视口的条目，虚拟列表为保持内容位置会反方向微调 `scrollTop`（几十到几百像素），原来会被当成「用户离开底部」（阈值 32px），结果停在离底部一截且不再自愈。用户主动滚动仍先经 `intent()` 关闭跟随，不会抢滚动。
+  - `styles.css`：`.messages` 纵向内边距交给首/尾条目（`padding: 0 28px 20px` + `.message-item.first` / `.last`）；`.message-item { display: flow-root }` 防 `.turn` 的 margin 塌陷出条目导致测量偏小、条目重叠；`.messages > div { pointer-events: auto !important }`——virtua 在自己容器上写 `pointer-events: none`（该属性可继承），不修的话消息不可点、不可选、复制按钮与链接全失效；`.turn:last-child` 改为 `.message-item.last .turn`（否则会命中每一条，轮次间距从 22px 掉到 8px）。
+  - 依赖：新增 `virtua@^0.51.2`。
+- 回归测试：新增真实 Electron 探针 `scripts/fixtures/message-list.{html,tsx}` + `scripts/message-list-smoke.ts`（入口 `scripts/message-list-smoke-main.ts`，接进 `scripts/test-browser.mjs`，可 `TACODE_SMOKE_ONLY=message-list` 单跑）。断言：150 轮只挂载十几条；条目按序不重叠且间距 22px；底部留白 20px；指针事件命中内容且可选中；从底部上滑后跳转最早一轮贴顶、400ms 后仍不被拉回；停在底部追加内容持续跟随；`anchorAt` 返回当前轮。连续多次跑通。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 84 文件 / 773 用例全过；`pnpm build:renderer` 通过；`TACODE_SMOKE_ONLY=message-list node scripts/test-browser.mjs` 多次通过。用 `git stash` 对比确认 `pnpm test:browser` 里 workbench 的 sidebar 阶段失败是**既有问题**（stash 后同样失败），与本次改动无关。
+- 未做/未验证：真实会话体感需用户自测；会话位置恢复会落到锚定的那一轮而非精确像素；页内查找只能找到已挂载内容。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：去掉落字整形 + markdown 换 Streamdown（对齐 codeg-main 的流式观感）（20:50，Asia/Shanghai）
+
+- 缘起：用户反馈「出字卡卡的」，并要求先看 codeg-main 怎么做到「非常丝滑」。读完后确认 codeg 的丝滑来自两件事，用户选定都照做：**完全不做打字机整形** + **引 `streamdown`**（增量解析），放弃「字符出现均匀」、优先「整页不顿挫」。
+- codeg 侧的事实（可核对）：全仓没有 typewriter / 字符间隔 / 平滑落字这类实现；后端 `src-tauri/src/acp/session_state.rs::append_text_delta` 增量追加文本，前端直接渲染；三处 live 内容都用 `<Streamdown mode={isStreaming ? "streaming" : "static"} parseIncompleteMarkdown>`（`ai-elements/reasoning.tsx:272`、`message/content-parts-renderer.tsx:2257`），其注释写明 `static` 每次整段重解析，120 个 delta 的流式实测约 2.9 倍慢且越长越糟；重引擎（shiki/katex/mermaid）按语法按需加载；代码块先出 raw tokens 再异步升级。
+- TACode 侧的问题（本轮改掉）：`nextStreamText` 的 `elapsed` 取自「本轮动画起点」（`queuedAt` 只在追平时清空），所以流式持续超过 160ms 之后**每次落字都直接跳到全文最新**，表现出来就是「停一个 interval（长文本 120ms）、哗一下倒出一大段」；而且每次落字都整段跑 `closeOpenFences`/`repairMarkdownTables`/`compactFencedCode`/`stripEmptyMarkdown` + react-markdown 整段解析 + 整树 diff，成本 ∝ 累积长度。
+- 改动：
+  - `ui.tsx` 的 `Markdown` 改用 `streamdown`：`mode={streaming ? "streaming" : "static"}`、`parseIncompleteMarkdown={streaming}`、`controls={false}`（关掉它自带的代码块/表格工具条，那些控件用 Tailwind 类排版，本仓库是纯 CSS）；插件按它的约定拼 `[...Object.values(defaultRemarkPlugins), remarkMath]` / `[...Object.values(defaultRehypePlugins), rehypeKatex]`（**只传自己的插件会顶掉默认的 gfm，表格会退化成段落**，实测确认）；整段预处理只在定稿（static）时跑，流式中不做任何全文扫描。
+  - `MARKDOWN_COMPONENTS` 补三个覆盖，避免丢掉 Tailwind 提供的视觉：`strong`（它默认渲染成 `<span class="font-semibold">`，没有 Tailwind 就不加粗）、`img`（它默认包一层带下载/放大控件的外层）、`a`（它默认渲染成 `<button data-streamdown="link">` 走自带安全弹层；恢复普通 `<a>`，外链仍由主进程 `will-navigate` / `setWindowOpenHandler` 交给系统浏览器）。`pre`/`code`/`table`/`th`/`td` 沿用原有实现（`pre` 覆盖生效，代码块仍走我们的 CodeBlock 与 shiki）。
+  - 删除落字动画器：`stream-text.ts`、`use-stream-text.ts`、`stream-text.test.ts`；`execution-flow.tsx` 直接渲染 `item.text`，去掉 `displayed`/`pendingText`（以及自动收起里对 `pendingText` 的判断）；`stream-scheduler.test.ts` 去掉 `stream text` 这组用例。
+- 成本量级（用 streamdown 包内 API 量，仅作选型依据）：`marked` 的 `Lexer.lex`（Streamdown 每次渲染的整段切块）0.40ms@6.5k、0.81ms@21k、2.40ms@64k、3.26ms@96k；Streamdown **static 整段**渲染 23.7ms@6.5k、43.7ms@21k、117.6ms@64k、161.3ms@96k —— 所以必须走 streaming 模式（只重解析尾部块）。
+- 验证到哪一步：`npx tsc --noEmit` 通过；`pnpm test` 83 文件 / 763 用例通过（少掉的 10 条是被删除的落字动画器用例）。**流式观感与性能由用户自测**（本轮明确要求不再跑探针）。
+- 未做/未验证：真实会话下的观感、static 定稿那一次整段解析（长思考定稿时会有一次约百毫秒量级的解析，与 codeg 同）；`CodeBlock` 仍是同步分词（80ms 节流），codeg 那种「raw tokens 先出、异步高亮升级」没做；同帧多条 `message_update` 合并成「每条消息只应用最后一个快照」没做；`react-markdown` / `remark-gfm` / `rehype-raw` 现在已无引用（依赖未移除）。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：流式落字路径分段渲染（每帧成本与累积文本解耦）（22:20，Asia/Shanghai）
+
+- 缘起：用户质疑「探针流畅、真实使用却卡」这条既有结论。逐条核对后确认探针与真实使用的四层差距：探针走生产构建、只渲染消息列表、文本 5–12k，而真实使用是 dev React + StrictMode、外壳 + 列表、单条思考最长 93,613 字符。
+- 先量（新增 dev 探针 `scripts/fixtures/stream-live-text.{html,tsx}`：`flushSync` 同步提交 + 读 `offsetHeight` 强制布局，React 与布局分开计时；`scripts/build-live-text-fixture.mjs` 出生产版本做对照。未接进 CI，纯测量）：
+  - 方法前提：60fps 的帧间隔会把 16ms 以内的开销全部抹平（90k 文本下每帧 5ms 与 0.5ms 的帧间隔完全一样），所以必须用同步提交计时。
+  - dev：4k 文本 1.7ms/帧 → 30k 2.6ms → 90k 7.2ms（p95 11.9、max 17.5）；90k 且每帧 48 字时 8.2ms。
+  - 生产：同样场景 90k 只有 2.5ms（dev 约为生产的 2.9 倍，来源是 StrictMode 双跑 + dev 校验）。
+  - 布局成本可忽略（90k 下 0.1–0.3ms）；开销几乎全在 React 侧：整段分块 `parseMarkdownIntoBlocks` 1.9ms@90k、`remend` 0.7ms@90k，其余是为 600+ 个块建元素与对账。
+- 真实内容形状（新增 `scripts/measure-session-shape.mjs`）：最长思考 93,613 字符 / 3,192 换行，但被空行切成 848 块，最大块 1,934、p90 236；另有一条正文 79,221 字符。所以「流式中只有尾部在变」是事实，不是近似。
+- 改：
+  - 新增 `src/renderer/stream-blocks.ts`：`createStreamSegments` 按**块边界**把文本聚合成约 1,200 字符的段；分块本身也增量（只重算「倒数两块 + 新内容」窗口，用公共前缀判断是否追加）；只对最后一段 `remend`（已定稿的段是完整 markdown，本来就不需要补）。
+  - `ui.tsx` 的 `Markdown`：流式时传 `parseMarkdownIntoBlocksFn` 走分段、`parseIncompleteMarkdown={false}`；定稿仍走 Streamdown 默认整段分块 + 既有静态修复，最终 DOM 与分块语义不变。
+  - `remend` 由传递依赖提升为直接依赖（现在直接调用它）。
+  - 效果：每帧成本从 ∝ 累积文本 变成 ∝ 最后一段，历史越长省得越多。
+- 验证：
+  - 探针复测（同场景、同帧率、同内容）：dev 90k 7.2→2.4ms p50（p95 11.9→4.1、max 17.5→12.8）；90k/帧48字 8.2→3.5ms；生产 90k 2.5→0.5ms；4k 场景基本不变（1.7→1.7 / 0.4→0.3）。
+  - 渲染等价：新旧构建渲染同一段 60k 文本，元素直方图完全一致（P=202、LI=29、代码块 18、`span.code-line-plain` 37、行内 span 数量一致），抽样段落的 `innerHTML` 逐字节一致；新增的只是块之间的空白文本节点（不产生行盒）。
+  - `src/renderer/stream-blocks.test.ts` 8 条：段边界始终落在 Streamdown 自己的块边界上（逐 token 追加 + 400 步随机追加，覆盖围栏/表格/`$$`/HTML）、非追加时重置、文本未变时返回缓存、只有尾段被 remend。
+  - `pnpm typecheck` 通过；`pnpm test` 84 文件 / 771 用例通过。
+  - `TACODE_SMOKE_ONLY=message-list node scripts/test-browser.mjs` 连跑 6 次，2 次在「跳转后首个条目落在视口顶部」断言失败（-225/-238）。把分段临时去掉（其余不动）后同样复现同一条失败（-225.5），确认是这条 smoke 既有的偶发竞态，与本次改动无关。
+- 未做：外壳每帧重渲染（`SidebarNav` / `Chat` / `PromptBar` / `WorkbenchPanels` 都没有 memo，App 里传给它们的元素树也没 `useMemo` 稳住）仍未处理，也没有量过它的成本——新探针只覆盖会话区，外壳要另建 fixture 或改成 `useSyncExternalStore` + store 之后再量。同帧多条 `message_update` 合并成「每条消息只应用最后一个快照」仍未做。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：探针改成可看版 + 修代码块流式不跟随（22:35，Asia/Shanghai）
+
+- 缘起：用户要求「亲眼看到」探针，并要求真流式与跟随。看的过程里发现两个真问题。
+- 探针改成可视化（`scripts/fixtures/stream-live-text.tsx` 重写）：
+  - 顶部读数条实时显示：路径 / 累积字数 / 帧间隔 p50·p95·最长（按 p95 变色）/ React 提交 p50·p95 / 长帧数（>20ms）/ 跟随状态与距底像素。
+  - 控制栏：开始·停止流式、跑对照测量、路径下拉（新·旧，可流式中途切换——文本不变，所以是同一累积长度下的直接对比）、起始字数 4k/30k/90k、每帧字数 16/48、跟随底部开关。
+  - 下方表格落对照测量结果（4k/30k/90k × 16/48 字，新旧各一遍）。
+  - 量化仍用 `flushSync` 同步提交 + 强制布局（60fps 帧间隔看不出 16ms 以内的差别）；观感用 rAF 间隔，两者分开。
+  - `ui.tsx` 导出 `MARKDOWN_COMPONENTS` / `MARKDOWN_REMARK_PLUGINS` / `MARKDOWN_REHYPE_PLUGINS`，让探针里的「旧路径」用完全相同的渲染管线（只有分块策略不同）。探针未接进 CI。
+- 修一：跟随写在 rAF 里、位于 React 提交之前，读到的是上一帧的 `scrollHeight`，永远差一截。改为 `useLayoutEffect`（提交后、绘制前）写 `scrollTop`。
+- 修二（真实组件缺陷，`src/renderer/codeblock.tsx`）：代码区有 `max-height: 280px` + 内部滚动，而流式时没人滚它——新行全部落在块的内部滚动区之外，外层容器因高度被上限固定也不增长，于是「代码块内容不跟随」。改为：
+  - 只在内容**在增长**且用户没有主动滚上去时，把块内 `scrollTop` 跟到底部；
+  - 用 `selfScroll` 标记区分自己的写入与用户滚动（滚离底部即停止跟随，滚回底部自动恢复）；
+  - 挂载时就已完整且超高的代码块不受影响（不动，保持从顶部阅读）。三条行为都在真实浏览器里验过：流式中贴底 0px、上滚后不被拉回（305px）、滚回底部恢复（0px）。
+- 探针内容也修了两处失真：可见流式改成每帧断行（否则尾部永远卡在一个未闭合围栏里，看起来整段都在代码块内）、生成的代码块加长到 30 行（原来 3 行撑不过 280px，测不到块内跟随）；流式不再 900 帧自动停，改成 25 万字上限。
+- 复测（同一页面同一段文本，只有分块策略不同）：
+  - 4k/帧16字：旧 1.7ms → 新 2.0ms（p95 3.8 → 2.4）
+  - 30k/帧16字：旧 2.5 → 新 2.2
+  - 90k/帧16字：旧 5.7 → 新 2.6（p95 6.5 → 4.5）
+  - 90k/帧48字：旧 6.4 → 新 3.0（p95 11.4 → 3.7）
+  - 结论不变：省下来的正是「∝ 累积文本」的那部分；小文本上新路径有约 0.3ms 的分段开销，属噪声量级。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 84 文件 / 771 用例通过。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：为什么探针比真实使用顺——逐层排除 + 高亮节流修复（22:42，Asia/Shanghai）
+
+- 背景：用户追问「探针里很顺，真实运行完全不是一个感觉」，并要求找出原因。
+- 先作废一条无效测量：上一轮的「跟随开/关 × 新/旧」四格是在累积只有 7k 文本时跑的（下拉框没按预期生效），数字不能当结论。
+- 逐层排除（都不需要真实会话）：
+  - 事件摄入（`src/renderer/conversation.ts` 的 `applyAgentEvent`，每帧把这一帧收到的事件逐条应用；`message_update` 带整条消息快照，所以每次都重解析累积文本）：90k 文本下 1 条 0.224ms、同帧 4 条 0.870ms；30k 下 0.026/0.302ms。→ 不是主因。
+  - 渲染前派生计算：`groupConversation` / `buildTurnPresentation` 在 4k/30k/90k 下 p50 都是 0.000–0.001ms。→ 不是主因。
+- 发现并修复一个真实缺陷：`useShikiTokens`（`read_file` 详情、文件抽屉用的 Shiki token hook）**没有节流**，代码一变就同步整段分词。实测单次同步分词：5k=6.4ms / 20k=23.7ms / 50k=58.5ms / 100k=117.8ms。展开中的 `read_file` 行在流式期间会每帧重算一次，单帧即可被拖到几十毫秒。改：与 `CodeBlock` 同样先判节流（120ms）再分词，一次性变化（打开文件）仍立即出结果；`latest` ref 保证延迟到期时用的是最新代码。
+- 探针里探不到的仍是**外壳**（`SidebarNav` / `Chat` / `PromptBar` / `WorkbenchPanels` 都没 memo，App 每帧重建它们的元素树，右面板里的 webview/终端/子代理面板也在内）与真实滚动机制（virtua 测量 + `useFollowScroll`）。这两项目前无数字，是「真实使用更差」唯一剩下的解释方向。
+- 为了量真实运行时，新增 `pnpm dev:attach`：vite 已在 5177 时再开一个带 `--remote-debugging-port=9222` 的 Electron 窗口，可用 CDP 抓真实会话的 CPU profile 按函数归因，不需要改业务代码。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 84 文件 / 771 用例通过（临时 benchmark 文件已删）。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：真实 dev 窗口的 CPU/Blink 采样：主因在事件摄入，不在落字（22:50，Asia/Shanghai）
+
+- 手段：新增 `pnpm dev:attach`（vite 已在 5177 时另开一个带 `--remote-debugging-port=9222` 的 Electron 窗口）+ `scripts/profile-dev-app.mjs`（CDP：CPU profile 按函数自耗时归因、rAF 帧间隔、长任务、Blink tracing 阶段归因、`Performance.getMetrics` 前后差值、DOM 概况）。不改业务代码。
+- 两次采样（用户窗口里真实流式）：
+  - 25s：`idle` 81.8%，JS 自耗时 4.5s（≈180ms/s ≈ 3ms/帧）；帧间隔 p50/p95/最长 = 16.7/18.3/59.2ms；>20ms 帧 42 个、长任务 5 个。最大单项 `collapseThinking` 1254ms。
+  - 15s（期间文本没增长）：`mergeAssistant` 1693ms、`collapseThinking` 190ms；`conversation.ts` 占 JS 自耗时 12.8%（另一轮 19.9%）。
+  - Blink：`LayoutDuration` 20ms、`RecalcStyleDuration` 15ms、`LayoutCount` 50（20s 内）→ **排版/绘制可以忽略**；`TaskDuration` 6.9s/20s（约 35% 主线程占用），其中 `ScriptDuration` 5.0s；GC 相关（`V8.GC_*` + MajorGC/MinorGC）合计约 1.3s/20s → 分配压力明显。
+- 结论：真实使用的每帧成本主要不在 markdown 落字（`ui.tsx` / `execution-flow.tsx` 都在 0.1–0.5% 量级），而在**事件摄入**——每条 `message_update` 都带完整快照，`messageFromRecord`（含 `splitThinkTags` 全文正则）与 `mergeAssistant → collapseThinking` 各扫一遍全文，其中 `collapseThinking` 是「按空行切块 + 两两前缀比较」的平方级实现。
+- 改（`conversation.ts`）：`collapseThinking` 先用等值表命中、查不到再按原语义线性扫。前缀互斥的不变量保证等值命中唯一，语义与旧实现逐字节一致；追加式快照从 O(块数²) 降到 O(块数)。新增 `collapse-thinking.test.ts`：3000 组随机文档、600 组追加式快照与旧实现逐字节比对 + 前缀互斥不变量断言。基准（追加一次快照）：30k/670 块 7.3→3.7ms；93k/2046 块 49.4→24.1ms。
+- 剩余（已量到但未改）：这 24ms 里已没有平方项，主要是「每条事件都把整段文本重新 split + join」的线性成本。真正的解法是别每条事件整段重规范化（哈希/引用缓存块列表，或按增量尾部合并）。另有一条语义边界：现实现对「同一文本内重复块」会静默去重，改增量方案会变成保留重复块（更忠实，但是可见变化），需要拍板。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 85 文件 / 775 用例通过。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：折叠那一帧的全段静态渲染（用户报告的「收起之后卡卡的」）（22:56，Asia/Shanghai）
+
+- 用户给的两个线索：滚动不顺、思考结束后收起时卡。按帧采样（`scripts/profile-dev-app.mjs --watch --scroll`：等流式开始 → 采样 + 注入真实滚轮手势 → 捕折叠瞬间）：
+  - 滚动：433 个滚动帧（流式中）p50 16.6 / p95 17.8 / 最长 23.4ms，>20ms 仅 3 帧 → **滚动侧没有明显问题**。
+  - 该次运行的思考只写到 2,116 字符，折叠只花约 14ms，所以那次现场没能体现用户说的卡。
+- 单独量「折叠那一帧」（浏览器探针新增 `staticRender`：对 `<Markdown streaming={false}>` 做 `flushSync` 提交 + 强制布局）：
+  - 4.8k 字符：React 提交 14.2ms / 布局 1ms
+  - 30k：47.6ms / 3.6ms
+  - 93k：**127.5ms**（另一次 161.7ms）/ 9ms
+- 根因：思考条目一旦不再是「当前项」，`Markdown` 就从流式切到 `streaming={false}`，于是对**整段**文本跑 `repairMarkdownTables` + `compactFencedCode` + `stripEmptyMarkdown` 三个全文预处理器，再做 Streamdown 静态整段解析——而折叠态用 `-webkit-line-clamp: 2` 只显示前两行，整段渲染是白付。回合结束时 `live=false`，所有未被冻结的条目都会走这一遍，所以「收起时」最容易看到顿一下。
+- 改（`execution-flow.tsx`）：新增 `CLIPPED_PREVIEW_CHARS = 800`；折叠态（`!active && !expanded`）只渲染开头 800 字符，展开时仍渲染全文。可见内容不变（clamp 取的就是开头两行），溢出判定仍成立（按钮照常出现）；「全选复制」在折叠态只能拿到预览（要全文需展开，这点是有意取舍）。
+- 效果：折叠那一帧 93k 从 161.7ms → **3.3ms**（布局 8.9 → 0.2ms）。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 85 文件 / 775 用例通过。
+- 仍待处理（同一条线上、这次没改）：
+  - 可见正文（`FlowText`）定稿时同样要整段静态渲染：正文一般 600–9k 字符（约 15–25ms），但量到过一条 79,221 字符的正文；修法是让定稿也走分段 + 逐段修复，使没被修复改动的段直接 memo 命中。
+  - `collapseThinking` 每条事件仍要整段 split + join（93k/2046 块 ≈ 24ms/次，已无平方项）；真正省下来要缓存块列表或按尾部增量合并，且会带来「同文本内重复块不再被静默去重」的可见变化，待拍板。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：生成中「滚动条抖动」（用户报告）→ 关掉滚动锚定 + 近距直接贴底（23:06，Asia/Shanghai）
+
+- 用户描述：出字时滚动条在抖动，并指出 codeg-main 在生成时滚动很丝滑。
+- 对比 codeg（`~/Downloads/codeg-main`）：滚动容器 `src/components/message/virtualized-message-thread.tsx:291` 明确带 `[overflow-anchor:none]`，跟随统一交给 `use-stick-to-bottom`（单一写入者）。我们全仓 `overflow-anchor` 零命中，同时有三个写入者改同一个 `scrollTop`：`use-follow-scroll` 的 rAF 缓动、virtua 为「保持内容位置」做的位移补偿、以及浏览器的滚动锚定。
+- 按帧探针（新增 `scripts/scroll-jitter.mjs`：等流式开始 → 按帧记 `scrollTop`/`scrollHeight` → 中途切 `overflow-anchor` → 前后对比；并用 `Element.prototype.scrollTop` 的 setter 挂钩区分「JS 写入」与「浏览器锚定」）：
+  - 默认锚定的一段（14s / 835 帧，内容增长 1304px）：出现 1 次逆向移动 1121px；距底平均 6.5px，>2px 的帧 139 个 → 跟随一直在小幅追赶。
+  - 打开 `overflow-anchor: none` 后的一段（839 帧）：0 次逆向移动、0 次 JS 回退写入、距底平均 0.1px。
+  - 第二段之所以近乎零回退，一部分原因是内联属性在之前的 A/B 中已经留在页面上（也说明这个属性确实是回退的主要来源之一）。
+- 改：
+  - `styles.css`：`.conversation` 加 `overflow-anchor: none`（注释写明理由与 codeg 的先例）。
+  - `use-follow-scroll.ts`：新增 `SNAP_DISTANCE = 96`——距离底部 96px 以内直接贴底（增长驱动的情形总是落在这一档），更远的跳转/「回到最新」仍走缓动滑行。这样流式期间不再每帧落后几像素地追。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 85 文件 / 775 用例通过（含既有的 `nextScrollTop` 用例）。
+- 待验证：真实窗口里再跑一次生成，用 `node scripts/scroll-jitter.mjs --wait` 复测「逆向移动次数 / 距底像素」；若仍有偶发大回退，下一步是查 virtua 在条目高度变化时的补偿（可能需要给它稳定的估算高度，或在跟随中屏蔽它的反向调整）。
+- 未提交/发布，未改 AGENTS.md。
+
+## 2026-09-11：滚动抖动探针自身的三处缺陷（结论作废与修正）（23:12，Asia/Shanghai）
+
+- 记录一下，避免以后拿这几组数字当证据：
+  1. 探针做反向对照时把 `overflow-anchor: auto` 内联写在滚动容器上，之后没有清除；内联样式盖掉了 `styles.css` 里的修复，导致后续两次「测修复后状态」实际测的是未修复状态。已清掉，`--clean` 可核对计算样式（现在 = `none`）。
+  2. 采样器模板里写了 `.split("\n")`，反斜杠在模板字符串里被解析成真换行，注入的表达式直接 `SyntaxError`，`Runtime.evaluate` 静默返回 undefined——最近两轮探针因此采到 0 帧。已改为双反斜杠，并在 `evaluate` 里把 `exceptionDetails` 打出来。
+  3. 每次注入前先停掉上一轮的 rAF 循环，并在主流程开头清掉内联覆盖，避免状态残留。
+- 因此可采信的滚动数据只有最早那次反向对照：默认锚定下 14s/835 帧出现 1 次 1121px 逆向移动、距底平均 6.5px（139 帧 >2px）；`overflow-anchor: none` 下 839 帧 0 次回退。两处修复（`overflow-anchor: none` + `SNAP_DISTANCE = 96` 近距贴底）仍然保留，但「修复后真实生成是否完全不抖」还需要一次干净测量。
+- 另外那次采到的 9618px 大回退已定位为**内容变矮被夹回**（折叠/过程区收起，高度 -7222px），不是出字期间的抖动；新版探针把「出字增长段」和「内容变矮帧」分开统计。

@@ -1,8 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { Bot, Check, Download, Info, PanelLeftClose, PanelLeftOpen, Target, X } from "lucide-react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Streamdown, defaultRehypePlugins, defaultRemarkPlugins, type Components } from "streamdown";
 import type { AgentSessionStats, ExtensionUiRequest, PermissionMode } from "../shared/types";
 import { workspacePreviewUrl } from "../shared/preview";
 import { skillUserDisplay } from "../shared/skills";
@@ -33,10 +32,10 @@ import { SubagentsSettings } from "./subagent-settings";
 import logo from "./logo.svg";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import rehypeRaw from "rehype-raw";
 import { CodeBlock, HighlightedFileCode } from "./codeblock";
 import { FilePathChip } from "./file-path-chip";
 import { isFilePath } from "./file-path";
+import { createStreamSegments } from "./stream-blocks";
 import { highlightToTokens, isHighlighterReady, onHighlighterReady } from "./shiki";
 
 const MAX_UPLOAD_IMAGES = 4;
@@ -596,7 +595,7 @@ function formatCompactNumber(value: number) {
   return `${(value / 1_000_000).toFixed(1)}M`;
 }
 
-export function TurnNav({ items }: { items: Array<{ id: string; label: string }> }) {
+export function TurnNav({ items, onJump }: { items: Array<{ id: string; label: string }>; onJump?(id: string): void }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState<string>();
@@ -613,9 +612,15 @@ export function TurnNav({ items }: { items: Array<{ id: string; label: string }>
 
   if (items.length < 2) return null;
 
-  /** Last question whose card already scrolled past the top of the reading area. */
+  /** Last question whose card already scrolled past the top of the reading area.
+   *  列表窗口化后，早期轮次不在 DOM 里，所以“当前轮”只能从已挂载的锚点里取；
+   *  仍在屏上（或刚滚过顶部）的那一轮一定已挂载，取到的就是用户正在看的那一轮。 */
   const visibleTurn = () => items
-    .filter((item) => (document.getElementById(item.id)?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY) < 160)
+    .filter((item) => {
+      const node = document.getElementById(item.id);
+      if (!node) return false;
+      return node.getBoundingClientRect().top < 160;
+    })
     .at(-1)?.id;
 
   return (
@@ -640,7 +645,10 @@ export function TurnNav({ items }: { items: Array<{ id: string; label: string }>
               type="button"
               className={item.id === active ? "combo-item selected" : "combo-item"}
               onClick={() => {
-                document.getElementById(item.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                // 窗口化后目标条目可能还没挂载，`scrollIntoView` 找不到节点，
+                // 交给虚拟列表按索引滚动（见 message-list.tsx）。
+                if (onJump) onJump(item.id);
+                else document.getElementById(item.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
                 setActive(item.id);
                 setOpen(false);
               }}
@@ -1334,16 +1342,44 @@ function copyMarkdownPlain(event: { preventDefault(): void; clipboardData: DataT
 }
 
 export function Markdown({ children, streaming }: { children: string; streaming?: boolean }) {
+  // 流式中不做任何整段预处理：那些修复都要扫全文，正是「运行中卡」的来源。
+  // 定稿后再做一次全文修复（表格 / 空围栏 / 空白压缩）。
   const source = useMemo(
-    () => compactFencedCode(stripEmptyMarkdown(repairMarkdownTables(streaming ? closeOpenFences(children) : children))),
+    () => (streaming ? children : compactFencedCode(stripEmptyMarkdown(repairMarkdownTables(children)))),
     [children, streaming],
   );
-  // Element 级 memo：文本没变时复用同一个 React 元素，父组件因其他状态重渲染时整棵子树直接 bail out。
-  const element = useMemo(() => (source
-    ? <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} rehypePlugins={MARKDOWN_REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS}>{source}</ReactMarkdown>
-    : null), [source]);
-  return element;
+  // 分段缓存的一生只服务一条持续追加的文本，所以按实例持有（见 stream-blocks.ts）。
+  const segments = useRef<((text: string) => string[]) | null>(null);
+  if (!segments.current) segments.current = createStreamSegments();
+  if (!source.trim()) return null;
+  return (
+    <Streamdown
+      mode={streaming ? "streaming" : "static"}
+      // 尾部修补改由分段器只对最后一段做：remend 会扫全文，是流式每帧 O(累积文本) 的一环，
+      // 而更早的段都是已闭合的 markdown，本来就不需要补。
+      parseIncompleteMarkdown={false}
+      // 只有流式走分段；定稿时交回 Streamdown 的整段分块，保证最终 DOM 与分块语义不变。
+      parseMarkdownIntoBlocksFn={streaming ? segments.current : undefined}
+      // 流式时启用 Streamdown 的逐词淡入：它按「已渲染字符数」记账，只给真正新增的
+      // 文本节点包淡入 span，旧内容不会重放动画（StrictMode 也有专门的 rewind 兜底）。
+      // 注意 animated 只负责建时间线，插件要 isAnimating 为真才会挂进渲染链。
+      // 动画的 keyframes 由宿主 CSS 提供（见 styles.css 的 [data-sd-animate]）。
+      animated={streaming ? STREAMDOWN_ANIMATE_OPTIONS : undefined}
+      isAnimating={streaming}
+      // 关掉它自带的代码块/表格工具条：那些控件用 Tailwind 类排版，本仓库是纯 CSS；
+      // 代码块与表格都由下面的 components 接管。
+      controls={false}
+      remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+      rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+      components={MARKDOWN_COMPONENTS}
+    >
+      {source}
+    </Streamdown>
+  );
 }
+
+/** 流式落字的逐词淡入参数（引用必须稳定，避免 Streamdown 每帧重建动画时间线）。 */
+const STREAMDOWN_ANIMATE_OPTIONS = { animation: "fadeIn", duration: 160, stagger: 32, maxBacklogMs: 240 } as const;
 
 /**
  * 插件数组与自定义组件必须是**稳定引用**。
@@ -1353,9 +1389,26 @@ export function Markdown({ children, streaming }: { children: string; streaming?
  * 帧执行一次，于是每个动画帧都在拆掉再重建 Markdown 子树（连带 CodeBlock 的高亮状态
  * 与滚动容器的度量），这正是会话运行中渲染进程满载的主因。
  */
-const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
-const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeRaw];
-const MARKDOWN_COMPONENTS: Components = {
+// 导出供流式落字路径的对照测量复用（scripts/fixtures/stream-live-text.tsx）：
+// 只比较「整段分块」与「分段渲染」，其余渲染管线必须完全一致。
+export const MARKDOWN_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkMath];
+export const MARKDOWN_REHYPE_PLUGINS = [...Object.values(defaultRehypePlugins), rehypeKatex];
+export const MARKDOWN_COMPONENTS: Components = {
+  // Streamdown 默认把强调渲染成 `<span class="font-semibold">`、把图片包进一层带下载/放大
+  // 控件的外层，而那些样式全是 Tailwind 类名——本仓库是纯 CSS，没有 Tailwind，样式会直接丢。
+  // 这里恢复语义标签与裸 `<img>`，继续吃 styles.css 里现有的 .markdown 规则。
+  strong({ node: _node, children, ...props }) {
+    return <strong {...props}>{children}</strong>;
+  },
+  img({ node: _node, ...props }) {
+    return <img {...props} />;
+  },
+  // Streamdown 默认把链接渲染成按钮（走它自带的链接安全弹层，且用 Tailwind 类排版）。
+  // 本仓库是纯 CSS，链接保持普通 <a>：主进程的 will-navigate / setWindowOpenHandler
+  // 已经负责把外链交给系统浏览器（与改造前一致）。
+  a({ node: _node, children, ...props }) {
+    return <a {...props}>{children}</a>;
+  },
   pre({ children }) {
     const plain = extractNodeText(children).trim();
     if (!plain) return null;
@@ -1400,11 +1453,6 @@ function compactFencedCode(text: string): string {
     const tight = body.replace(/\n{2,}/g, "\n").replace(/^\n+|\n+$/g, "");
     return `\`\`\`${lang}\n${tight}\n\`\`\``;
   });
-}
-
-function closeOpenFences(text: string): string {
-  const fences = text.match(/^```/gm)?.length ?? 0;
-  return fences % 2 ? `${text}\n\`\`\`` : text;
 }
 
 function extractNodeText(node: ReactNode): string {
