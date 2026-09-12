@@ -103,13 +103,21 @@ export const createChildSessionPanel = (key: string, info: ChildSessionPanelInfo
   key,
   info,
 });
-export type PanelState = { tabs: WorkbenchPanelTab[]; active: string };
+export type PanelState = {
+  tabs: WorkbenchPanelTab[];
+  active: string;
+  /** 当前主会话（侧边聊天可见性跟着它走）。 */
+  session?: string;
+  /** 每个会话上次激活的标签 id（key 为会话路径，首页用空串）：切走时记录，切回时恢复。 */
+  sessionActive: Record<string, string>;
+};
 export type PanelAction =
   | { type: "open-review" }
   | { type: "open-files"; path?: string }
   | { type: "open-terminal" }
   | { type: "open-side-chat"; sourceSession?: string; draft?: string; activate?: boolean }
   | { type: "focus-side-chat" }
+  | { type: "session-changed"; sourceSession?: string }
   | { type: "open-child-session"; panel: ChildSessionPanelTab; activate?: boolean }
   | { type: "open-file"; path: string; activate?: boolean }
   | { type: "open-browser"; tab: BrowserPanelTab; activate: boolean }
@@ -120,7 +128,19 @@ export type PanelAction =
   | { type: "window-closed"; id: string }
   | { type: "restore"; id: string; tabs: BrowserPanelTab[] };
 
-export const initialPanelState: PanelState = { tabs: [{ id: "review", type: "review" }], active: "review" };
+export const initialPanelState: PanelState = { tabs: [{ id: "review", type: "review" }], active: "review", sessionActive: {} };
+
+/** 会话记忆的 key：首页（无会话）用空串，和 undefined 区分开。 */
+const sessionActiveKey = (session: string | undefined): string => session ?? "";
+
+/** 侧边聊天只属于发起它的主会话：会话不匹配就在标签栏隐藏（组件保持挂载，切回即恢复）。 */
+export const isSideChatVisible = (tab: WorkbenchPanelTab, session: string | undefined): boolean =>
+  tab.type !== "side-chat" || tab.sourceSession === session;
+
+/** 标签栏与面板主体应展示的标签（对侧边聊天按当前主会话过滤，其余类型全可见）。 */
+export function visiblePanelTabs(state: PanelState): WorkbenchPanelTab[] {
+  return state.tabs.filter((tab) => isSideChatVisible(tab, state.session));
+}
 export const createBrowserPanelId = (): string => `browser-${crypto.randomUUID()}`;
 export const createBrowserPanel = (id: string, page?: BrowserTabSnapshot): BrowserPanelTab => ({
   id, type: "browser", initialTabs: page?.url ? [page] : undefined, page, detached: false, revision: 0,
@@ -157,32 +177,71 @@ export function childSessionPanelLabel(info: ChildSessionPanelInfo, fallback: st
 }
 
 export function panelReducer(state: PanelState, action: PanelAction): PanelState {
+  const next = applyPanelAction(state, action);
+  // session / sessionActive 只由 session-changed 维护；其余动作原样保留，避免每个分支都要记得带上。
+  if (action.type === "session-changed") return next;
+  const preserved = next.session === state.session && next.sessionActive === state.sessionActive;
+  return preserved ? next : { ...next, session: state.session, sessionActive: state.sessionActive };
+}
+
+function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
   switch (action.type) {
     case "open-review":
-      return { tabs: state.tabs.some((tab) => tab.type === "review") ? state.tabs : [...state.tabs, { id: "review", type: "review" }], active: "review" };
+      return { tabs: state.tabs.some((tab) => tab.type === "review") ? state.tabs : [...state.tabs, { id: "review", type: "review" }], active: "review", session: state.session, sessionActive: state.sessionActive };
     case "open-files": {
       const existing = state.tabs.find((tab): tab is FilesPanelTab => tab.type === "files");
       if (existing) {
         return {
           tabs: action.path ? state.tabs.map((tab) => tab.id === existing.id ? { ...tab, selectedPath: action.path } : tab) : state.tabs,
           active: existing.id,
+          session: state.session,
+          sessionActive: state.sessionActive,
         };
       }
-      return { tabs: [...state.tabs, { id: "files", type: "files", ...(action.path ? { selectedPath: action.path } : {}) }], active: "files" };
+      return { tabs: [...state.tabs, { id: "files", type: "files", ...(action.path ? { selectedPath: action.path } : {}) }], active: "files", session: state.session, sessionActive: state.sessionActive };
     }
     case "open-terminal":
-      return { tabs: state.tabs.some((tab) => tab.type === "terminal") ? state.tabs : [...state.tabs, { id: "terminal", type: "terminal" }], active: "terminal" };
+      return { tabs: state.tabs.some((tab) => tab.type === "terminal") ? state.tabs : [...state.tabs, { id: "terminal", type: "terminal" }], active: "terminal", session: state.session, sessionActive: state.sessionActive };
     case "open-side-chat": {
-      // 侧边聊天是多实例（Codex 模式）：每次 open 都新建编号标签，按 id 而非类型去重。
-      const tab = createSideChatPanel(nextSideChatOrdinal(state.tabs), { sourceSession: action.sourceSession, draft: action.draft });
-      return { tabs: [...state.tabs, tab], active: action.activate === false ? state.active : tab.id };
+      // 侧边聊天是多实例（Codex 模式）：每次 open 都新建编号标签，按 id 而非类型去重；
+      // 来源未显式给出时锚定当前主会话，保证可见性跟随会话切换。
+      const tab = createSideChatPanel(nextSideChatOrdinal(state.tabs), {
+        sourceSession: action.sourceSession ?? state.session,
+        draft: action.draft,
+      });
+      return { tabs: [...state.tabs, tab], active: action.activate === false ? state.active : tab.id, session: state.session, sessionActive: state.sessionActive };
     }
     case "focus-side-chat": {
-      // 快捷键语义：已有侧边聊天时聚焦最新一个，一个都没有才新建（避免连按爆标签）。
-      const existing = state.tabs.filter((tab) => tab.type === "side-chat");
-      if (existing.length > 0) return { ...state, active: existing[existing.length - 1].id };
-      const tab = createSideChatPanel(nextSideChatOrdinal(state.tabs));
-      return { tabs: [...state.tabs, tab], active: tab.id };
+      // 快捷键语义：当前会话已有侧边聊天时聚焦最新一个，一个都没有才新建（避免连按爆标签）。
+      const existing = state.tabs.filter((tab) => isSideChatVisible(tab, state.session));
+      if (existing.length > 0) return { ...state, active: existing[existing.length - 1].id, session: state.session };
+      const tab = createSideChatPanel(nextSideChatOrdinal(state.tabs), { sourceSession: state.session });
+      return { tabs: [...state.tabs, tab], active: tab.id, session: state.session, sessionActive: state.sessionActive };
+    }
+    case "session-changed": {
+      if (state.session === action.sourceSession) return state;
+      // 只切换「当前主会话」上下文：别的会话的侧边聊天从标签栏隐藏但保持挂载，
+      // 切回来原样恢复；只有手动关闭（带确认）或退出应用才真正销毁。
+      const isVisible = (tab: WorkbenchPanelTab) => isSideChatVisible(tab, action.sourceSession);
+      // 每个会话记住自己上次的激活标签：离开时记录当前激活，回来时优先恢复记忆；
+      // 记忆的标签已被关闭时，回落到新上下文里离它最近的可见标签。
+      const sessionActive = { ...state.sessionActive, [sessionActiveKey(state.session)]: state.active };
+      const remembered = sessionActive[sessionActiveKey(action.sourceSession)];
+      const rememberedTab = remembered ? state.tabs.find((tab) => tab.id === remembered && isVisible(tab)) : undefined;
+      let active: string;
+      if (rememberedTab) {
+        active = rememberedTab.id;
+      } else {
+        const current = state.tabs.find((tab) => tab.id === state.active);
+        if (current && isVisible(current)) {
+          active = current.id;
+        } else {
+          const index = current ? state.tabs.indexOf(current) : state.tabs.length;
+          const previous = [...state.tabs.slice(0, index)].reverse().find(isVisible);
+          active = (previous ?? state.tabs.find(isVisible))?.id ?? "";
+        }
+      }
+      return { tabs: state.tabs, active, session: action.sourceSession, sessionActive };
     }
     case "open-child-session": {
       // 同一委派只开一个标签：再次点击时合并信息（两个入口掌握的信息不同，不能互相覆盖）
@@ -196,21 +255,25 @@ export function panelReducer(state: PanelState, action: PanelAction): PanelState
           tabs: state.tabs.map((tab) => tab.id === existing.id ? merged : tab),
           // 实时刷新（activate=false）不抢焦点：用户在看别的标签时不该被顶走。
           active: action.activate === false ? state.active : existing.id,
+          session: state.session,
+          sessionActive: state.sessionActive,
         };
       }
       // 自动开标签时抢焦点；后台更新（activate=false）只建标签不切换。
-      return { tabs: [...state.tabs, action.panel], active: action.activate === false ? state.active : action.panel.id };
+      return { tabs: [...state.tabs, action.panel], active: action.activate === false ? state.active : action.panel.id, session: state.session, sessionActive: state.sessionActive };
     }
     case "open-file": {
       const id = filePanelId(action.path);
       const exists = state.tabs.some((tab) => tab.id === id);
       if (exists) return { ...state, active: action.activate === false ? state.active : id };
-      return { tabs: [...state.tabs, { id, type: "file", path: action.path }], active: action.activate === false ? state.active : id };
+      return { tabs: [...state.tabs, { id, type: "file", path: action.path }], active: action.activate === false ? state.active : id, session: state.session, sessionActive: state.sessionActive };
     }
     case "open-browser":
       return {
         tabs: state.tabs.some((tab) => tab.id === action.tab.id) ? state.tabs : [...state.tabs, action.tab],
         active: action.activate ? action.tab.id : state.active,
+        session: state.session,
+        sessionActive: state.sessionActive,
       };
     case "select":
       return state.tabs.some((tab) => tab.id === action.id) ? { ...state, active: action.id } : state;
@@ -218,7 +281,12 @@ export function panelReducer(state: PanelState, action: PanelAction): PanelState
       const index = state.tabs.findIndex((tab) => tab.id === action.id);
       if (index < 0) return state;
       const tabs = state.tabs.filter((tab) => tab.id !== action.id);
-      return { tabs, active: state.active === action.id ? (tabs[index - 1] ?? tabs[index])?.id ?? "" : state.active };
+      return {
+        tabs,
+        active: state.active === action.id ? (tabs[index - 1] ?? tabs[index])?.id ?? "" : state.active,
+        session: state.session,
+        sessionActive: state.sessionActive,
+      };
     }
     case "page":
     case "detach":
@@ -246,7 +314,7 @@ export function panelReducer(state: PanelState, action: PanelAction): PanelState
       const tabs = [...state.tabs];
       // 第一页复用原实例的位置，其他页面依次放在它右侧。
       tabs.splice(index < 0 ? tabs.length : index, index < 0 ? 0 : 1, ...restored);
-      return { tabs, active: restored[0].id };
+      return { tabs, active: restored[0].id, session: state.session, sessionActive: state.sessionActive };
     }
   }
 }

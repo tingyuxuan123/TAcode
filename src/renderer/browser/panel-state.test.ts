@@ -7,6 +7,7 @@ import {
   createChildSessionPanel,
   initialPanelState,
   panelReducer,
+  visiblePanelTabs,
   type ChildSessionPanelInfo,
   type PanelState,
 } from "./panel-state";
@@ -43,7 +44,8 @@ describe("顶部网页标签状态", () => {
     state = panelReducer(state, { type: "close", id: "review" });
     expect(state.active).toBe("left");
     state = panelReducer(state, { type: "close", id: "left" });
-    expect(state).toEqual({ tabs: [], active: "" });
+    expect(state.tabs).toEqual([]);
+    expect(state.active).toBe("");
   });
 
   it("独立窗口多页还原各占一个顶部标签，后续关闭广播不会覆盖还原结果", () => {
@@ -133,6 +135,46 @@ describe("侧边聊天多实例（Codex 模式）", () => {
     const state = panelReducer(initialPanelState, { type: "open-side-chat", activate: false });
     expect(state.tabs).toHaveLength(2);
     expect(state.active).toBe("review");
+  });
+
+  it("切换会话后别的会话的侧边聊天隐藏但保持挂载，切回时恢复该会话的激活标签", () => {
+    // 先进入会话 a（App 在 activeSession 变化时派发），再在里面开侧边聊天。
+    let state = panelReducer(initialPanelState, { type: "session-changed", sourceSession: "/sessions/a.jsonl" });
+    state = panelReducer(state, { type: "open-side-chat", sourceSession: "/sessions/a.jsonl" });
+    const sideA = state.tabs.at(-1)!.id;
+    state = panelReducer(state, { type: "open-terminal" });
+    state = panelReducer(state, { type: "select", id: sideA });
+    // 离开 a 回首页：a 的侧边聊天隐藏，激活恢复首页记住的审查。
+    state = panelReducer(state, { type: "session-changed" });
+    expect(state.tabs.find((tab) => tab.id === sideA)).toBeDefined();
+    expect(visiblePanelTabs(state).filter((tab) => tab.type === "side-chat")).toHaveLength(0);
+    expect(state.active).toBe("review");
+    // 切回 a：恢复 a 记住的激活标签（侧边聊天），而不是留在审查。
+    state = panelReducer(state, { type: "session-changed", sourceSession: "/sessions/a.jsonl" });
+    expect(state.active).toBe(sideA);
+    expect(visiblePanelTabs(state).filter((tab) => tab.type === "side-chat")).toHaveLength(1);
+  });
+
+  it("记忆的激活标签已被关闭时回落到新会话的可见面板", () => {
+    let state = panelReducer(initialPanelState, { type: "session-changed", sourceSession: "/sessions/a.jsonl" });
+    state = panelReducer(state, { type: "open-side-chat", sourceSession: "/sessions/a.jsonl" });
+    const sideA = state.tabs.at(-1)!.id;
+    state = panelReducer(state, { type: "session-changed" });
+    state = panelReducer(state, { type: "close", id: sideA });
+    state = panelReducer(state, { type: "session-changed", sourceSession: "/sessions/a.jsonl" });
+    expect(state.tabs.some((tab) => tab.id === sideA)).toBe(false);
+    expect(state.active).toBe("review");
+  });
+
+  it("open-side-chat 未显式给来源时锚定当前主会话", () => {
+    const state = panelReducer({ ...initialPanelState, session: "/sessions/a.jsonl" }, { type: "open-side-chat" });
+    const sideTab = state.tabs.find((tab) => tab.type === "side-chat");
+    expect(sideTab).toMatchObject({ sourceSession: "/sessions/a.jsonl" });
+  });
+
+  it("会话上下文与激活标签都没变时返回原状态", () => {
+    const state = panelReducer({ ...initialPanelState, session: "/sessions/a.jsonl" }, { type: "open-terminal" });
+    expect(panelReducer(state, { type: "session-changed", sourceSession: "/sessions/a.jsonl" })).toBe(state);
   });
 });
 

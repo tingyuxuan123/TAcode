@@ -7,7 +7,7 @@ import { BrowserPanel } from "./browser-panel";
 import { ChildSessionPanel } from "./child-session-panel";
 import { FilePanel } from "./file-panel";
 import { SideChatPanel } from "./side-chat-panel";
-import { browserPanelLabel, childSessionPanelLabel, filePanelLabel, type SideChatPanelTab } from "./panel-state";
+import { browserPanelLabel, childSessionPanelLabel, filePanelLabel, isSideChatVisible, visiblePanelTabs, type SideChatPanelTab } from "./panel-state";
 import type { useBrowserPanels } from "./use-browser-panels";
 
 /** 侧边聊天是声明式临时会话：关闭有破坏性确认，「不再询问」记在 localStorage。 */
@@ -42,7 +42,9 @@ export function WorkbenchPanels({ panels, review, files, terminal, sideChatProps
   workspace?: string;
 }) {
   const { t } = useI18n();
-  const { tabs, active, dispatch, openPanel, openBrowser, openSideChat, closePanel, selectPanel } = panels;
+  const { active, dispatch, openPanel, openBrowser, openSideChat, closePanel, selectPanel } = panels;
+  // 标签栏只显示当前主会话的侧边聊天；其他会话的实例保持挂载（display:none），切回即原样恢复。
+  const tabs = visiblePanelTabs(panels);
   const activeTab = tabs.find((tab) => tab.id === active);
   // 快捷键提示跟随平台样式；浏览器暂无快捷键，不显示提示。
   const isMac = window.harness.platform === "darwin";
@@ -145,8 +147,8 @@ export function WorkbenchPanels({ panels, review, files, terminal, sideChatProps
       {tabs.filter((tab) => tab.type === "terminal").map((tab) => (
         <div key={tab.id} className="panel-host" style={{ display: tab.id === active ? "flex" : "none" }}>{terminal}</div>
       ))}
-      {tabs.filter((tab) => tab.type === "side-chat").map((tab) => (
-        <div key={tab.id} className="panel-host" style={{ display: tab.id === active ? "flex" : "none" }}>
+      {panels.tabs.filter((tab) => tab.type === "side-chat").map((tab) => (
+        <div key={tab.id} className="panel-host" style={{ display: tab.id === active && isSideChatVisible(tab, panels.session) ? "flex" : "none" }}>
           <SideChatPanel
             key={tab.id}
             {...sideChatProps}

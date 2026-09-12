@@ -512,6 +512,12 @@ export function App() {
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FileChange>();
   const browserPanels = useBrowserPanels();
+  const panelDispatch = browserPanels.dispatch;
+  // 侧边聊天锚定发起时的主会话（Codex 模式临时语义）：切换/新建会话后，
+  // 不属于新会话的临时侧边聊天一并关闭，runtime 由面板卸载逻辑兜底停止。
+  useEffect(() => {
+    panelDispatch({ type: "session-changed", ...(activeSession ? { sourceSession: activeSession } : {}) });
+  }, [activeSession, panelDispatch]);
   // 供深链组件（委派卡片）打开子代理标签：卡片在 ui.tsx 的模块级 renderTool 里渲染，拿不到这里的 props。
   const panelActions = useMemo(
     () => ({ openChildSession: browserPanels.openChildSession }),
