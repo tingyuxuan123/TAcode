@@ -268,6 +268,7 @@ export function Chat({
   inspect,
   nav,
   title,
+  crumb,
   onSidebarAutoCollapse,
 }: {
   children: ReactNode;
@@ -276,6 +277,7 @@ export function Chat({
   inspect?: ReactNode;
   nav?: ReactNode;
   title?: string;
+  crumb?: ReactNode;
   onSidebarAutoCollapse?(): void;
 }) {
   const { t } = useI18n();
@@ -338,6 +340,7 @@ export function Chat({
       <header className="chat-bar">
         <div className="chat-heading">
           {!home && title && <h1 className="chat-title">{title}</h1>}
+          {!home && crumb}
           {!home && nav}
         </div>
         <div className={inspect && drawer ? "inspect-heading is-open" : "inspect-heading"} style={{ width: inspect && drawer ? inspectWidth : undefined }}>
@@ -2674,23 +2677,26 @@ export function PromptBar({
   return (
     <div ref={rootRef} className={hero ? "prompt-wrap hero" : "prompt-wrap"}>
       <div className="prompt-shell">
-        <div className="prompt-topbar">
-          <div className="prompt-topbar-row">
-            <button
-              type="button"
-              className={folder ? "prompt-folder on" : "prompt-folder"}
-              onClick={onPickWorkspace}
-              title={workspace ?? t("composer.selectOrOpen")}
-            >
-              <Icon path="M3 7h6l2 2h10v10H3z" size={13} />
-              <span>{folder ?? t("composer.selectProject")}</span>
-            </button>
-            {steering && steering.length > 0 && (
-              <div className="prompt-queue-meta">
-                <span className="prompt-steer-count">{t("composer.steering", { n: steering.length })}</span>
+        {(hero || (steering && steering.length > 0)) && (
+          <div className="prompt-topbar">
+            {hero && (
+              <div className="prompt-topbar-row">
+                <button
+                  type="button"
+                  className={folder ? "prompt-folder on" : "prompt-folder"}
+                  onClick={onPickWorkspace}
+                  title={workspace ?? t("composer.selectOrOpen")}
+                >
+                  <Icon path="M3 7h6l2 2h10v10H3z" size={13} />
+                  <span>{folder ?? t("composer.selectProject")}</span>
+                </button>
+                {steering && steering.length > 0 && (
+                  <div className="prompt-queue-meta">
+                    <span className="prompt-steer-count">{t("composer.steering", { n: steering.length })}</span>
+                  </div>
+                )}
               </div>
             )}
-          </div>
           {steering && steering.length > 0 && (
             <div className="prompt-steer">
               {steering.map((item, index) => (
@@ -2701,7 +2707,8 @@ export function PromptBar({
               ))}
             </div>
           )}
-        </div>
+          </div>
+        )}
         <form
           className={dropOver ? "prompt drop" : "prompt"}
           onDragOverCapture={(event) => {

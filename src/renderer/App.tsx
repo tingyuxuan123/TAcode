@@ -1593,6 +1593,7 @@ export function App() {
   }, [workspace, running, workingFiles.length]);
 
   const home = groups.length === 0 && !activeSession && !loading;
+  const activeTitle = sessions.find((session) => isSameSession(session, activeSession))?.title || undefined;
 
   useLayoutEffect(() => {
     const node = scroller.current;
@@ -1946,7 +1947,18 @@ export function App() {
       <Chat
         onSidebarAutoCollapse={sidebarLayout.collapseAutomatically}
         home={home}
-        title={sessions.find((session) => isSameSession(session, activeSession))?.title || (workspace ? baseName(workspace) : undefined)}
+        title={activeTitle || (workspace ? baseName(workspace) : undefined)}
+        crumb={!home && workspace && activeTitle && baseName(workspace) !== activeTitle && (
+          <button
+            type="button"
+            className="chat-crumb"
+            onClick={() => void openFolder()}
+            title={workspace}
+          >
+            <Icon path="M3 7h6l2 2h10v10H3z" size={13} />
+            <span>{baseName(workspace)}</span>
+          </button>
+        )}
         composer={home ? undefined : composer}
         nav={<TurnNav items={anchors} onJump={(id) => {
           // 跳转是一次性改变滚动位置：等窗口化列表把目标条目挂载、测量完再重新取样
