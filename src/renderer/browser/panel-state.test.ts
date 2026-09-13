@@ -287,4 +287,23 @@ describe("子代理子会话标签状态", () => {
     expect(state.tabs.some((tab) => tab.type === "child-session")).toBe(true);
     expect(state.active).toBe("review");
   });
+
+  it("刷新不能改写标签归属：切走后全局刷新（带 parentSession=新会话）不会把标签过继给新会话", () => {
+    // 在会话 a 里自动开的标签；mergeDelegationSummaries 为了保实时刷新会保留
+    // 开着但属于别的会话的委派条目，于是切到 b 后刷新请求带着 parentSession=b 来。
+    let state = panelReducer(initialPanelState, { type: "session-changed", sourceSession: "/sessions/a.jsonl" });
+    state = panelReducer(state, { type: "open-child-session", panel: panel("delegation-1", { parentSession: "/sessions/a.jsonl", status: "running" }) });
+    state = panelReducer(state, { type: "session-changed", sourceSession: "/sessions/b.jsonl" });
+    state = panelReducer(state, { type: "open-child-session", panel: panel("delegation-1", { status: "completed", parentSession: "/sessions/b.jsonl" }) });
+    const tab = state.tabs.find((item) => item.type === "child-session");
+    // 归属仍是 a，但刷新本身生效（状态更新为 completed）。
+    expect(tab).toMatchObject({ info: { parentSession: "/sessions/a.jsonl", status: "completed" } });
+    expect(visiblePanelTabs(state).filter((item) => item.type === "child-session")).toHaveLength(0);
+    // 没记录归属的旧标签仍可被第一次刷新采纳。
+    let legacy = panelReducer(initialPanelState, { type: "session-changed", sourceSession: "/sessions/a.jsonl" });
+    legacy = panelReducer(legacy, { type: "open-child-session", panel: panel("legacy") });
+    legacy = panelReducer(legacy, { type: "open-child-session", panel: panel("legacy", { parentSession: "/sessions/a.jsonl" }) });
+    const legacyTab = legacy.tabs.find((item) => item.type === "child-session");
+    expect(legacyTab).toMatchObject({ info: { parentSession: "/sessions/a.jsonl" } });
+  });
 });

@@ -271,7 +271,18 @@ function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
         (tab): tab is ChildSessionPanelTab => tab.type === "child-session" && tab.key === action.panel.key,
       );
       if (existing) {
-        const merged: ChildSessionPanelTab = { ...existing, info: { ...existing.info, ...action.panel.info } };
+        // 归属在创建时定死：全局刷新循环会对「开着但属于别的会话」的标签发来带
+        // parentSession=当前会话 的 info（mergeDelegationSummaries 为保实时刷新
+        // 保留跨会话条目），不能让它把标签过继给新会话——否则切一次会话标签就
+        // 永远跟人走了。已有归属优先，仅在缺失时采纳新值。
+        const merged: ChildSessionPanelTab = {
+          ...existing,
+          info: {
+            ...existing.info,
+            ...action.panel.info,
+            ...(existing.info.parentSession ? { parentSession: existing.info.parentSession } : {}),
+          },
+        };
         return {
           tabs: state.tabs.map((tab) => tab.id === existing.id ? merged : tab),
           // 实时刷新（activate=false）不抢焦点；别的会话的标签同样不抢（打开即隐藏，
