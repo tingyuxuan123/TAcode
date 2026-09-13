@@ -538,6 +538,8 @@ export function App() {
     });
   }, []);
   const [stopping, setStopping] = useState(false);
+  const [stopTimedOut, setStopTimedOut] = useState(false);
+  const [forceStopping, setForceStopping] = useState(false);
   const [transcriptKey, setTranscriptKey] = useState("empty");
   const eventQueue = useRef<ReturnType<typeof createStreamScheduler> | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -652,6 +654,17 @@ export function App() {
     void window.harness.app.logDiagnostic("agent-error", detail).catch(() => undefined);
     return friendlyAgentError(detail);
   }, []);
+
+  useEffect(() => {
+    setStopTimedOut(false);
+    if (!stopping) return;
+    const seq = startSeq.current;
+    const epoch = runEpoch.current;
+    const timer = setTimeout(() => {
+      if (seq === startSeq.current && epoch === runEpoch.current) setStopTimedOut(true);
+    }, STOP_UI_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [stopping, activeSession]);
 
   /** 宿主已停止或重启失败：清掉陈旧的会话引用，避免后续命令打到已不存在的会话。 */
   const dropAgentSession = useCallback(() => {
@@ -1817,7 +1830,11 @@ export function App() {
           setActiveSession(nextStats.sessionFile);
         }
       }
-      if (event.type === "agent_settled") {
+      if (event.type === "agent_settled" || event.type === "desktop_runtime_stopped") {
+        if (event.type === "desktop_runtime_stopped") {
+          setMessages((current) => settleStoppedTurn(current));
+          dropAgentSession();
+        }
         setRunning(false);
         setStopping(false);
         setUiRequest(undefined);
@@ -2075,6 +2092,29 @@ export function App() {
     return items;
   }, [groups, recoverableStreaks, running, stopping, uiRequest, loading, messages, activeActivity, t]);
 
+  const forceStopCurrent = async () => {
+    const runtimeId = runtimeIdRef.current;
+    if (!runtimeId || forceStopping) return;
+    const seq = startSeq.current;
+    const epoch = runEpoch.current;
+    setForceStopping(true);
+    try {
+      await window.harness.agent.stop(runtimeId);
+      if (seq !== startSeq.current || epoch !== runEpoch.current) return;
+      eventQueue.current?.flush();
+      dropAgentSession();
+      setMessages((current) => settleStoppedTurn(current));
+      setRunning(false);
+      setStopping(false);
+      setUiRequest(undefined);
+      markSessionRunning(sessionRef.current, false);
+    } catch (error) {
+      if (seq === startSeq.current && epoch === runEpoch.current) setToast(agentErrorToast(error));
+    } finally {
+      if (seq === startSeq.current && epoch === runEpoch.current) setForceStopping(false);
+    }
+  };
+
   const homeRecents = (
     workspace
       ? projects.find((item) => item.item.path === workspace)?.sessions ?? []
@@ -2086,6 +2126,10 @@ export function App() {
       fillText={promptFill.text}
       fillToken={promptFill.token}
       onSubmit={(text, images) => sendMessage(text, images, draftScope(workspace, activeSession))}
+      notice={stopping ? <div className="stop-notice" role="status">
+        <span>{t(forceStopping ? "composer.forceStopping" : stopTimedOut ? "composer.stopTimedOut" : "composer.stopRequested")}</span>
+        {stopTimedOut && <button type="button" disabled={forceStopping} onClick={() => void forceStopCurrent()}>{t("composer.forceStop")}</button>}
+      </div> : undefined}
       onStop={() => {
         const runtimeId = runtimeIdRef.current;
         if (!runtimeId) {
@@ -2104,32 +2148,25 @@ export function App() {
           const requestRuntimeId = typeof pendingUi.__runtimeId === "string" ? pendingUi.__runtimeId : runtimeIdRef.current;
           void window.harness.agent.respondToUi(pendingUi.id, { cancelled: true }, requestRuntimeId).catch(() => undefined);
         }
+        setStopTimedOut(false);
+        setForceStopping(false);
         setStopping(true);
-        // 宿主可能要等一个「不可中断的步骤」跑完才回 abort 响应（响应本身也有 10 分钟级上限），
-        // 期间按钮不能一直锁在「停止中」：给 UI 一个上限，超时就把按钮还原成可再次点击，
-        // 真正的收尾仍由 agent_settled 事件驱动。
-        const abortOutcome = window.harness.agent
-          .command("abort", undefined, runtimeId)
-          .then(() => "aborted" as const)
-          .catch((error) => (error instanceof Error ? error : new Error(String(error))));
-        const stopDeadline = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), STOP_UI_TIMEOUT_MS));
-        void Promise.race([abortOutcome, stopDeadline]).then((outcome) => {
-          if (seq !== startSeq.current || epoch !== runEpoch.current) return;
-          if (outcome === "timeout") {
+        // abort 应答只代表取消命令已处理；以真实运行状态/agent_settled 决定是否结束。
+        void window.harness.agent.command("abort", undefined, runtimeId)
+          .then(() => window.harness.agent.runtimes())
+          .then((runtimes) => {
+            if (seq !== startSeq.current || epoch !== runEpoch.current) return;
+            if (runtimes.some((runtime) => runtime.runtimeId === runtimeId && runtime.running)) return;
+            eventQueue.current?.flush();
+            setMessages((current) => settleStoppedTurn(current));
+            setRunning(false);
             setStopping(false);
-            return;
-          }
-          if (outcome instanceof Error) {
-            setStopping(false);
-            setToast(agentErrorToast(outcome));
-            return;
-          }
-          if (!live.current) return;
-          eventQueue.current?.flush();
-          setMessages((current) => epoch === runEpoch.current ? settleStoppedTurn(current) : current);
-          setRunning(false);
-          setStopping(false);
-        });
+            markSessionRunning(sessionRef.current, false);
+          }).catch((error) => {
+            if (seq !== startSeq.current || epoch !== runEpoch.current) return;
+            setStopTimedOut(true);
+            setToast(agentErrorToast(error));
+          });
       }}
       steering={steering}
       rootRef={dock}

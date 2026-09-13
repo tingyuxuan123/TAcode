@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import type { TerminalEvent, TerminalInfo } from "../shared/types";
-import { killProcessTree } from "./process-tree";
+import { terminateProcessTree } from "./process-tree";
 
 const OUTPUT_LIMIT = 160_000;
 const INPUT_LIMIT = 32_000;
@@ -40,11 +40,14 @@ function loadPty(): PtyModule {
 interface TerminalRecord {
   info: TerminalInfo;
   child: PtyTerminal;
+  exited: Promise<void>;
+  stopping?: Promise<void>;
 }
 
 /** User-owned interactive shells for the right-side Terminal panel. */
 export class TerminalManager {
   private readonly terminals = new Map<string, TerminalRecord>();
+  private readonly cleanups = new Set<Promise<void>>();
 
   constructor(
     private readonly emit: (event: TerminalEvent) => void,
@@ -78,12 +81,15 @@ export class TerminalManager {
       running: true,
       startedAt: Date.now(),
     };
-    const record: TerminalRecord = { info, child };
+    let finish!: () => void;
+    const exited = new Promise<void>((resolve) => { finish = resolve; });
+    const record: TerminalRecord = { info, child, exited };
     this.terminals.set(id, record);
     child.onData((data) => {
       this.emit({ id, type: "output", data: data.slice(-OUTPUT_LIMIT) });
     });
     child.onExit(({ exitCode }) => {
+      finish();
       record.info = { ...record.info, running: false, exitCode };
       this.emit({ id, type: "exit", exitCode });
     });
@@ -108,29 +114,32 @@ export class TerminalManager {
     record.child.resize(cols, rows);
   }
 
-  stop(id: string): void {
+  stop(id: string): Promise<void> {
     const record = this.terminals.get(id);
-    if (!record) return;
-    if (record.child.pid !== undefined && record.info.running) {
-      // 先标记再杀：exit 事件在 PTY 下是异步到达的，UI 不能依赖它才知道已停止。
-      record.info = { ...record.info, running: false };
-      killProcessTree(record.child.pid, "SIGTERM");
-      record.child.kill();
-    }
+    if (!record) return Promise.resolve();
+    if (record.stopping) return record.stopping;
+    if (record.child.pid === undefined || !record.info.running) return Promise.resolve();
+    record.info = { ...record.info, running: false };
+    const job = terminateProcessTree(record.child.pid, { exited: record.exited, graceMs: 1000 })
+      .finally(() => { try { record.child.kill(); } catch { /* 已退出 */ } })
+      .catch((error) => {
+        if (record.info.exitCode === undefined) record.info = { ...record.info, running: true };
+        throw error;
+      });
+    record.stopping = job;
+    this.cleanups.add(job);
+    const done = () => { this.cleanups.delete(job); if (record.stopping === job) record.stopping = undefined; };
+    void job.then(done, done);
+    return job;
   }
 
   list(): TerminalInfo[] {
     return [...this.terminals.values()].map((record) => ({ ...record.info }));
   }
 
-  stopAll(): void {
-    for (const record of this.terminals.values()) {
-      if (record.child.pid !== undefined && record.info.running) {
-        record.info = { ...record.info, running: false };
-        killProcessTree(record.child.pid, "SIGTERM");
-        record.child.kill();
-      }
-    }
+  async stopAll(): Promise<void> {
+    for (const id of this.terminals.keys()) void this.stop(id).catch(() => undefined);
     this.terminals.clear();
+    await Promise.all([...this.cleanups]);
   }
 }

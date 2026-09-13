@@ -2285,6 +2285,7 @@ export function PromptBar({
   fillToken = 0,
   onSubmit,
   onStop,
+  notice,
   steering,
   rootRef,
   running,
@@ -2314,6 +2315,7 @@ export function PromptBar({
   fillToken?: number;
   onSubmit(text?: string, images?: string[]): boolean | void | Promise<boolean | void>;
   onStop(): void;
+  notice?: ReactNode;
   steering?: string[];
   rootRef?: Ref<HTMLDivElement>;
   running: boolean;
@@ -2656,6 +2658,7 @@ export function PromptBar({
   const folder = workspace ? baseName(workspace) : undefined;
   return (
     <div ref={rootRef} className={hero ? "prompt-wrap hero" : "prompt-wrap"} data-draft-key={draftKey}>
+      {notice}
       <div className="prompt-shell">
         {(hero || (steering && steering.length > 0)) && (
           <div className="prompt-topbar">

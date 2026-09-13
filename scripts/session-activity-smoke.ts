@@ -15,6 +15,7 @@ import { WorkspaceWatchers } from "../src/main/workspace-watcher";
 import { readWorkspacePreview } from "../src/main/workspace-preview";
 import { testFilePreview, type PreviewSmokeControls } from "./file-preview-smoke";
 import { createPanelFixture, testPanelPerformance } from "./panel-performance-smoke";
+import { testStopping, type StopSmokeControls } from "./stop-smoke";
 import { initializeTacodeHome } from "../src/runtime/home";
 import { listTacodeThreads } from "../src/runtime/state";
 import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/types";
@@ -54,6 +55,8 @@ async function smoke() {
   const filesSmoke = process.env.TACODE_FILES_SMOKE === "1";
   const previewSmoke = process.env.TACODE_PREVIEW_SMOKE === "1";
   const panelsSmoke = process.env.TACODE_PANELS_SMOKE === "1";
+  const stopSmoke = process.env.TACODE_STOP_SMOKE === "1";
+  const stopControls: StopSmokeControls = { settle: false, requests: [] };
   const previewControls: PreviewSmokeControls = { reads: 0, fail: false, hold: false };
   const fileIndex = new WorkspaceFileIndex();
   const workspaceWatchers = new WorkspaceWatchers((root, paths) => {
@@ -113,6 +116,10 @@ async function smoke() {
           if (request.type === "extension_ui_response") {
             replies.push({ ...request, runtimeId });
             if (request.id === "approve-a-2") pendingPrompts.get(runtimeId)?.();
+          } else if (request.type === "abort" && stopSmoke) {
+            stopControls.requests.push(runtimeId);
+            queueMicrotask(() => emit(host, { type: "response", id: request.id, success: true, data: {} }));
+            if (stopControls.settle) setTimeout(() => emit(host, { type: "agent_settled" }), 75);
           } else if (request.type === "prompt") {
             controls.submitted.push(request);
             const complete = (accepted: boolean) => {
@@ -298,6 +305,14 @@ async function smoke() {
     manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (stopSmoke) {
+      stage = "stopping feedback and process isolation";
+      await wait(() => evaluate("!!document.querySelector('.project-row')"));
+      await evaluate("document.querySelector('.project-row').click()");
+      await testStopping(main, manager.findBySession(sessions[0].path)!, manager.findBySession(sessions[1].path)!, stopControls, emit, select, screenshot, replies);
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      return;
+    }
     if (panelsSmoke && panelFixture) {
       stage = "multiple chat panel performance";
       await wait(() => evaluate("!!document.querySelector('.project-row')"));

@@ -67,6 +67,7 @@ export class AgentManager {
   /** 会话路径 / 请求路径 → runtimeId；rekey 时先清旧别名，避免路径漂移后指向旧 host。 */
   private readonly index = new Map<string, string>();
   private readonly queues = new Map<string, Promise<unknown>>();
+  private readonly stopping = new Map<string, Promise<void>>();
   private activeRuntimeId: string | undefined;
   private selection = 0;
 
@@ -160,11 +161,18 @@ export class AgentManager {
   }
 
   stop(runtimeId?: string): Promise<void> {
+    const closing = this.stopping.get(runtimeId ?? this.activeRuntimeId ?? "");
+    if (closing) return closing;
     const host = this.activeHost(runtimeId);
     if (!host) return Promise.resolve();
     // 关闭不能排在尚未返回的命令后面；Host.stop 会拒绝那些未完成请求。
     this.removeHost(host);
-    return Promise.all([this.stopDelegations(host), host.stop()]).then(() => undefined);
+    const job = Promise.all([this.stopDelegations(host), host.stop()]).then(() => undefined).catch((error) => {
+      if (host.isRunning()) { this.runtimes.set(host.runtimeId, host); this.reindex(host); }
+      throw error;
+    }).finally(() => { this.stopping.delete(host.runtimeId); });
+    this.stopping.set(host.runtimeId, job);
+    return job;
   }
 
   command<T>(
@@ -220,7 +228,7 @@ export class AgentManager {
     this.runtimes.clear();
     this.index.clear();
     this.activeRuntimeId = undefined;
-    await Promise.all(hosts.map((host) => Promise.all([this.stopDelegations(host), host.stop()]).catch(() => undefined)));
+    await Promise.all([...this.stopping.values(), ...hosts.map((host) => Promise.all([this.stopDelegations(host), host.stop()]))].map((job) => job.catch(() => undefined)));
   }
 
   private async stopDelegations(host: AgentHost): Promise<void> {

@@ -136,7 +136,7 @@
 
   **定位与风险。** [ChildSessionPanel 事件更新](/Users/yfdl/project/TAcode/src/renderer/browser/child-session-panel.tsx:124)、[SideChatPanel](/Users/yfdl/project/TAcode/src/renderer/browser/side-chat-panel.tsx:70)、[面板挂载方式](/Users/yfdl/project/TAcode/src/renderer/browser/workbench-panels.tsx:183)。风险中等，复用既有机制比重新设计一套消息管线更可控。
 
-- [ ] **UX-12 · 停止过程有反馈、超时可处理**
+- [x] **UX-12 · 停止过程有反馈、超时可处理**
 
   **代码确认。** 主输入框已经有“停止中”、取消当前询问及 10 秒等待上限；超时后的处理主要是重新启用停止按钮。主进程的进程树终止仍使用同步 `pgrep` / `taskkill`，在停止 worker、关闭终端等路径可能阻塞事件循环。
 

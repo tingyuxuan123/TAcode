@@ -9360,3 +9360,7 @@ kbd {
 /* 子会话与侧聊使用主对话的虚拟列表，保留各自紧凑的面板宽度。 */
 .child-session-flow .messages, .side-chat-flow .messages { width: 100%; max-width: none; padding: 0; margin: 0; }
 .child-session-flow .message-item, .side-chat-flow .message-item { min-width: 0; }
+
+.stop-notice { display: flex; align-items: center; gap: 12px; margin: 0 0 8px; padding: 10px 14px; color: var(--ink-2); background: var(--inset); border: 1px solid var(--line); border-radius: 10px; font-size: calc(12px * var(--ui-font-scale)); }
+.stop-notice span { flex: 1; }
+.stop-notice button { flex: none; padding: 5px 9px; color: var(--red); border: 1px solid var(--line); border-radius: 6px; }

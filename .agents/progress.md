@@ -1138,3 +1138,12 @@
 - 三轮中位数：两个隐藏正文 DOM 更新 **726 → 0**，累计 React render duration **443.6 → 0.2 ms**，App 子树 **808.3 → 380.8 ms**，输入 p95 **23.2 → 20.6 ms**。两边长任务均为 0，不称为消除了原有卡顿。条件和原始数据见 `docs/ux-11-panel-performance.md` 与 JSON；Profiler 记录 render duration，不是完整 DOM 提交耗时。
 - 文件：renderer/panel-message-stream.ts、browser/panel-message-list.tsx、child-session-panel.tsx、side-chat-panel.tsx、workbench-panels.tsx、样式；stream/接线测试、panel-performance-smoke.ts 与构建计时插件。
 - 下一项：UX-12 停止反馈、超时操作及异步进程树清理。整份目标继续 active。
+
+## 2026-09-13：UX-12 停止反馈与异步清理
+
+- [x] 点击取消后持续显示等待状态；abort 应答后核对真实运行状态，只有已结束/实际退出才收口。10 秒后提供强制结束当前会话入口，继续保留输入能力与草稿。取消时关闭当前询问，迟到操作按运行句柄和导航版本隔离。
+- [x] 主进程改为异步、共用 in-flight 的进程表查询；TERM 前保留后代身份，根退出后核对启动时间并清理忽略 TERM 的后代，排除应用进程组。Windows 使用异步 taskkill；Host/Manager/Terminal 合并并发停止并等待退出清理，失败可重试。
+- 验证：全量 **127 文件 / 1040 测试通过**，typecheck 与 diff check 通过；真实 Node 父子进程覆盖 detached 后代忽略 TERM、旁边进程保留。Windows 分支经过模拟测试，未声称 Windows 实机覆盖。桌面 `TACODE_STOP_SMOKE=1` 通过：反馈 1.6 ms，超时入口 10016.1 ms；早 ACK 仍等待，强停 A 不影响 B，询问取消后真实 settled 收口；已查看 `ux-12/stop-timeout.png`。
+- 边界：当前取消倒计时随视图维护，切换回来可重新取消；runtime/tools 的 exit 同步兜底仍保留，此项仅消除主进程正常清理路径的同步查询。
+- 文件：main/process-tree.ts、agent-host.ts、agent-manager.ts、terminal-manager.ts、index.ts；renderer/App.tsx、ui.tsx、styles.css；shared/i18n.ts；进程/终端测试和 stop-smoke.ts。
+- 下一项：UX-13 长回答、长代码和大文件性能边界，先用固定样本定位再比较。整份目标继续 active。

@@ -583,8 +583,8 @@ function createWindow(): void {
       agentManager.stopAll(),
       sideChatManager.stopAll(),
       delegationCoordinator?.stopAll() ?? Promise.resolve(),
-    ]);
-    terminalManager.stopAll();
+      terminalManager.stopAll(),
+    ]).catch((error) => diagnostics.error("shutdown", String(error)));
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
@@ -930,7 +930,7 @@ function registerIpc(): void {
     terminalManager.resize(id, cols, rows);
   });
   ipcMain.handle("terminal:stop", (_event, rawId: unknown) => {
-    terminalManager.stop(requireString(rawId, "终端 id", { maxLength: 128 }));
+    return terminalManager.stop(requireString(rawId, "终端 id", { maxLength: 128 }));
   });
   ipcMain.handle("terminal:list", () => terminalManager.list());
   ipcMain.handle("vision:config", async () => {
@@ -2250,6 +2250,8 @@ app.on("before-quit", (event) => {
   Promise.all([
     historyMaintenance.cancel(),
     agentManager.stopAll(),
+    sideChatManager.stopAll(),
+    terminalManager.stopAll(),
     delegationCoordinator?.close() ?? Promise.resolve(),
   ])
     .catch(() => undefined)

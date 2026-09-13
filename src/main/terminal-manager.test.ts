@@ -1,6 +1,8 @@
-import { rm } from "node:fs/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalManager, type PtyModule, type PtyTerminal } from "./terminal-manager";
+import { terminateProcessTree } from "./process-tree";
+
+vi.mock("./process-tree", () => ({ terminateProcessTree: vi.fn(async () => {}) }));
 
 interface FakeTerminal extends PtyTerminal {
   lastWrite: string;
@@ -55,7 +57,7 @@ describe("TerminalManager", () => {
   let pty: ReturnType<typeof createFakePty> | undefined;
 
   afterEach(async () => {
-    manager?.stopAll();
+    await manager?.stopAll();
     manager = undefined;
     pty = undefined;
   });
@@ -91,17 +93,17 @@ describe("TerminalManager", () => {
     expect(() => manager!.resize(info.id, 120, 501)).toThrow("out of range");
   });
 
-  it("拒绝未知会话和超长输入，stop/stopAll 清理会话", () => {
+  it("拒绝未知会话和超长输入，stop/stopAll 清理会话", async () => {
     boot();
     manager!.start(cwd);
     expect(() => manager!.write("missing", "pwd\n")).toThrow("Unknown terminal session");
     const info = manager!.start(cwd);
     expect(() => manager!.write(info.id, "x".repeat(32_001))).toThrow("too long");
     const terminal = pty!.spawned[1];
-    manager!.stop(info.id);
+    await manager!.stop(info.id);
     expect(terminal.killed).toBe(true);
     const second = manager!.start(cwd);
-    manager!.stopAll();
+    await manager!.stopAll();
     expect(pty!.spawned[2].killed).toBe(true);
     expect(manager!.list().find((item) => item.id === second.id)).toBeUndefined();
   });
@@ -112,6 +114,18 @@ describe("TerminalManager", () => {
     manager!.stop(info.id);
     // stop 里同步标记 running=false：PTY 的 exit 事件是异步到达的，UI 不依赖它才知道已停止。
     expect(() => manager!.write(info.id, "ls\n")).toThrow("not running");
+  });
+
+  it("清理失败后仍能重试，同一终端的并发停止共用清理", async () => {
+    boot();
+    const info = manager!.start(cwd);
+    vi.mocked(terminateProcessTree).mockRejectedValueOnce(new Error("cleanup failed"));
+    const first = manager!.stop(info.id);
+    expect(manager!.stop(info.id)).toBe(first);
+    await expect(first).rejects.toThrow("cleanup failed");
+    expect(manager!.list().find((item) => item.id === info.id)?.running).toBe(true);
+    await manager!.stop(info.id);
+    expect(manager!.list().find((item) => item.id === info.id)?.running).toBe(false);
   });
 
   it("node-pty 加载失败时报可读错误", () => {

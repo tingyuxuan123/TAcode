@@ -5,7 +5,7 @@ import type { AgentEvent, AgentSessionStats, AgentSnapshot, AgentStartOptions, E
 import { isAgentUiDialog } from "../shared/agent-ui";
 import { ContextStatsTracker } from "./context-stats";
 import { parseSkillCommands } from "../shared/skills";
-import { killProcessTree } from "./process-tree";
+import { killProcessTree, terminateProcessTree } from "./process-tree";
 import { drainUtf8Lines } from "./rpc-lines";
 import { IPC_LIMITS, formatBytes, redactSecrets } from "./ipc-validation";
 import type { DiagnosticSink } from "./local-logger";
@@ -82,6 +82,7 @@ export class AgentHost {
   private capabilitiesRevision = 0;
   private appliedCapabilitiesRevision = 0;
   private capabilitiesReload?: Promise<void>;
+  private stopping?: Promise<void>;
 
   invalidateCapabilities(): void { this.capabilitiesRevision += 1; }
 
@@ -408,8 +409,9 @@ export class AgentHost {
         .then((result) => reply({ result }), (error) => reply({ error: error instanceof Error ? error.message : String(error) }))
         .finally(() => this.browserRequests.delete(browserRequest.id));
     });
-    child.stdout.on("data", (chunk: Buffer) => this.handleChunk(chunk));
+    child.stdout.on("data", (chunk: Buffer) => { if (this.child === child) this.handleChunk(chunk); });
     child.stderr.on("data", (chunk: Buffer) => {
+      if (this.child !== child) return;
       this.stderr = `${this.stderr}${chunk.toString()}`.slice(-AgentHost.STDERR_CAP);
     });
     child.stdin.on("error", (error) => {
@@ -427,7 +429,7 @@ export class AgentHost {
     child.once("error", (error) => {
       if (this.child !== child) return;
       this.child = undefined;
-      if (child.pid !== undefined) killProcessTree(child.pid, "SIGTERM");
+      if (child.pid !== undefined) void killProcessTree(child.pid).catch(() => undefined);
       this.log?.error("worker", `spawn error: ${redactSecrets(error.message, this.secrets)}`, {
         runtimeId: this.runtimeId,
         sessionKey: this.sessionKey,
@@ -438,7 +440,7 @@ export class AgentHost {
       if (this.child !== child) return;
       this.child = undefined;
       // Worker may die before its own wipe; reap leftover shells/delegates.
-      if (child.pid !== undefined) killProcessTree(child.pid, "SIGTERM");
+      if (child.pid !== undefined) void killProcessTree(child.pid).catch(() => undefined);
       this.exitInfo = {
         ...(typeof code === "number" ? { code } : {}),
         ...(signal ? { signal } : {}),
@@ -460,9 +462,18 @@ export class AgentHost {
     child.send({ type: DELEGATION_BRIDGE_EVENT, event: event.event }, () => {});
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    const pending = this.stopNow();
+    this.stopping = pending;
+    const done = () => { if (this.stopping === pending) this.stopping = undefined; };
+    void pending.then(done, done);
+    return pending;
+  }
+
+  private async stopNow(): Promise<void> {
+    const wasActive = this.turnActive;
     this.clearPendingUi();
-    this.emitEvent(this.tagged({ type: "desktop_runtime_stopped" }));
     this.clearStatsRefresh();
     this.contextStats = new ContextStatsTracker();
     this.latestStats = undefined;
@@ -473,29 +484,26 @@ export class AgentHost {
     this.flushStartWaiters(false);
     this.flushSettledWaiters();
     const child = this.child;
-    if (!child) return;
+    if (!child) { this.emitEvent(this.tagged({ type: "desktop_runtime_stopped" })); return; }
     this.child = undefined;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(new Error("Agent session closed"));
     }
     this.pending.clear();
-    if (child.exitCode !== null || child.pid === undefined) return;
-    // Kill the whole RPC tree (delegate explorers, shells, sandboxes) before the
-    // desktop process exits — a plain child.kill() leaves detached orphans.
-    killProcessTree(child.pid, "SIGTERM");
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        if (child.exitCode === null && child.pid !== undefined) {
-          killProcessTree(child.pid, "SIGKILL");
-        }
-        resolve();
-      }, 2_000);
-      child.once("exit", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-    });
+    try {
+      if (child.exitCode === null && child.pid !== undefined) {
+        let finish!: () => void;
+        const exited = new Promise<void>((resolve) => { finish = resolve; child.once("exit", resolve); });
+        try { await terminateProcessTree(child.pid, { exited }); }
+        finally { child.removeListener("exit", finish); }
+        if (child.exitCode === null && child.signalCode === null) throw new Error("运行进程尚未退出，请再次停止。");
+      }
+    } catch (error) {
+      if (child.exitCode === null && child.signalCode === null) { this.child = child; this.turnActive = wasActive; }
+      throw error;
+    }
+    this.emitEvent(this.tagged({ type: "desktop_runtime_stopped" }));
   }
 
   async request<T>(type: string, data: Record<string, unknown> = {}): Promise<T> {
