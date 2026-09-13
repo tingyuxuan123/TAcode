@@ -538,12 +538,22 @@ export function App() {
   useEffect(() => {
     panelDispatch({ type: "session-changed", ...(activeSession ? { sourceSession: activeSession } : {}) });
   }, [activeSession, panelDispatch]);
+  const sidebarLayout = useSidebarLayout();
+  // 用户点开子会话的统一入口（侧栏行 + 委派卡片行都走这里）：侧栏收着时顺手展开。
+  // 点击结果落在右侧面板，收起的侧栏自己毫无反应，会让人以为没点上。自动开标签
+  // （useDelegationTabs 的后台刷新）直接走 browserPanels 原入口、不经过这里，不抢侧栏。
+  const openChildSessionFromClick = useCallback(
+    (...args: Parameters<typeof browserPanels.openChildSession>) => {
+      browserPanels.openChildSession(...args);
+      if (sidebarLayout.collapsed) sidebarLayout.toggle();
+    },
+    [browserPanels.openChildSession, sidebarLayout],
+  );
   // 供深链组件（委派卡片）打开子代理标签：卡片在 ui.tsx 的模块级 renderTool 里渲染，拿不到这里的 props。
   const panelActions = useMemo(
-    () => ({ openChildSession: browserPanels.openChildSession }),
-    [browserPanels.openChildSession],
+    () => ({ openChildSession: openChildSessionFromClick }),
+    [openChildSessionFromClick],
   );
-  const sidebarLayout = useSidebarLayout();
   const [inspectFocusToken, setInspectFocusToken] = useState(0);
   const openCapabilities = useCallback(() => {
     browserPanels.openPanel("mcp");
@@ -994,7 +1004,7 @@ export function App() {
     // 身份与主会话里的委派卡片一致（委派 id 或子会话文件名同源），点哪边都是同一个标签页。
     const key = delegationPanelKey(session.sourceDelegationId, session.path);
     if (!key) return;
-    browserPanels.openChildSession(key, {
+    openChildSessionFromClick(key, {
       role: session.delegationRole ?? "subagent",
       sessionPath: session.path,
       ...(session.title ? { title: session.title } : {}),
@@ -1004,11 +1014,7 @@ export function App() {
       ...(session.messageCount ? { turns: session.messageCount } : {}),
       ...(session.delegationReport ? { report: session.delegationReport } : {}),
     });
-    // 侧栏收起时点子会话：把侧栏展开。收起状态下点击的结果落在右侧面板，侧栏自己
-    // 毫无反应，看起来就像没点上；展开后树上下文可见（子会话归属就在它父会话下面）。
-    // auto-collapse 只在拖拽右侧面板宽度时触发，这里展开是稳定的，不会被打回去。
-    if (sidebarLayout.collapsed) sidebarLayout.toggle();
-  }, [browserPanels, sidebarLayout]);
+  }, [openChildSessionFromClick]);
 
   const stopDelegatedSession = useCallback(async (session: SessionSummary) => {
     if (!session.sourceDelegationId) return;
