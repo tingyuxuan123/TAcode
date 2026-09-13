@@ -2,7 +2,7 @@
   {
     "id": "UX-01",
     "description": "后台审批、失败和完成状态可恢复。验收：A 运行时切到 B，A 发起确认后 B 的输入不被打断，侧栏出现待处理标记；切回 A 或重载渲染界面后，确认卡仍可操作且只答复一次。后台失败能查到原因，不能统一提示为成功完成。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-01。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "UX-02",

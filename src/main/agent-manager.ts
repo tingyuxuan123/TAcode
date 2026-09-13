@@ -109,7 +109,7 @@ export class AgentManager {
 
   async start(options: AgentHostStartOptions): Promise<AgentStartResult> {
     const existing = this.findBySession(options.sessionPath);
-    if (existing?.isRunning()) return this.enqueue(existing.runtimeId, () => this.startOn(existing, options));
+    if (existing?.isRunning()) return this.resume(existing.runtimeId);
     // A worker can exit before the renderer gets a chance to call stop(). Do not
     // reuse that dead host: a queued stop followed by a restart could otherwise
     // remove the restarted host from the manager map.
@@ -118,26 +118,29 @@ export class AgentManager {
     const key = `start:${options.sessionPath ?? options.cwd ?? "new"}`;
     return this.enqueue(key, () => {
       const reused = this.findBySession(options.sessionPath);
-      return this.startOn(reused ?? this.createHost(), options);
+      if (reused?.isRunning()) return this.resume(reused.runtimeId);
+      if (reused) this.removeHost(reused);
+      return this.startOn(this.createHost(), options);
     });
   }
 
   /** 复用已在运行的宿主：只取快照与缺口事件，不重启 worker。 */
-  resume(runtimeId: string): Promise<AgentStartResult> {
+  async resume(runtimeId: string): Promise<AgentStartResult> {
     const host = this.findRuntime(runtimeId);
     if (!host || !host.isRunning())
       return Promise.reject(new Error("Agent session is not running"));
-    return this.enqueue(host.runtimeId, async () => {
-      const snapshot = await host.snapshot();
-      this.activeRuntimeId = host.runtimeId;
-      const cut = host.lastSnapshotSeq;
-      return {
-        ...snapshot,
-        runtimeId: host.runtimeId,
-        lastSeq: cut,
-        replay: host.replaySince(cut),
-      };
-    });
+    // 读取不能排在等待 UI 的 prompt 后，否则连恢复确认卡也会死锁。
+    const snapshot = await host.snapshot();
+    if (this.findRuntime(runtimeId) !== host || !host.isRunning())
+      throw new Error("Agent session is not running");
+    this.activeRuntimeId = host.runtimeId;
+    const cut = host.lastSnapshotSeq;
+    return {
+      ...snapshot,
+      runtimeId: host.runtimeId,
+      lastSeq: cut,
+      replay: host.replaySince(cut),
+    };
   }
 
   stop(runtimeId?: string): Promise<void> {
@@ -187,7 +190,7 @@ export class AgentManager {
     response: Record<string, unknown>,
   ): Promise<void> {
     const host = this.activeHost(runtimeId);
-    if (!host) return Promise.resolve();
+    if (!host) return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
     // UI 应答是宿主正在等待的“带外”回复，必须绕过按 runtime 串行化的命令队列：
     // 触发这次询问的 prompt 命令可能仍挂在队列里（例如斜杠命令内部 await
     // ctx.ui.confirm），若把应答排在它后面就会互相等待死锁。

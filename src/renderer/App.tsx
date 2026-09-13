@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { latestContextStats } from "./context-stats";
 import type {
   AgentSessionStats,
+  AgentSessionActivity,
   AgentSnapshot,
   ExtensionUiRequest,
   PermissionMode,
@@ -86,6 +87,8 @@ import { PanelActionsProvider } from "./panel-actions";
 import { delegationPanelKey } from "./browser/panel-state";
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
+import { useAgentActivities } from "./use-agent-activities";
+import { SessionActivityError, SessionActivityIndicator } from "./session-activity";
 import logo from "./logo.svg";
 import { useI18n } from "./i18n";
 import { PreviewContext } from "./file-path-chip";
@@ -139,6 +142,7 @@ function MoreIcon() {
 
 export function SessionRow({
   session,
+  activity,
   active,
   running,
   childCount,
@@ -152,6 +156,7 @@ export function SessionRow({
   onRemove,
 }: {
   session: SessionSummary;
+  activity?: AgentSessionActivity;
   active: boolean;
   running: boolean;
   /** 委派子会话数量；> 0 时显示分支展开开关。 */
@@ -196,7 +201,8 @@ export function SessionRow({
   };
 
   const delegationRunning = session.delegationStatus === "pending" || session.delegationStatus === "running";
-  const sessionIsRunning = running || delegationRunning;
+  const sessionIsRunning = activity?.running ?? (running || delegationRunning);
+  const hasActivityIndicator = Boolean(activity?.pendingRequests.length || activity?.status === "failed" || (activity?.status === "completed" && activity.unread));
 
   return (
     <div
@@ -235,7 +241,8 @@ export function SessionRow({
           onClick={onOpen}
         >
           {session.pinned && <Icon path={PIN_ICON} size={12} />}
-          {sessionIsRunning && (
+          {hasActivityIndicator && <SessionActivityIndicator activity={activity} />}
+          {sessionIsRunning && !hasActivityIndicator && (
             <span className="session-running" title={t("nav.sessionRunning")} aria-label={t("nav.sessionRunning")}></span>
           )}
           {session.sourceDelegationId && !sessionIsRunning && <Icon path="M4 5h16v14H4zM8 9h8M8 13h5" size={12} />}
@@ -458,15 +465,6 @@ export function App() {
   // JSONL，主进程 `sessions:list` 会合成一条占位（标题为 cwd 兜底）；这里用首次消息
   // 标题覆写，使新会话在切走/刷新后仍显示用户真正输入的标题，而非 cwd 名。
   const sessionTitlesRef = useRef<Map<string, string>>(new Map());
-  const sessionsRefMirror = useRef<SessionSummary[]>([]);
-  sessionsRefMirror.current = sessions;
-  const eventSessionTitle = (sessionId: string | undefined): string => {
-    if (!sessionId) return "";
-    const row = sessionsRefMirror.current.find(
-      (item) => item.path === sessionId || item.storagePath === sessionId,
-    );
-    return row?.title ?? sessionTitlesRef.current.get(sessionId) ?? "";
-  };
   const setSessionList = useCallback((threads: SessionSummary[]) => {
     const titles = sessionTitlesRef.current;
     setSessions(
@@ -530,7 +528,24 @@ export function App() {
     const id = window.setTimeout(() => setToast(undefined), 5000);
     return () => window.clearTimeout(id);
   }, [toast]);
-  const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
+  const [localUiRequest, setUiRequest] = useState<ExtensionUiRequest>();
+  const { activities, mergeActivity } = useAgentActivities();
+  const activeActivity = activeSession ? activities.get(activeSession) : undefined;
+  const uiRequest = localUiRequest ?? (loading ? undefined : activeActivity?.pendingRequests[0]);
+  useEffect(() => {
+    const acknowledgeVisible = () => {
+      if (!loading && activeActivity?.unread && document.visibilityState === "visible" && document.hasFocus()) {
+        void window.harness.agent.acknowledgeActivity(activeActivity.runtimeId, activeActivity.version).catch(() => undefined);
+      }
+    };
+    acknowledgeVisible();
+    window.addEventListener("focus", acknowledgeVisible);
+    document.addEventListener("visibilitychange", acknowledgeVisible);
+    return () => {
+      window.removeEventListener("focus", acknowledgeVisible);
+      document.removeEventListener("visibilitychange", acknowledgeVisible);
+    };
+  }, [loading, activeActivity]);
   const [fullscreen, setFullscreen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FileChange>();
@@ -870,6 +885,7 @@ export function App() {
         ...(extraModels.length ? { extraModels } : {}),
       });
       if (seq !== startSeq.current) return false;
+      if (snapshot.activity) mergeActivity(snapshot.activity);
       runtimeIdRef.current = snapshot.runtimeId;
       const file = sessionFileOf(snapshot) ?? sessionPath;
       if (file) sessionRef.current = file;
@@ -900,7 +916,7 @@ export function App() {
         const inBackgroundSet = file
           ? runningSessionIdsRef.current.has(file)
           : false;
-        setRunning(inBackgroundSet || (Boolean(snapshot.state.isStreaming) && !hadRunning));
+        setRunning(snapshot.activity?.running ?? (inBackgroundSet || (Boolean(snapshot.state.isStreaming) && !hadRunning)));
         setAgentSkills(snapshot.skills ?? []);
         if (resume && hadRunning) setToast(t("toast.sessionInterrupted"));
         if (sessionPath && next.length === 0) {
@@ -940,16 +956,29 @@ export function App() {
       agentCwd.current = snapshot.cwd ?? cwd ?? agentCwd.current;
       agentModelsRef.current = snapshot.models ?? [];
       agentModelIdsRef.current = agentModelsRef.current.map((item) => item.id).filter(Boolean);
-      if (modelId) {
-        modelRef.current = modelId;
-        setModel(modelId);
-        await window.harness.agent.command("set_model", { provider: chat.id, modelId });
+      const viewingSession = Boolean(sessionPath) && !seedMessage && !resume;
+      if (viewingSession) {
+        const restoredModel = snapshot.state.model as { id?: string } | undefined;
+        if (restoredModel?.id) {
+          modelRef.current = restoredModel.id;
+          setModel(restoredModel.id);
+        }
+        if (typeof snapshot.state.thinkingLevel === "string") {
+          effortRef.current = snapshot.state.thinkingLevel;
+          setEffort(snapshot.state.thinkingLevel);
+        }
+      } else {
+        if (modelId) {
+          modelRef.current = modelId;
+          setModel(modelId);
+          await window.harness.agent.command("set_model", { provider: chat.id, modelId }, snapshot.runtimeId);
+        }
+        applyThinkingForModel(modelId, accounts);
+        const nextEffort = effortRef.current;
+        await window.harness.agent.command("set_thinking_level", { level: nextEffort }, snapshot.runtimeId).catch(() => undefined);
+        await syncAgentThinking();
+        await window.harness.agent.command("set_auto_compaction", { enabled: true }, snapshot.runtimeId).catch(() => undefined);
       }
-      applyThinkingForModel(modelId, accounts);
-      const nextEffort = effortRef.current;
-      await window.harness.agent.command("set_thinking_level", { level: nextEffort }).catch(() => undefined);
-      await syncAgentThinking();
-      await window.harness.agent.command("set_auto_compaction", { enabled: true }).catch(() => undefined);
       if (seq !== startSeq.current) return false;
       if (file) {
         sessionRef.current = file;
@@ -981,7 +1010,7 @@ export function App() {
     } catch (error) {
       if (seq !== startSeq.current) return false;
       const message = error instanceof Error ? error.message : String(error);
-      // Session switch kills the previous agent; still tell the user when open failed.
+      // 切换失败保留具体原因，后台会话继续运行。
       if (sessionPath) {
         setToast(t("toast.sessionOpenFailed", { error: friendlyAgentError(error) }));
       } else if (!/Agent session closed/.test(message)) {
@@ -995,7 +1024,7 @@ export function App() {
     } finally {
       if (seq === startSeq.current) setLoading(false);
     }
-  }, [agentErrorToast, applyThinkingForModel, dropAgentSession, permission, refreshAgentSkills, resolveSandbox, syncAgentThinking, t]);
+  }, [agentErrorToast, applyThinkingForModel, dropAgentSession, mergeActivity, permission, refreshAgentSkills, resolveSandbox, syncAgentThinking, t]);
 
   /**
    * 委派子会话：默认在右侧面板开一个只读标签（不再抢占中间主会话区）。
@@ -1538,17 +1567,16 @@ export function App() {
         void window.harness.sessions.list().then(setSessionList).catch(() => undefined);
         return;
       }
+      // 活动元数据跨会话、跨加载阶段接收；转录仍只应用到当前视图。
+      if (eventSession && event.type === "agent_start") markSessionRunning(eventSession, true);
+      if (eventSession && event.type === "agent_settled") {
+        markSessionRunning(eventSession, false);
+        void window.harness.sessions.list().then(setSessionList).catch(() => undefined);
+      }
       if (!live.current) { queue.clear(); return; }
       // Phase 3a：按活动会话路由。后台会话（__sessionId ≠ 当前视图）的事件不套到
-      // 当前 messages/stats，避免污染；但维护运行中徽标，并在其结束时提示完成。
+      // 当前 messages/stats，避免污染；后台状态由独立活动订阅维护。
       if (eventSession && eventSession !== sessionRef.current) {
-        if (event.type === "agent_start") {
-          markSessionRunning(eventSession, true);
-        } else if (event.type === "agent_settled") {
-          markSessionRunning(eventSession, false);
-          void window.harness.sessions.list().then(setSessionList);
-          setToast(t("toast.backgroundSessionDone", { title: eventSessionTitle(eventSession) }));
-        }
         return;
       }
       // 按运行句柄内序号去重：snapshot 回放与实时流可能重叠。
@@ -1563,7 +1591,7 @@ export function App() {
         runEpoch.current += 1;
         setRunning(true);
         setStopping(false);
-        markSessionRunning(eventSession ?? sessionRef.current, true);
+        if (!eventSession) markSessionRunning(sessionRef.current, true);
       }
       if (event.type === "desktop_snapshot_meta") {
         if (Array.isArray(event.models)) {
@@ -1585,8 +1613,7 @@ export function App() {
         setRunning(false);
         setStopping(false);
         setUiRequest(undefined);
-        markSessionRunning(eventSession ?? sessionRef.current, false);
-        void window.harness.sessions.list().then(setSessionList);
+        if (!eventSession) markSessionRunning(sessionRef.current, false);
       }
       if (event.type === "queue_update") {
         const nextSteering = Array.isArray(event.steering)
@@ -1607,7 +1634,7 @@ export function App() {
       if (event.type === "extension_ui_request") {
         const request = event as ExtensionUiRequest;
         if (request.method === "notify") setToast(request.message ?? t("toast.notify"));
-        else if (["select", "confirm", "input", "editor"].includes(request.method)) setUiRequest(request);
+        else if (!window.harness.agent.onActivity && ["select", "confirm", "input", "editor"].includes(request.method)) setUiRequest(request);
       }
       queue.push(event);
     });
@@ -1788,10 +1815,12 @@ export function App() {
     }
     if (uiRequest) {
       const request = uiRequest;
+      const requestRuntimeId = typeof request.__runtimeId === "string" ? request.__runtimeId : runtimeIdRef.current;
       items.push({
         key: "approval",
         render: () => (
           <ApprovalCard
+            key={request.id}
             request={request}
             lastTurn={[...messages].reverse().find((item) => item.role === "user" && item.text.trim() !== "/undo")?.text}
             onRespond={request.id === "harness:undo" ? async (response) => {
@@ -1803,14 +1832,17 @@ export function App() {
               if (!pending) return;
               await applyUndo(pending.files);
               pendingUndo.current = undefined;
-            } : undefined}
+            } : (response) => window.harness.agent.respondToUi(request.id, response, requestRuntimeId)}
             onDone={() => {
-              setUiRequest(undefined);
+              setUiRequest((current) => current?.id === request.id ? undefined : current);
             }}
             onError={setToast}
           />
         ),
       });
+    }
+    if (activeActivity?.status === "failed" && activeActivity.error) {
+      items.push({ key: "session-error", render: () => <SessionActivityError activity={activeActivity} /> });
     }
     // 会话底部的运行指示（对齐 ZCode）：回合进行中在消息流末尾挂一个加载圈，
     // 等审批（uiRequest）或正在停止时不挂——这两种状态各有自己的呈现，圈会撒谎。
@@ -1833,7 +1865,7 @@ export function App() {
     }
     lastListItems.current = items;
     return items;
-  }, [groups, recoverableStreaks, running, stopping, uiRequest, loading, messages, t]);
+  }, [groups, recoverableStreaks, running, stopping, uiRequest, loading, messages, activeActivity, t]);
 
   const homeRecents = (
     workspace
@@ -1854,7 +1886,8 @@ export function App() {
         const pendingUi = uiRequest;
         if (pendingUi && !pendingUi.id.startsWith("harness:")) {
           setUiRequest(undefined);
-          void window.harness.agent.respondToUi(pendingUi.id, { cancelled: true }).catch(() => undefined);
+          const requestRuntimeId = typeof pendingUi.__runtimeId === "string" ? pendingUi.__runtimeId : runtimeIdRef.current;
+          void window.harness.agent.respondToUi(pendingUi.id, { cancelled: true }, requestRuntimeId).catch(() => undefined);
         }
         setStopping(true);
         // 宿主可能要等一个「不可中断的步骤」跑完才回 abort 响应（响应本身也有 10 分钟级上限），
@@ -2008,6 +2041,7 @@ export function App() {
                       <div key={session.id} className={expanded && children.length > 0 ? "session-branch open" : "session-branch"}>
                         <SessionRow
                           session={session}
+                          activity={activities.get(session.path)}
                           active={isSameSession(session, activeSession)}
                           running={runningSessionIds.has(session.path)}
                           childCount={isCurrentBranch ? children.length : 0}
@@ -2025,6 +2059,7 @@ export function App() {
                               <SessionRow
                                 key={child.id}
                                 session={child}
+                                activity={activities.get(child.path)}
                                 active={isSameSession(child, activeSession)}
                                 running={runningSessionIds.has(child.path)}
                                 onOpen={() => openDelegatedSession(child)}
@@ -2152,7 +2187,7 @@ export function App() {
               )}
             </div>
           )}
-          {!home && groups.length === 0 && (
+          {!home && groups.length === 0 && !uiRequest && (
             <div className={loading ? "session-pane loading" : "session-pane"}>
               {loading ? (
                 <div className="session-loading" role="status" aria-live="polite">
@@ -2160,11 +2195,12 @@ export function App() {
                   <span className="shimmer">{t("chat.loadingSession")}</span>
                 </div>
               ) : (
-                <p className="session-pane-empty">{t("chat.emptySession")}</p>
+                activeActivity?.status === "failed" ? <SessionActivityError activity={activeActivity} />
+                  : <p className="session-pane-empty">{t("chat.emptySession")}</p>
               )}
             </div>
           )}
-          {groups.length > 0 && (
+          {(groups.length > 0 || Boolean(uiRequest)) && (
             <MessageList
               ref={messageList}
               items={listItems}

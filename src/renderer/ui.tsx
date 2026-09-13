@@ -3157,13 +3157,25 @@ export function ApprovalCard({
 }) {
   const { t } = useI18n();
   const [value, setValue] = useState(request.prefill ?? "");
+  const busyRef = useRef(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setValue(request.prefill ?? "");
+    busyRef.current = false;
+    setBusy(false);
+  }, [request.id]);
   const respond = async (response: Record<string, unknown>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
     try {
       if (onRespond) await onRespond(response);
       else await window.harness.agent.respondToUi(request.id, response);
       onDone();
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
+      busyRef.current = false;
+      setBusy(false);
     }
   };
   const copy = splitApprovalCopy(
@@ -3173,7 +3185,7 @@ export function ApprovalCard({
   const title = copy.destructive ? t("approval.destructiveTitle") : approvalTitle(copy.heading, lastTurn);
   const folded = copy.command || copy.detail;
   return (
-    <div className="approval">
+    <div className="approval" aria-busy={busy}>
       <strong>{title}</strong>
       {copy.destructive && <p>{t("approval.destructiveBody")}</p>}
       {!copy.destructive && copy.message && <p>{copy.message}</p>}
@@ -3186,25 +3198,25 @@ export function ApprovalCard({
       {request.method === "select" && (
         <div className="choices">
           {request.options?.map((option) => (
-            <button key={option} type="button" onClick={() => void respond({ value: option })}>
+            <button key={option} type="button" disabled={busy} onClick={() => void respond({ value: option })}>
               {accessChoiceLabel(option, t)}
             </button>
           ))}
         </div>
       )}
       {(request.method === "input" || request.method === "editor") && (
-        <textarea value={value} onChange={(event) => setValue(event.target.value)} rows={3} />
+        <textarea disabled={busy} value={value} onChange={(event) => setValue(event.target.value)} rows={3} />
       )}
       <div className="row-actions">
-        <button type="button" className="ghost" onClick={() => void respond({ cancelled: true })}>{t("common.cancel")}</button>
+        <button type="button" className="ghost" disabled={busy} onClick={() => void respond({ cancelled: true })}>{t("common.cancel")}</button>
         {request.method === "confirm" && (
           <>
-            <button type="button" className="ghost" onClick={() => void respond({ confirmed: false })}>{t("common.reject")}</button>
-            <button type="button" className="primary" onClick={() => void respond({ confirmed: true })}>{t("common.allow")}</button>
+            <button type="button" className="ghost" disabled={busy} onClick={() => void respond({ confirmed: false })}>{t("common.reject")}</button>
+            <button type="button" className="primary" disabled={busy} onClick={() => void respond({ confirmed: true })}>{t("common.allow")}</button>
           </>
         )}
         {(request.method === "input" || request.method === "editor") && (
-          <button type="button" className="primary" onClick={() => void respond({ value })}>{t("common.continue")}</button>
+          <button type="button" className="primary" disabled={busy} onClick={() => void respond({ value })}>{t("common.continue")}</button>
         )}
       </div>
     </div>

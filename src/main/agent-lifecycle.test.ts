@@ -161,6 +161,7 @@ describe("AgentManager", () => {
     ]);
     expect(hosts).toHaveLength(1);
     expect(first.runtimeId).toBe(second.runtimeId);
+    expect(hosts[0].starts).toBe(1);
   });
 
   it("reuses a running host on resume without spawning another worker", async () => {
@@ -169,6 +170,23 @@ describe("AgentManager", () => {
     expect(hosts).toHaveLength(1);
     expect(hosts[0].starts).toBe(1);
     expect(resumed.runtimeId).toBe(started.runtimeId);
+  });
+
+  it.each(["start", "resume"])("%s restores a snapshot while a prompt is waiting for approval", async (method) => {
+    const started = await manager.start(options("/a.jsonl"));
+    hosts[0].blockNextRequest("prompt");
+    const pending = manager.command(started.runtimeId, "prompt", { message: "/confirm" });
+    await new Promise((resolve) => setImmediate(resolve));
+    try {
+      const restored = await (method === "start" ? manager.start(options("/a.jsonl")) : manager.resume(started.runtimeId));
+      expect(restored.runtimeId).toBe(started.runtimeId);
+      expect(hosts[0].starts).toBe(1);
+      expect(hosts[0].stops).toBe(0);
+      await manager.respondToUi(started.runtimeId, "approval", { confirmed: true });
+    } finally {
+      hosts[0].releaseRequest();
+      await pending;
+    }
   });
 
   it("rekeys the session index when the worker reports a new session file", async () => {
@@ -273,6 +291,7 @@ describe("AgentManager", () => {
     // 已有运行中 host 时，第二次 start 应复用同一 runtime，而不是再 spawn。
     expect(hosts).toHaveLength(1);
     expect(again.runtimeId).toBe(first.runtimeId);
+    expect(hosts[0].starts).toBe(1);
   });
 
   it("replaces a dead host when the same session is started again", async () => {

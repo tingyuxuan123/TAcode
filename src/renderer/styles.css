@@ -643,6 +643,32 @@ textarea::selection,
   box-shadow: 0 0 0 2px rgba(46, 160, 67, 0.18);
   animation: session-running-pulse 1.6s ease-in-out infinite;
 }
+.session-row .session-activity-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  width: 13px;
+  height: 13px;
+  color: var(--ink-2);
+}
+.session-row .session-activity-badge.is-failed { color: var(--red); }
+.session-row .session-activity-badge.is-completed { color: var(--green); }
+.sidebar.is-collapsed .session-activity-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+}
+.session-activity-error {
+  padding: 12px 14px;
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.session-activity-error strong { display: flex; align-items: center; gap: 7px; color: var(--red); }
+.session-activity-error p { margin: 8px 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.session-activity-error summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
+.session-activity-error pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); }
 @keyframes session-running-pulse {
   50% {
     opacity: 0.45;

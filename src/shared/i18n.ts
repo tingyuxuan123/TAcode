@@ -98,6 +98,11 @@ const zh = {
   "subagent.awaitingInput": "等待确认",
   "subagent.noTranscript": "该子代理没有独立会话文件（在父代理进程内运行），下面显示卡片上记录的报告与活动。",
   "nav.sessionRunning": "执行中",
+  "nav.sessionWaiting": "等待你处理",
+  "nav.sessionFailed": "执行失败",
+  "nav.sessionUnread": "已完成，尚未查看",
+  "chat.sessionFailed": "上次执行遇到问题",
+  "chat.errorDetails": "查看错误详情",
   "nav.sectionProjects": "项目",
   "nav.recentActive": "最近活跃",
 
@@ -867,6 +872,11 @@ const en: Record<MessageKey, string> = {
   "subagent.awaitingInput": "Awaiting input",
   "subagent.noTranscript": "This subagent ran inside the parent process, so there is no separate session file; showing the recorded report and activity instead.",
   "nav.sessionRunning": "Running",
+  "nav.sessionWaiting": "Needs your attention",
+  "nav.sessionFailed": "Execution failed",
+  "nav.sessionUnread": "Completed, unread",
+  "chat.sessionFailed": "The last run encountered a problem",
+  "chat.errorDetails": "Show error details",
   "nav.sectionProjects": "Projects",
   "nav.recentActive": "Recently active",
 

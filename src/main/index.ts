@@ -45,6 +45,7 @@ import { AgentHost } from "./agent-host";
 import { DelegationCoordinator } from "./delegation-coordinator";
 import { delegationRunOptions, delegationProviderTarget } from "./delegation-run-options";
 import { AgentManager, sessionFileOf } from "./agent-manager";
+import { AgentActivityStore } from "./agent-activity";
 import { closeAllBrowserPopups } from "./browser/popups";
 import { closeAllDetachedBrowserWindows } from "./browser/windows";
 import { registerBrowserIpc } from "./browser/ipc";
@@ -207,6 +208,10 @@ const DELEGATION_PANEL_EVENT_TYPES = new Set([
   "tool_execution_end",
 ]);
 
+const agentActivities = new AgentActivityStore((activity) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("agent:activity", activity);
+});
+
 function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | string = "main"): AgentHost {
   const sideChat = channel === "side-chat";
   const delegated = Boolean(channel && channel !== "main" && !sideChat);
@@ -221,6 +226,7 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
         }
         return;
       }
+      if (!sideChat) agentActivities.observe(event);
       if (!sideChat && event.type === "agent_start" && event.__sessionId) {
         delegationCoordinator?.resumeParent(event.__sessionId);
       }
@@ -231,6 +237,7 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
     },
     (message, sessionKey, errorRuntimeId) => {
       if (delegated) return;
+      if (!sideChat) agentActivities.fail(errorRuntimeId ?? runtimeId, sessionKey, message, !host.isRunning());
       if (!sideChat && sessionKey && !host.isRunning()) {
         void delegationCoordinator?.stopParent(sessionKey).catch(() => undefined);
       }
@@ -1311,7 +1318,8 @@ function registerIpc(): void {
     if (existing?.isRunning()) {
       activeAgentCwd = cwd;
       if (options.project || cwd !== tasksDir) await recentWorkspaces.touch(cwd);
-      return { ...(await agentManager.resume(existing.runtimeId)), cwd: activeAgentCwd ?? cwd };
+      const snapshot = await agentManager.resume(existing.runtimeId);
+      return { ...snapshot, cwd, activity: agentActivities.bind(existing.runtimeId, existing.sessionKey ?? sessionPath) };
     }
 
     activeAgentCwd = cwd;
@@ -1404,12 +1412,18 @@ function registerIpc(): void {
         }
       }
     }
-    return { ...started, ...snapshot, cwd };
+    return { ...started, ...snapshot, cwd, activity: agentActivities.bind(started.runtimeId, sessionKey) };
   });
   ipcMain.handle("agent:stop", (_event, runtimeId?: string) =>
     agentManager.stop(runtimeId),
   );
   ipcMain.handle("agent:runtimes", () => agentManager.list());
+  ipcMain.handle("agent:activities", () => agentActivities.list());
+  ipcMain.handle("agent:acknowledge-activity", (_event, rawRuntimeId: unknown, rawVersion: unknown) => {
+    const runtimeId = requireString(rawRuntimeId, "runtimeId", { maxLength: 128 });
+    if (typeof rawVersion !== "number" || !Number.isSafeInteger(rawVersion) || rawVersion < 0) throw new Error("无效的会话状态版本。");
+    agentActivities.acknowledge(runtimeId, rawVersion);
+  });
   ipcMain.handle("agent:replay", (_event, runtimeId: string, afterSeq: number) =>
     agentManager.replay(runtimeId, Number.isFinite(afterSeq) ? afterSeq : 0),
   );

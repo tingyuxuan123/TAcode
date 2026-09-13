@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { getTacodeRpcEntryPath } from "../runtime/index";
-import type { AgentEvent, AgentSessionStats, AgentSnapshot, AgentStartOptions } from "../shared/types";
+import type { AgentEvent, AgentSessionStats, AgentSnapshot, AgentStartOptions, ExtensionUiRequest } from "../shared/types";
+import { isAgentUiDialog } from "../shared/agent-ui";
 import { ContextStatsTracker } from "./context-stats";
 import { parseSkillCommands } from "../shared/skills";
 import { killProcessTree } from "./process-tree";
@@ -52,6 +53,7 @@ export class AgentHost {
   private stderr = "";
   private requestId = 0;
   private pending = new Map<string, PendingRequest>();
+  private pendingUi = new Map<string, { request: ExtensionUiRequest; timer?: NodeJS.Timeout }>();
   private static readonly STDERR_CAP = 200_000;
   /** 短期事件回放缓冲：snapshot 期间到达的事件按序号补齐，避免快照与实时流之间出现缺口。 */
   private static readonly REPLAY_CAP = 500;
@@ -140,6 +142,7 @@ export class AgentHost {
       this.flushStartWaiters(true);
     } else if (event.type === "agent_settled") {
       this.turnActive = false;
+      this.clearPendingUi();
       this.flushSettledWaiters();
     }
     const next: AgentEvent = {
@@ -148,6 +151,14 @@ export class AgentHost {
       ...(this.runtimeId ? { __runtimeId: this.runtimeId } : {}),
       ...(this.sessionKey ? { __sessionId: this.sessionKey } : {}),
     };
+    if (isAgentUiDialog(next) && !this.pendingUi.has(next.id)) {
+      const timeout = typeof next.timeout === "number" && Number.isFinite(next.timeout) && next.timeout > 0 ? next.timeout : undefined;
+      const timer = timeout === undefined ? undefined : setTimeout(() => {
+        this.resolvePendingUi(next.id);
+      }, timeout);
+      timer?.unref?.();
+      this.pendingUi.set(next.id, { request: next, timer });
+    }
     this.replayBuffer.push(next);
     if (this.replayBuffer.length > AgentHost.REPLAY_CAP)
       this.replayBuffer.splice(0, this.replayBuffer.length - AgentHost.REPLAY_CAP);
@@ -227,6 +238,7 @@ export class AgentHost {
       models: [],
       thinkingLevels: [],
       skills: [],
+      pendingUiRequests: [...this.pendingUi.values()].map(({ request }) => request),
       ...(this.latestStats ? { stats: this.latestStats } : {}),
     };
   }
@@ -446,6 +458,8 @@ export class AgentHost {
   }
 
   async stop(): Promise<void> {
+    this.clearPendingUi();
+    this.emitEvent(this.tagged({ type: "desktop_runtime_stopped" }));
     this.clearStatsRefresh();
     this.contextStats = new ContextStatsTracker();
     this.latestStats = undefined;
@@ -487,6 +501,12 @@ export class AgentHost {
     if (type === "new_session") this.resetBrowser?.();
     const child = this.child;
     if (!child || child.stdin.destroyed) throw new Error("No workspace session is active");
+    if (type === "abort" || type === "new_session") {
+      // Pi 的交互等待可能先于 abort 返回；先取消全部请求，避免留下不可见的等待。
+      for (const id of [...this.pendingUi.keys()]) {
+        if (this.pendingUi.has(id)) await this.respondToUi(id, { cancelled: true });
+      }
+    }
     const id = `desktop_${++this.requestId}`;
     const command = { ...data, type, id };
     return new Promise<T>((resolve, reject) => {
@@ -535,11 +555,31 @@ export class AgentHost {
   async respondToUi(id: string, response: Record<string, unknown>): Promise<void> {
     const child = this.child;
     if (!child || child.stdin.destroyed) throw new Error("No workspace session is active");
+    const pending = this.pendingUi.get(id);
+    if (!pending) throw new Error("该请求已结束，请查看会话的最新状态。");
+    // 先占用请求，重复点击或两个窗口同时答复只能写入一次。
+    this.pendingUi.delete(id);
     try {
-      child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id, ...response })}\n`);
+      child.stdin.write(`${JSON.stringify({ ...response, type: "extension_ui_response", id })}\n`);
     } catch (error) {
+      this.pendingUi.set(id, pending);
       throw error instanceof Error ? error : new Error(String(error));
     }
+    if (pending.timer) clearTimeout(pending.timer);
+    this.emitEvent(this.tagged({ type: "desktop_ui_request_resolved", id }));
+  }
+
+  private resolvePendingUi(id: string): void {
+    const pending = this.pendingUi.get(id);
+    if (!pending) return;
+    if (pending.timer) clearTimeout(pending.timer);
+    this.pendingUi.delete(id);
+    this.emitEvent(this.tagged({ type: "desktop_ui_request_resolved", id }));
+  }
+
+  private clearPendingUi(): void {
+    for (const { timer } of this.pendingUi.values()) if (timer) clearTimeout(timer);
+    this.pendingUi.clear();
   }
 
   private handleChunk(chunk: Buffer): void {
@@ -637,6 +677,8 @@ export class AgentHost {
 
   private handleExit(error: Error): void {
     this.clearStatsRefresh();
+    this.clearPendingUi();
+    this.turnActive = false;
     this.cancelBrowserRequests();
     // 所有退出路径（exit / spawn error）都必须放行 waitForIdle 的等待者，
     // 否则委派完成判定会永久挂起。

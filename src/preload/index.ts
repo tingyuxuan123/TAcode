@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { Locale } from "../shared/i18n";
-import type { AgentErrorPayload, AgentEvent, DesktopApi } from "../shared/types";
+import type { AgentErrorPayload, AgentEvent, AgentSessionActivity, DesktopApi } from "../shared/types";
 import {
   NO_ACTIVE_SESSION_MESSAGE,
   isAgentNoSessionResult,
@@ -152,6 +152,9 @@ const api: DesktopApi = {
     respondToUi: (id, response, runtimeId) =>
       ipcRenderer.invoke("agent:ui-response", id, response, runtimeId ?? activeRuntimeId),
     runtimes: () => ipcRenderer.invoke("agent:runtimes"),
+    activities: () => ipcRenderer.invoke("agent:activities"),
+    acknowledgeActivity: (runtimeId, version) => ipcRenderer.invoke("agent:acknowledge-activity", runtimeId, version),
+    onActivity: (listener) => subscribe<AgentSessionActivity>("agent:activity", listener),
     replay: (runtimeId, afterSeq) =>
       ipcRenderer.invoke("agent:replay", runtimeId ?? activeRuntimeId, afterSeq),
     onEvent: (listener) => subscribe<AgentEvent>("agent:event", listener),

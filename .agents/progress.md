@@ -1018,3 +1018,13 @@
 - 按 `continue-long-run` 一次推进一项，只有源码、必要回归和界面验证覆盖该项后才将 `passes` 改为 true；整份目标保持有效，不以单项完成代替总目标。
 - 当前开始 UX-01：后台主会话的审批、错误和完成未读状态持久到主进程生命周期，快照/重载可恢复，答复绑定正确运行句柄。下一项 UX-02：完整草稿与发送失败恢复。
 - 初始化检查：清单 17 项均为 false；已有子代理报告投递修复来自其他任务，保留其提交。后续改动在当前工作区按功能单独提交。
+
+## 2026-09-13：UX-01 后台审批与执行结果恢复
+
+- [x] 主进程增加按 runtime/session 保存的活动状态和单调版本；待处理确认、失败原因与完成未读不依赖 500 条转录回放。渲染重载、快照补齐、确认超时、取消和 worker 替换均有明确归属。
+- [x] 侧栏显示待处理、失败、完成未读，切回恢复确认卡和错误详情；后台事件不打断当前输入。确认绑定发起 runtime，重复点击只答复一次，失败可重试；空转录也能展示确认。
+- [x] AgentManager 恢复快照绕过等待确认的 prompt 队列；同会话 start 真正复用已有 worker。主区浏览快照不再等待模型设置命令，避免确认卡被 loading 挡住。
+- 主要文件：main/agent-activity.ts、agent-host.ts、agent-manager.ts、index.ts；shared/types.ts、agent-ui.ts；preload/index.ts；renderer/App.tsx、ui.tsx、agent-activity.ts、use-agent-activities.ts、session-activity.tsx、styles.css；中英文 i18n。
+- 验证：`pnpm test --reporter=dot` **110 文件 / 967 用例通过**；`pnpm typecheck` 与 `git diff --check` 通过。实际生产 renderer + preload + Electron IPC + Host 行协议的 `node scripts/test-session-activity.mjs` 通过，覆盖 A/B 后台审批、B 输入保留、重载多条确认、被确认阻塞的 prompt、显式 runtime 路由、失败原因与完成已读。未调用真实模型。
+- 已查看桌面恢复审批截图。测试图片位于 `/Users/yfdl/.codex/visualizations/2026/09/13/01a09958-0266-7751-adca-acfbab778dbd/ux-01/`。测试发现普通会话切换会产生 ResizeObserver 布局警告；用提交 dbda9b1 的 App/ui/styles 对照复现相同警告，测试继续单独报告计数（本次 8），其余 renderer 错误仍导致失败；布局警告留给 UX-13 回放定位，未宣称已消除。
+- 下一项：UX-02 完整草稿、附件与发送失败恢复。其余 16 项仍未完成，整份目标保持 active。

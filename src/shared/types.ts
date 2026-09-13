@@ -175,6 +175,8 @@ export interface AgentSnapshot {
   stats?: AgentSessionStats;
   cwd?: string;
   skills?: AgentSkillCommand[];
+  /** 仍有效的交互请求不依赖有容量上限的消息回放。 */
+  pendingUiRequests?: ExtensionUiRequest[];
 }
 
 export type AgentEvent = Record<string, unknown> & { type: string } & {
@@ -200,6 +202,20 @@ export interface AgentStartResult extends AgentSnapshot {
   lastSeq: number;
   /** snapshot 与实时事件流之间缺口的事件，渲染层先套快照再按序补齐。 */
   replay?: AgentEvent[];
+  activity?: AgentSessionActivity;
+}
+
+/** 主进程持有的会话活动状态；渲染窗口重载不会丢失待处理事项。 */
+export interface AgentSessionActivity {
+  runtimeId: string;
+  sessionPath?: string;
+  /** 主进程内单调递增，避免延迟快照覆盖新状态或清掉新通知。 */
+  version: number;
+  status: "idle" | "running" | "waiting" | "completed" | "failed" | "stopped";
+  running: boolean;
+  pendingRequests: ExtensionUiRequest[];
+  error?: string;
+  unread: boolean;
 }
 
 /** 运行中会话查询结果，供渲染层重载后重新发现后台会话。
@@ -339,6 +355,9 @@ export interface DesktopApi {
     respondToUi(id: string, response: Record<string, unknown>, runtimeId?: string): Promise<void>;
     /** 重载后重新发现仍在运行的会话（按运行句柄）。 */
     runtimes(): Promise<AgentRuntimeInfo[]>;
+    activities(): Promise<AgentSessionActivity[]>;
+    acknowledgeActivity(runtimeId: string, version: number): Promise<void>;
+    onActivity(listener: (activity: AgentSessionActivity) => void): () => void;
     /** 取回序号大于 afterSeq 的事件，用于补齐 snapshot 与实时流之间的缺口。 */
     replay(runtimeId: string | undefined, afterSeq: number): Promise<AgentEvent[]>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
