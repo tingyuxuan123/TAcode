@@ -2363,7 +2363,7 @@ export function PromptBar({
   const [blank, setBlank] = useState(true);
   const [attachmentView, setAttachmentView] = useState<string>();
   const [draftError, setDraftError] = useState("");
-  const submitting = useRef(false);
+  const submitting = useRef(new Set<string>());
   const currentKey = useRef(draftKey);
   currentKey.current = draftKey;
   const lastFillToken = useRef(fillToken);
@@ -2562,13 +2562,13 @@ export function PromptBar({
 
   const sendNow = () => {
     const root = area.current;
-    if (!root || disabled || !drafts.ready || submitting.current) return;
+    if (!root || disabled || !drafts.ready || submitting.current.has(draftKey)) return;
     const text = serializePrompt(root).trim();
     const refs = attachments.map((item) => item.dataUri);
     if (!text && refs.length === 0) return;
     drafts.update(draftKey, { text: serializePrompt(root) });
     const receipt = drafts.begin(draftKey);
-    submitting.current = true;
+    submitting.current.add(draftKey);
     root.replaceChildren();
     setBlank(true);
     skipHydrate.current = false;
@@ -2579,7 +2579,7 @@ export function PromptBar({
       } catch {
         drafts.finish(receipt.id, false);
       } finally {
-        submitting.current = false;
+        submitting.current.delete(draftKey);
       }
     })();
   };

@@ -350,6 +350,7 @@ export interface DesktopApi {
   };
   agent: {
     start(options: AgentStartOptions): Promise<AgentStartResult>;
+    deactivate(): Promise<void>;
     stop(runtimeId?: string): Promise<void>;
     command<T = unknown>(type: string, data?: Record<string, unknown>, runtimeId?: string): Promise<T>;
     respondToUi(id: string, response: Record<string, unknown>, runtimeId?: string): Promise<void>;

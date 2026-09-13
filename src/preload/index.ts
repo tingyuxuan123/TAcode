@@ -129,6 +129,7 @@ const api: DesktopApi = {
   agent: {
     start: async (options) => {
       const token = ++startToken;
+      activeRuntimeId = undefined;
       const result = await ipcRenderer.invoke("agent:start", options);
       // 只有最新一次 start 才能成为活动句柄，避免过期请求把命令路由到旧会话。
       if (token === startToken && result && typeof result === "object") {
@@ -136,6 +137,11 @@ const api: DesktopApi = {
         if (typeof runtimeId === "string") activeRuntimeId = runtimeId;
       }
       return result;
+    },
+    deactivate: () => {
+      startToken++;
+      activeRuntimeId = undefined;
+      return ipcRenderer.invoke("agent:deactivate");
     },
     stop: (runtimeId) => {
       const target = runtimeId ?? activeRuntimeId;

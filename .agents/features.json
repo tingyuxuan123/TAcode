@@ -17,7 +17,7 @@
   {
     "id": "UX-04",
     "description": "统一新建、切换与后台运行规则。验收：A 正在执行时新建 B，A 的任务继续且有运行标记；侧栏能单独停止 A，B 的草稿和任务不受影响；快速新建、切换、停止不会把命令发往错误运行句柄。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-04。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "UX-05",

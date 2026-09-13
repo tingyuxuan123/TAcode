@@ -172,6 +172,34 @@ describe("AgentManager", () => {
     expect(resumed.runtimeId).toBe(started.runtimeId);
   });
 
+  it("deactivates navigation without stopping background work or using a fallback runtime", async () => {
+    const a = await manager.start(options("/a.jsonl"));
+    await manager.start(options("/b.jsonl"));
+    manager.deactivate();
+    expect(manager.active).toBeUndefined();
+    expect(manager.list()).toHaveLength(2);
+    expect(hosts.map((host) => host.stops)).toEqual([0, 0]);
+    await expect(manager.command(undefined, "abort")).rejects.toThrow(NO_ACTIVE_SESSION_MESSAGE);
+    await manager.command(a.runtimeId, "get_state");
+    expect(hosts[0].requests.at(-1)?.type).toBe("get_state");
+  });
+
+  it.each(["switch", "deactivate"])("ignores delayed snapshot activation after %s", async (action) => {
+    const a = await manager.start(options("/a.jsonl"));
+    const b = await manager.start(options("/b.jsonl"));
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const snapshot = hosts[0].snapshot.bind(hosts[0]);
+    vi.spyOn(hosts[0], "snapshot").mockImplementationOnce(async () => { await barrier; return snapshot(); });
+    const pending = manager.resume(a.runtimeId);
+    if (action === "switch") await manager.resume(b.runtimeId);
+    else manager.deactivate();
+    release();
+    await pending;
+    expect(manager.active).toBe(action === "switch" ? b.runtimeId : undefined);
+    expect(hosts[0].stops).toBe(0);
+  });
+
   it.each(["start", "resume"])("%s restores a snapshot while a prompt is waiting for approval", async (method) => {
     const started = await manager.start(options("/a.jsonl"));
     hosts[0].blockNextRequest("prompt");
@@ -322,8 +350,24 @@ describe("AgentManager error handling", () => {
     vi.spyOn(failing, "start").mockRejectedValue(new Error("spawn failed"));
     const manager = new AgentManager({ createHost: () => asHost(failing) });
     await expect(manager.start(options("/a.jsonl"))).rejects.toThrow("spawn failed");
-    // 宿主仍在注册表中，但没有任何运行句柄被视为活动。
     expect(manager.active).toBeUndefined();
+    expect(manager.list()).toEqual([]);
+  });
+
+  it("does not resurrect a worker stopped while its startup was pending", async () => {
+    const host = new FakeHost({});
+    const start = host.start.bind(host);
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(host, "start").mockImplementation(async (options) => { await barrier; return start(options); });
+    const manager = new AgentManager({ createHost: () => asHost(host) });
+    const pending = manager.start(options("/a.jsonl"));
+    await new Promise((resolve) => setImmediate(resolve));
+    await manager.stop(host.runtimeId);
+    release();
+    await expect(pending).rejects.toThrow("Agent session closed");
+    expect(manager.list()).toEqual([]);
+    expect(host.running).toBe(false);
   });
 });
 

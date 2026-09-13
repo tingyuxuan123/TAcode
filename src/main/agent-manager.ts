@@ -67,11 +67,18 @@ export class AgentManager {
   private readonly index = new Map<string, string>();
   private readonly queues = new Map<string, Promise<unknown>>();
   private activeRuntimeId: string | undefined;
+  private selection = 0;
 
   constructor(private readonly options: AgentManagerOptions) {}
 
   get active(): string | undefined {
     return this.activeRuntimeId;
+  }
+
+  /** 导航到空白页只解除活动句柄，后台 worker 继续运行。 */
+  deactivate(): void {
+    this.selection++;
+    this.activeRuntimeId = undefined;
   }
 
   /** 按会话路径（sessionKey 或 requestedSessionPath）查找宿主。 */
@@ -108,8 +115,9 @@ export class AgentManager {
   }
 
   async start(options: AgentHostStartOptions): Promise<AgentStartResult> {
+    const selection = ++this.selection;
     const existing = this.findBySession(options.sessionPath);
-    if (existing?.isRunning()) return this.resume(existing.runtimeId);
+    if (existing?.isRunning()) return this.snapshotOn(existing, selection);
     // A worker can exit before the renderer gets a chance to call stop(). Do not
     // reuse that dead host: a queued stop followed by a restart could otherwise
     // remove the restarted host from the manager map.
@@ -118,22 +126,27 @@ export class AgentManager {
     const key = `start:${options.sessionPath ?? options.cwd ?? "new"}`;
     return this.enqueue(key, () => {
       const reused = this.findBySession(options.sessionPath);
-      if (reused?.isRunning()) return this.resume(reused.runtimeId);
+      if (reused?.isRunning()) return this.snapshotOn(reused, selection);
       if (reused) this.removeHost(reused);
-      return this.startOn(this.createHost(), options);
+      return this.startOn(this.createHost(), options, selection);
     });
   }
 
   /** 复用已在运行的宿主：只取快照与缺口事件，不重启 worker。 */
   async resume(runtimeId: string): Promise<AgentStartResult> {
+    const selection = ++this.selection;
     const host = this.findRuntime(runtimeId);
     if (!host || !host.isRunning())
       return Promise.reject(new Error("Agent session is not running"));
+    return this.snapshotOn(host, selection);
+  }
+
+  private async snapshotOn(host: AgentHost, selection: number): Promise<AgentStartResult> {
     // 读取不能排在等待 UI 的 prompt 后，否则连恢复确认卡也会死锁。
     const snapshot = await host.snapshot();
-    if (this.findRuntime(runtimeId) !== host || !host.isRunning())
+    if (this.findRuntime(host.runtimeId) !== host || !host.isRunning())
       throw new Error("Agent session is not running");
-    this.activeRuntimeId = host.runtimeId;
+    if (selection === this.selection) this.activeRuntimeId = host.runtimeId;
     const cut = host.lastSnapshotSeq;
     return {
       ...snapshot,
@@ -199,6 +212,7 @@ export class AgentManager {
 
   /** 退出/关窗时回收全部宿主，每个 host 只 stop 一次。 */
   async stopAll(): Promise<void> {
+    this.deactivate();
     const hosts = [...this.runtimes.values()];
     this.runtimes.clear();
     this.index.clear();
@@ -229,12 +243,21 @@ export class AgentManager {
   private async startOn(
     host: AgentHost,
     options: AgentHostStartOptions,
+    selection: number,
   ): Promise<AgentStartResult> {
-    const snapshot = await host.start(options);
+    let snapshot: AgentSnapshot;
+    try {
+      snapshot = await host.start(options);
+      if (this.findRuntime(host.runtimeId) !== host) throw new Error("Agent session closed");
+    } catch (error) {
+      this.removeHost(host);
+      await host.stop().catch(() => undefined);
+      throw error;
+    }
     const file = sessionFileOf(snapshot) ?? options.sessionPath;
     if (file) host.sessionKey = file;
     this.reindex(host);
-    this.activeRuntimeId = host.runtimeId;
+    if (selection === this.selection) this.activeRuntimeId = host.runtimeId;
     const cut = host.lastSnapshotSeq;
     return {
       ...snapshot,

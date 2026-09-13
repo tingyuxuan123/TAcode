@@ -300,13 +300,13 @@ export function SessionRow({
               <span>{t("nav.openDelegatedInMain")}</span>
             </button>
           )}
-          {delegationRunning && onStop && (
+          {(sessionIsRunning || Boolean(activity?.pendingRequests.length)) && onStop && (
             <button type="button" role="menuitem" disabled={stopping} onClick={() => action(() => {
               setStopping(true);
               void onStop().finally(() => setStopping(false));
             })}>
               <Icon path="M6 6h12v12H6z" size={16} />
-              <span>{stopping ? t("subagent.stopping") : t("subagent.stop")}</span>
+              <span>{stopping ? t("subagent.stopping") : t(session.sourceDelegationId ? "subagent.stop" : "nav.stopSession")}</span>
             </button>
           )}
           <button type="button" role="menuitem" onClick={() => action(() => setEditing(true))}>
@@ -612,7 +612,7 @@ export function App() {
   const messageList = useRef<MessageListHandle>(null);
   const agentCwd = useRef<string | undefined>(undefined);
   const sessionRef = useRef<string | undefined>(undefined);
-  const sending = useRef(false);
+  const sending = useRef(new Set<string>());
   const dock = useRef<HTMLDivElement>(null);
   const live = useRef(false);
   const pendingUndo = useRef<{ files: RestoreFile[] } | undefined>(
@@ -648,6 +648,20 @@ export function App() {
     runtimeServiceRef.current = "";
   }, []);
 
+  const detachAgentView = useCallback(() => {
+    startSeq.current++;
+    runEpoch.current++;
+    eventQueue.current?.clear();
+    dropAgentSession();
+    setLoading(false);
+    setStopping(false);
+    pendingUndo.current = undefined;
+    sandboxWaiter.current?.(false);
+    sandboxWaiter.current = undefined;
+    setSandboxAsk(undefined);
+    void window.harness.agent.deactivate?.().catch(() => undefined);
+  }, [dropAgentSession]);
+
   const applyThinkingForModel = useCallback((modelId: string, accounts = providers) => {
     const chat = activeChatProvider(accounts);
     const levels = levelsForModel(modelId, chat?.modelCapabilities ?? agentModelsRef.current);
@@ -661,14 +675,15 @@ export function App() {
   const syncAgentThinking = useCallback(async () => {
     if (!agentCwd.current || modelSwitchBusy.current) return;
     const seq = startSeq.current;
+    const runtimeId = runtimeIdRef.current;
     const currentService = activeChatProvider(providersRef.current);
     if (`${currentService?.serviceId ?? ""}:${currentService?.serviceVersion ?? ""}` !== runtimeServiceRef.current) return;
     const requestedModel = modelRef.current;
     const requestedEffort = effortRef.current;
     try {
       const [levelsResp, stateResp] = await Promise.all([
-        window.harness.agent.command<{ levels: string[] }>("get_available_thinking_levels"),
-        window.harness.agent.command<{ thinkingLevel?: string; model?: { id?: string } }>("get_state"),
+        window.harness.agent.command<{ levels: string[] }>("get_available_thinking_levels", undefined, runtimeId),
+        window.harness.agent.command<{ thinkingLevel?: string; model?: { id?: string } }>("get_state", undefined, runtimeId),
       ]);
       const latestService = activeChatProvider(providersRef.current);
       if (latestService?.serviceId !== currentService?.serviceId || latestService?.serviceVersion !== currentService?.serviceVersion) return;
@@ -687,7 +702,7 @@ export function App() {
         setModel(stateResp.model.id);
         modelRef.current = stateResp.model.id;
       }
-      await window.harness.agent.command("set_thinking_level", { level: next }).catch(() => undefined);
+      await window.harness.agent.command("set_thinking_level", { level: next }, runtimeId).catch(() => undefined);
     } catch {
       // Agent may not be ready yet.
     }
@@ -699,7 +714,7 @@ export function App() {
     writeStoredEffort(next);
     const currentService = activeChatProvider(providersRef.current);
     if (!agentCwd.current || `${currentService?.serviceId ?? ""}:${currentService?.serviceVersion ?? ""}` !== runtimeServiceRef.current) return;
-    void window.harness.agent.command("set_thinking_level", { level: next }).catch(() => undefined);
+    void window.harness.agent.command("set_thinking_level", { level: next }, runtimeIdRef.current).catch(() => undefined);
   }, []);
 
   // 模式按项目记住：切换或计划批准后恢复时都写回项目记忆，新会话沿用（对齐 ZCode）。
@@ -754,13 +769,16 @@ export function App() {
     return [...byPath.values()];
   }, [sessions, workspaces]);
 
-  const refreshAgentSkills = useCallback(async () => {
-    const loadDisk = () => window.harness.skills.list(workspace).then((snapshot) => snapshot.skills
+  const refreshAgentSkills = useCallback(async (cwd = workspace) => {
+    const seq = startSeq.current;
+    const runtimeId = runtimeIdRef.current;
+    const apply = (skills: AgentSkillCommand[]) => { if (seq === startSeq.current) setAgentSkills(skills); };
+    const loadDisk = () => window.harness.skills.list(cwd).then((snapshot) => snapshot.skills
       .filter((skill) => skill.enabled && !skill.warning && (skill.scope === "user" || snapshot.projectTrusted))
       .map((skill) => ({ name: skill.name, description: skill.description, path: skill.path })))
       .catch(() => [] as AgentSkillCommand[]);
     if (!agentCwd.current) {
-      setAgentSkills(await loadDisk());
+      apply(await loadDisk());
       return;
     }
     try {
@@ -771,15 +789,15 @@ export function App() {
           source?: string;
           sourceInfo?: { path?: string; baseDir?: string };
         }>;
-      }>("get_commands");
+      }>("get_commands", undefined, runtimeId);
       const fromAgent = parseSkillCommands(data.commands);
       if (fromAgent.length) {
-        setAgentSkills(fromAgent);
+        apply(fromAgent);
         return;
       }
-      setAgentSkills(await loadDisk());
+      apply(await loadDisk());
     } catch {
-      setAgentSkills(await loadDisk());
+      apply(await loadDisk());
     }
   }, [workspace]);
 
@@ -829,16 +847,30 @@ export function App() {
     // 重新加载快照后事件序号重新对账：丢弃的记录由 replay 补齐。
     eventSeqRef.current.clear();
     live.current = false;
+    agentCwd.current = undefined;
+    runtimeIdRef.current = undefined;
     setStopping(false);
+    if (!seedMessage) setRunning(false);
     setTranscriptKey(sessionPath ?? seedMessage?.id ?? `session-${seq}`);
     setLoading(true);
     setUiRequest(undefined);
+    if (!resume) {
+      setWorkspace(cwd);
+      if (cwd) setOpenProjects((current) => ({ ...current, [cwd]: true }));
+      if (sessionPath && !seedMessage) {
+        setActiveSession(sessionPath);
+        sessionRef.current = sessionPath;
+        setMessages([]);
+      }
+    }
     let accounts: ProviderStatus[];
     try {
       accounts = await window.harness.auth.status();
     } catch (error) {
-      setToast(agentErrorToast(error));
-      setLoading(false);
+      if (seq === startSeq.current) {
+        setToast(agentErrorToast(error));
+        setLoading(false);
+      }
       return false;
     }
     if (seq !== startSeq.current) return false;
@@ -986,10 +1018,12 @@ export function App() {
           modelRef.current = modelId;
           setModel(modelId);
           await window.harness.agent.command("set_model", { provider: chat.id, modelId }, snapshot.runtimeId);
+          if (seq !== startSeq.current) return false;
         }
         applyThinkingForModel(modelId, accounts);
         const nextEffort = effortRef.current;
         await window.harness.agent.command("set_thinking_level", { level: nextEffort }, snapshot.runtimeId).catch(() => undefined);
+        if (seq !== startSeq.current) return false;
         await syncAgentThinking();
         await window.harness.agent.command("set_auto_compaction", { enabled: true }, snapshot.runtimeId).catch(() => undefined);
       }
@@ -1019,7 +1053,7 @@ export function App() {
           setSessionList(threads);
         }
       });
-      void refreshAgentSkills();
+      void refreshAgentSkills(snapshot.cwd ?? cwd);
       return true;
     } catch (error) {
       if (seq !== startSeq.current) return false;
@@ -1073,6 +1107,29 @@ export function App() {
     catch (error) { setToast(agentErrorToast(error)); }
   }, [agentErrorToast]);
 
+  const stopSession = useCallback(async (session: SessionSummary) => {
+    const activity = activities.get(session.path) ?? (session.storagePath ? activities.get(session.storagePath) : undefined);
+    let runtimeId = activity?.runtimeId;
+    try {
+      runtimeId ??= (await window.harness.agent.runtimes())
+        .find((runtime) => runtime.sessionKey === session.path || runtime.requestedSessionPath === session.path)?.runtimeId;
+      if (!runtimeId) return;
+      if (runtimeId === runtimeIdRef.current) setStopping(true);
+      await window.harness.agent.stop(runtimeId);
+      markSessionRunning(session.path, false);
+      if (runtimeId === runtimeIdRef.current) {
+        dropAgentSession();
+        setMessages((current) => settleStoppedTurn(current));
+        setRunning(false);
+        setStopping(false);
+        setUiRequest(undefined);
+      }
+    } catch (error) {
+      if (runtimeId === runtimeIdRef.current) setStopping(false);
+      setToast(agentErrorToast(error));
+    }
+  }, [activities, agentErrorToast, dropAgentSession, markSessionRunning]);
+
   const openSession = useCallback((session: SessionSummary) => {
     // Allow re-open when the row is highlighted but the transcript failed to load.
     if (isSameSession(session, activeSession) && messages.length > 0 && !loading) return;
@@ -1081,24 +1138,34 @@ export function App() {
 
   const ensureModelReady = useCallback(async (): Promise<boolean> => {
     if (!agentCwd.current) return true;
+    const seq = startSeq.current;
+    const runtimeId = runtimeIdRef.current;
+    const sessionPath = sessionRef.current;
+    const cwd = agentCwd.current;
+    const currentView = () => seq === startSeq.current && runtimeId === runtimeIdRef.current;
     const current = activeChatProvider(await window.harness.auth.status());
-    if (`${current?.serviceId ?? ""}:${current?.serviceVersion ?? ""}` !== runtimeServiceRef.current) {
-      // 停掉旧宿主后重启：先把渲染层标记为不可用，避免停止与重启之间的在途事件
-      // 触发对已停止会话的命令；重启失败时清掉会话引用，别把陈旧 agentCwd 留给后续命令。
+    if (!currentView()) return false;
+    const restart = async () => {
       live.current = false;
-      await window.harness.agent.stop();
-      const started = await startAgent(workspace, sessionRef.current, Boolean(workspace), true);
-      if (!started) dropAgentSession();
+      if (runtimeId) await window.harness.agent.stop(runtimeId).catch(() => undefined);
+      if (!currentView()) return false;
+      const started = await startAgent(cwd, sessionPath, Boolean(workspace), true);
+      if (!started && startSeq.current === seq + 1) dropAgentSession();
       return started;
+    };
+    if (`${current?.serviceId ?? ""}:${current?.serviceVersion ?? ""}` !== runtimeServiceRef.current) {
+      return restart();
     }
     const next = modelRef.current.trim();
     if (!next) return true;
     if (agentModelIdsRef.current.includes(next)) {
       try {
-        await window.harness.agent.command("set_model", { provider: runtimeProviderRef.current, modelId: next });
+        await window.harness.agent.command("set_model", { provider: runtimeProviderRef.current, modelId: next }, runtimeId);
+        if (!currentView()) return false;
         await syncAgentThinking();
-        return true;
+        return currentView();
       } catch (error) {
+        if (!currentView()) return false;
         const detail = error instanceof Error ? error.message : String(error);
         if (/Agent session closed|No workspace session is active|No active agent session/i.test(detail)) {
           dropAgentSession();
@@ -1107,17 +1174,15 @@ export function App() {
         return false;
       }
     }
-    live.current = false;
-    await window.harness.agent.stop().catch(() => undefined);
-    const restarted = await startAgent(workspace, sessionRef.current, Boolean(workspace), true);
-    if (!restarted) dropAgentSession();
-    return restarted;
+    return restart();
   }, [dropAgentSession, startAgent, syncAgentThinking, workspace]);
 
   const switchModel = useCallback(async (key: string) => {
     const option = modelOptions.find((item) => item.value === key);
     if (!option || modelSwitchBusy.current || loading) return;
     const next = option.modelId;
+    const seq = startSeq.current;
+    const runtimeId = runtimeIdRef.current;
     modelSwitchBusy.current = true;
     setModelSwitchPending(true);
     try {
@@ -1129,6 +1194,7 @@ export function App() {
         providersRef.current = accounts;
         setProviders(accounts);
       }
+      if (seq !== startSeq.current) return;
       setModel(next);
       modelRef.current = next;
       if (workspace) writeProjectComposerMemory(workspace, { model: next });
@@ -1137,11 +1203,12 @@ export function App() {
       // A running turn keeps its original service; ensureModelReady applies the choice next turn.
       if (!running && agentCwd.current && `${currentService?.serviceId ?? ""}:${currentService?.serviceVersion ?? ""}` === runtimeServiceRef.current
         && agentModelIdsRef.current.includes(next)) {
-        await window.harness.agent.command("set_model", { provider: runtimeProviderRef.current, modelId: next }).catch(() => undefined);
+        await window.harness.agent.command("set_model", { provider: runtimeProviderRef.current, modelId: next }, runtimeId).catch(() => undefined);
       }
+      if (seq !== startSeq.current) return;
       setToast(agentCwd.current ? t("toast.modelNextTurn", { model: next }) : t("toast.modelSwitched", { model: next }));
     } catch (error) {
-      setToast(agentErrorToast(error));
+      if (seq === startSeq.current) setToast(agentErrorToast(error));
     } finally {
       modelSwitchBusy.current = false;
       setModelSwitchPending(false);
@@ -1151,8 +1218,7 @@ export function App() {
   const bindProject = useCallback(async (cwd: string): Promise<boolean> => {
     // Phase 3b：多会话并行下，切换项目不再因“当前 agent 仍在运行”而阻止——每个
     // 项目/会话有独立 worker，旧项目的会话切走后会继续后台运行，切回即可见。
-    if (running && agentCwd.current === cwd) return true;
-    live.current = false;
+    detachAgentView();
     setWorkspace(cwd);
     // 按项目恢复上次的模式/模型，新会话沿用上次切换（模型只在可用列表为空或包含时才恢复，避免落到已下架模型）。
     const memory = readProjectComposerMemory(cwd);
@@ -1173,11 +1239,8 @@ export function App() {
     setPreview(undefined);
     setFeatureTodos([]);
     setAgentSkills([]);
-    if (!agentCwd.current) return true;
-    agentCwd.current = undefined;
-    if (!running) await window.harness.agent.stop().catch(() => undefined);
     return true;
-  }, [applyThinkingForModel, running, t]);
+  }, [applyThinkingForModel, detachAgentView]);
   const openFolder = useCallback(async () => {
     const selected = await window.harness.workspace.choose();
     if (!selected) return;
@@ -1187,7 +1250,7 @@ export function App() {
   }, [bindProject]);
 
   const newThread = useCallback(async () => {
-    live.current = false;
+    detachAgentView();
     // 已绑定项目时，在当前项目内直接新开一条空白会话；只有未选项目才停在首页选择项目。
     // 首页（home）会据 workspace 自动切换成「项目名 + 输入框」，因此不清空 workspace。
     if (workspace) setOpenProjects((current) => ({ ...current, [workspace]: true }));
@@ -1201,21 +1264,12 @@ export function App() {
     setAgentSkills([]);
     setActiveSession(undefined);
     sessionRef.current = undefined;
-    if (!agentCwd.current) return;
-    agentCwd.current = undefined;
-    await window.harness.agent.command("abort").catch(() => undefined);
-    await window.harness.agent.stop().catch(() => undefined);
-  }, [workspace]);
+  }, [detachAgentView, workspace]);
 
   const removeSession = useCallback(async (session: SessionSummary) => {
     if (isSameSession(session, activeSession)) {
-      live.current = false;
-      // Abort + stop the RPC tree so Seatbelt shells / background jobs die with the thread.
-      if (agentCwd.current) {
-        await window.harness.agent.command("abort").catch(() => undefined);
-        await window.harness.agent.stop().catch(() => undefined);
-        agentCwd.current = undefined;
-      }
+      // 主进程按被删除会话的路径回收 worker；导航不再依赖易变的默认句柄。
+      detachAgentView();
       setMessages([]);
       setStats(undefined);
       setSteering([]);
@@ -1232,7 +1286,7 @@ export function App() {
     } catch (error) {
       setToast(error instanceof Error ? error.message : String(error));
     }
-  }, [activeSession]);
+  }, [activeSession, detachAgentView]);
 
   const pinSession = useCallback(async (session: SessionSummary) => {
     try {
@@ -1254,6 +1308,8 @@ export function App() {
   }, []);
 
   const removeProject = useCallback(async (path: string) => {
+    const seq = startSeq.current;
+    const runtimeId = runtimeIdRef.current;
     try {
       setWorkspaces(await window.harness.workspace.forget(path));
       setSessionList(await window.harness.sessions.list());
@@ -1261,8 +1317,8 @@ export function App() {
       setToast(error instanceof Error ? error.message : String(error));
       return;
     }
-    if (workspace !== path) return;
-    live.current = false;
+    if (workspace !== path || seq !== startSeq.current) return;
+    detachAgentView();
     setWorkspace(undefined);
     setMessages([]);
     setStats(undefined);
@@ -1271,15 +1327,14 @@ export function App() {
     setRunning(false);
     setUiRequest(undefined);
     sessionRef.current = undefined;
-    // abort 只在确有会话时发；否则主进程会回一条“无活动会话”诊断（哨兵已不刷屏，但没必要发）。
-    const hadSession = Boolean(agentCwd.current);
-    agentCwd.current = undefined;
-    if (hadSession) await window.harness.agent.command("abort").catch(() => undefined);
-    await window.harness.agent.stop().catch(() => undefined);
-  }, [workspace]);
+    if (runtimeId) await window.harness.agent.stop(runtimeId).catch(() => undefined);
+  }, [detachAgentView, workspace]);
 
   const applyUndo = useCallback(async (files: RestoreFile[]) => {
+    const seq = startSeq.current;
+    const runtimeId = runtimeIdRef.current;
     const result = await window.harness.workspace.restore(files, workspace);
+    if (seq !== startSeq.current) return;
     if (result.failed?.length) {
       // 明确告知哪些文件没恢复，避免 UI 已回退、磁盘只恢复一半的假象。
       setToast(
@@ -1289,7 +1344,8 @@ export function App() {
       );
     }
     setMessages((current) => dropLastTurn(current));
-    const stats = await window.harness.agent.command<{ sessionFile?: string }>("get_session_stats").catch(() => undefined);
+    const stats = runtimeId ? await window.harness.agent.command<{ sessionFile?: string }>("get_session_stats", undefined, runtimeId).catch(() => undefined) : undefined;
+    if (seq !== startSeq.current) return;
     if (typeof stats?.sessionFile === "string") {
       sessionRef.current = stats.sessionFile;
       setActiveSession(stats.sessionFile);
@@ -1306,8 +1362,12 @@ export function App() {
         return;
       }
     }
+    const seq = startSeq.current;
+    const runtimeId = runtimeIdRef.current;
+    if (!runtimeId) return;
     try {
-      const log = await window.harness.agent.command<{ entries: Parameters<typeof lastTurnRestoreFiles>[0] }>("get_entries");
+      const log = await window.harness.agent.command<{ entries: Parameters<typeof lastTurnRestoreFiles>[0] }>("get_entries", undefined, runtimeId);
+      if (seq !== startSeq.current) return;
       const files = lastTurnRestoreFiles(log.entries ?? []);
       if (files.length === 0) {
         setToast(t("toast.nothingToUndo"));
@@ -1321,6 +1381,7 @@ export function App() {
         title: `Undo last turn?\n${files.map((file) => file.path).join("\n")}`,
       });
     } catch (error) {
+      if (seq !== startSeq.current) return;
       setToast(error instanceof Error ? error.message : String(error));
     }
   }, [running, startAgent, t, workspace]);
@@ -1341,14 +1402,18 @@ export function App() {
         return;
       }
     }
+    const seq = startSeq.current;
+    const runtimeId = runtimeIdRef.current;
+    if (!runtimeId) return;
     setLoading(true);
     setToast(t("toast.compacting"));
     try {
-      const result = await window.harness.agent.command<{ tokensBefore?: number; summary?: string }>("compact");
+      const result = await window.harness.agent.command<{ tokensBefore?: number; summary?: string }>("compact", undefined, runtimeId);
       const [history, nextStats] = await Promise.all([
-        window.harness.agent.command<{ messages: unknown[] }>("get_messages"),
-        window.harness.agent.command<AgentSessionStats>("get_session_stats"),
+        window.harness.agent.command<{ messages: unknown[] }>("get_messages", undefined, runtimeId),
+        window.harness.agent.command<AgentSessionStats>("get_session_stats", undefined, runtimeId),
       ]);
+      if (seq !== startSeq.current) return;
       setMessages(normalizeMessages(history.messages));
       setStats(nextStats);
       setToast(
@@ -1358,6 +1423,7 @@ export function App() {
       );
       void window.harness.sessions.list().then(setSessionList);
     } catch (error) {
+      if (seq !== startSeq.current) return;
       const raw = error instanceof Error ? error.message : String(error);
       if (/nothing to compact|session too small/i.test(raw)) {
         setToast(t("toast.compactTooShort"));
@@ -1369,48 +1435,56 @@ export function App() {
         }));
       }
     } finally {
-      setLoading(false);
+      if (seq === startSeq.current) setLoading(false);
     }
   }, [locale, running, startAgent, t, workspace]);
 
   const approvePlan = useCallback(async () => {
     if (loading || running) return;
+    const seq = startSeq.current;
+    const runtimeId = runtimeIdRef.current;
+    if (!runtimeId) return;
     const target = permissionBeforePlan.current;
     setLoading(true);
     try {
-      await window.harness.agent.command("prompt", { message: "/plan execute" });
+      await window.harness.agent.command("prompt", { message: "/plan execute" }, runtimeId);
+      if (seq !== startSeq.current) return;
       applyPermissionMode(target);
       setToast(t("plan.approved"));
     } catch (error) {
-      setToast(agentErrorToast(error));
+      if (seq === startSeq.current) setToast(agentErrorToast(error));
     } finally {
-      setLoading(false);
+      if (seq === startSeq.current) setLoading(false);
     }
   }, [applyPermissionMode, loading, running, t]);
 
   const refinePlan = useCallback(async (changes: string) => {
     const text = changes.trim();
     if (!text || loading || running) return;
+    const seq = startSeq.current;
+    const runtimeId = runtimeIdRef.current;
+    if (!runtimeId) return;
     setLoading(true);
     try {
       await window.harness.agent.command("prompt", {
         message: `Refine the current plan using update_plan. Requested changes:\n${text}`,
-      });
+      }, runtimeId);
     } catch (error) {
-      setToast(agentErrorToast(error));
+      if (seq === startSeq.current) setToast(agentErrorToast(error));
     } finally {
-      setLoading(false);
+      if (seq === startSeq.current) setLoading(false);
     }
   }, [loading, running]);
 
   const sendMessage = useCallback(async (preset?: string, images?: string[], sourceDraftKey?: string): Promise<boolean> => {
     const text = (preset ?? "").trim();
+    const sendingKey = sourceDraftKey ?? draftScope(workspace, sessionRef.current);
     if (text === "/undo") {
       if (running) return false;
       void undoLastTurn();
       return true;
     }
-    if ((!text && !images?.length) || loading || modelSwitchBusy.current || sending.current) return false;
+    if ((!text && !images?.length) || loading || modelSwitchBusy.current || sending.current.has(sendingKey)) return false;
     if (running) {
       if (text.startsWith("/")) return false;
       const followup = text || t("toast.defaultImagePrompt");
@@ -1429,7 +1503,7 @@ export function App() {
         return false;
       }
     }
-    sending.current = true;
+    sending.current.add(sendingKey);
     const question = text || t("toast.defaultImagePrompt");
     const thumbs = (images ?? []).map((item) => {
       const match = item.match(/^data:([^;]+);base64,(.+)$/);
@@ -1488,7 +1562,7 @@ export function App() {
         const targetSession = sessionRef.current;
         if (!(await ensureModelReady()) || targetSession !== sessionRef.current) {
           setMessages((current) => current.filter((item) => item.id !== optimistic!.id));
-          if (stillViewing()) setRunning(false);
+          if (targetSession === sessionRef.current && (!runtimeIdRef.current || targetRuntimeId === runtimeIdRef.current)) setRunning(false);
           return false;
         }
         targetRuntimeId = runtimeIdRef.current;
@@ -1528,7 +1602,7 @@ export function App() {
       if (!/Agent session closed/.test(detail)) setToast(agentErrorToast(error));
       return false;
     } finally {
-      sending.current = false;
+      sending.current.delete(sendingKey);
     }
   }, [dropAgentSession, ensureModelReady, loading, openFolder, permission, running, startAgent, t, undoLastTurn, workspace]);
 
@@ -1611,6 +1685,7 @@ export function App() {
       if (eventSession && eventSession !== sessionRef.current) {
         return;
       }
+      if (event.__runtimeId && event.__runtimeId !== runtimeIdRef.current) return;
       // 按运行句柄内序号去重：snapshot 回放与实时流可能重叠。
       const eventSeq = (event as { __seq?: number }).__seq;
       if (typeof eventSeq === "number") {
@@ -1863,7 +1938,7 @@ export function App() {
               const pending = pendingUndo.current;
               if (!pending) return;
               await applyUndo(pending.files);
-              pendingUndo.current = undefined;
+              if (pendingUndo.current === pending) pendingUndo.current = undefined;
             } : (response) => window.harness.agent.respondToUi(request.id, response, requestRuntimeId)}
             onDone={() => {
               setUiRequest((current) => current?.id === request.id ? undefined : current);
@@ -1911,6 +1986,12 @@ export function App() {
       fillToken={promptFill.token}
       onSubmit={(text, images) => sendMessage(text, images, draftScope(workspace, activeSession))}
       onStop={() => {
+        const runtimeId = runtimeIdRef.current;
+        if (!runtimeId) {
+          detachAgentView();
+          setRunning(false);
+          return;
+        }
         const seq = startSeq.current;
         const epoch = runEpoch.current;
         eventQueue.current?.flush();
@@ -1927,7 +2008,7 @@ export function App() {
         // 期间按钮不能一直锁在「停止中」：给 UI 一个上限，超时就把按钮还原成可再次点击，
         // 真正的收尾仍由 agent_settled 事件驱动。
         const abortOutcome = window.harness.agent
-          .command("abort")
+          .command("abort", undefined, runtimeId)
           .then(() => "aborted" as const)
           .catch((error) => (error instanceof Error ? error : new Error(String(error))));
         const stopDeadline = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), STOP_UI_TIMEOUT_MS));
@@ -1971,12 +2052,16 @@ export function App() {
         }
         applyPermissionMode(mode);
         if (!agentCwd.current) return;
+        const seq = startSeq.current;
+        const runtimeId = runtimeIdRef.current;
+        if (!runtimeId) return;
         void (async () => {
           try {
-            await window.harness.agent.command("prompt", { message: `/permissions ${mode}` });
+            await window.harness.agent.command("prompt", { message: `/permissions ${mode}` }, runtimeId);
+            if (seq !== startSeq.current) return;
             setToast(mode === "full" ? t("toast.sandboxOff") : t("toast.permissionChanged"));
           } catch (error) {
-            setToast(agentErrorToast(error));
+            if (seq === startSeq.current) setToast(agentErrorToast(error));
           }
         })();
       }}
@@ -2081,7 +2166,7 @@ export function App() {
                           branchExpanded={expanded}
                           onToggleBranch={() => setRailOpen((open) => ({ ...open, [session.id]: !expanded }))}
                           onOpen={() => openSession(session)}
-                          onStop={session.sourceDelegationId ? () => stopDelegatedSession(session) : undefined}
+                          onStop={session.sourceDelegationId ? () => stopDelegatedSession(session) : () => stopSession(session)}
                           onPin={() => void pinSession(session)}
                           onRename={(title) => void renameSession(session, title)}
                           onRemove={() => void removeSession(session)}
@@ -2282,8 +2367,10 @@ export function App() {
           onManageCapabilities={() => { setLoginOpen(false); openCapabilities(); }}
           onRefreshSkills={() => void refreshAgentSkills()}
           onClose={() => {
+            const seq = startSeq.current;
             setLoginOpen(false);
             void refresh().then((status) => {
+              if (seq !== startSeq.current) return;
               const current = activeChatProvider(status);
               if (current?.configured) {
                 modelRef.current = current.defaultModel;
@@ -2293,8 +2380,10 @@ export function App() {
             }).catch((error) => setToast(agentErrorToast(error)));
           }}
           onSaved={async () => {
+            const seq = startSeq.current;
             const status = await window.harness.auth.status();
             setProviders(status);
+            if (seq !== startSeq.current) return;
             const current = activeChatProvider(status);
             if (current?.configured) {
               const nextModel = current.defaultModel;
@@ -2302,12 +2391,8 @@ export function App() {
               setModel(nextModel);
               applyThinkingForModel(nextModel, status);
               setLoginOpen(false);
-              await window.harness.agent.stop().catch(() => undefined);
-              if (workspace || agentCwd.current) {
-                void startAgent(workspace, sessionRef.current, Boolean(workspace), false, permission).then((started) => {
-                  if (!started) dropAgentSession();
-                });
-              }
+              // 已开始的轮次保留原服务，下一次发送由 ensureModelReady 应用新配置。
+              if (agentCwd.current) setToast(t("toast.modelNextTurn", { model: nextModel }));
             }
           }}
         />

@@ -27,6 +27,7 @@ async function smoke() {
   const starts = new Map<string, number>();
   const draftSmoke = process.env.TACODE_COMPOSER_SMOKE === "1";
   const imeSmoke = process.env.TACODE_IME_SMOKE === "1";
+  const navigationSmoke = process.env.TACODE_NAVIGATION_SMOKE === "1";
   const controls: ComposerSmokeControls = { configured: true, failStart: false, prompt: draftSmoke || imeSmoke ? "reject" : "approval", submitted: [] };
   const renames: string[] = [];
   const activity = new AgentActivityStore((value) => main?.webContents.send("agent:activity", value));
@@ -141,6 +142,7 @@ async function smoke() {
     ipcMain.handle("agent:replay", (_event, id, seq) => manager.replay(id, seq));
     ipcMain.handle("agent:command", (_event, type, data, id) => manager.command(id, type, data));
     ipcMain.handle("agent:stop", (_event, id) => manager.stop(id));
+    ipcMain.handle("agent:deactivate", () => manager.deactivate());
     ipcMain.handle("agent:ui-response", (_event, id, response, runtimeId) => manager.respondToUi(runtimeId, id, response));
     ipcMain.handle("agent:start", async (_event, options) => {
       if (controls.failStart) throw new Error("fixture worker startup failed");
@@ -164,6 +166,69 @@ async function smoke() {
     stage = "open B while A runs";
     await select("B");
     const b = manager.findBySession(sessions[1].path)!;
+    if (navigationSmoke) {
+      const newThread = async () => {
+        await evaluate("Array.from(document.querySelectorAll('button')).find(el => el.textContent.trim() === '新对话').click()");
+        await wait(() => evaluate("!document.querySelector('.session-row[aria-current=page]') && !!document.querySelector('.prompt-input')"));
+      };
+      const type = async (value: string) => {
+        await evaluate("document.querySelector('.prompt-input').focus()");
+        await main!.webContents.insertText(value);
+      };
+      stage = "new conversation keeps A running";
+      await select("A");
+      await newThread();
+      assert.equal(a.isInTurn(), true);
+      assert.equal(a.isRunning(), true);
+      assert.equal(manager.active, undefined);
+      await wait(() => evaluate("!!Array.from(document.querySelectorAll('.session-row')).find(el => el.getAttribute('aria-label') === '会话 A')?.querySelector('.session-running')"));
+      stage = "A pending send does not block B";
+      emit(a, { type: "agent_settled" });
+      await select("A");
+      await type("A 请求确认");
+      await evaluate("document.querySelector('.prompt button[type=submit]').click()");
+      await wait(async () => pendingPrompts.has(a.runtimeId));
+      emit(a, { type: "extension_ui_request", id: "navigation-approval", method: "confirm", title: "A 等待确认", message: "保留此请求" });
+      await newThread();
+      await select("B");
+      controls.prompt = "accept";
+      const submitted = controls.submitted.length;
+      await type("B 独立发送");
+      await evaluate("document.querySelector('.prompt button[type=submit]').click()");
+      await wait(async () => controls.submitted.length === submitted + 1 && b.isInTurn());
+      await type("B 的草稿不受影响");
+      stage = "late A snapshot cannot steal B routing";
+      const originalSnapshot = a.snapshot.bind(a);
+      let release!: () => void;
+      let snapshotStarted = false;
+      a.snapshot = async () => {
+        snapshotStarted = true;
+        await new Promise<void>((resolve) => { release = resolve; });
+        return originalSnapshot();
+      };
+      await evaluate("Array.from(document.querySelectorAll('.session-row')).find(el => el.getAttribute('aria-label') === '会话 A').click()");
+      await wait(async () => snapshotStarted);
+      await newThread();
+      await select("B");
+      release();
+      a.snapshot = originalSnapshot;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(manager.active, b.runtimeId);
+      assert.equal((await evaluate<{ sessionFile: string }>("window.harness.agent.command('get_state')")).sessionFile, b.sessionKey);
+      assert.match(await evaluate<string>("document.querySelector('.prompt-input').textContent"), /B 的草稿不受影响/);
+      stage = "sidebar stop affects only A";
+      await evaluate("Array.from(document.querySelectorAll('.session-row')).find(el => el.getAttribute('aria-label') === '会话 A').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 130, clientY: 220 }))");
+      await wait(() => evaluate("!!document.querySelector('.session-menu')"));
+      await evaluate("Array.from(document.querySelectorAll('.session-menu button')).find(el => el.textContent.trim() === '停止任务').click()");
+      await wait(async () => !manager.findRuntime(a.runtimeId));
+      assert.equal(b.isRunning(), true);
+      assert.equal(b.isInTurn(), true);
+      assert.match(await evaluate<string>("document.querySelector('.prompt-input').textContent"), /B 的草稿不受影响/);
+      await screenshot("navigation-background.png");
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      console.log("Navigation smoke passed: new conversation preserves A, pending A send does not block B, delayed snapshot cannot rebind, sidebar stop preserves B worker and draft.");
+      return;
+    }
     if (imeSmoke) {
       await testImeInput({ main, evaluate, wait, stage: (next) => { stage = next; }, controls, renames });
       assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
@@ -235,11 +300,14 @@ async function smoke() {
     emit(b, { type: "agent_start" });
     emit(b, { type: "agent_settled" });
     await wait(() => badge("B", "completed"));
+    stage = "reload preserves completion";
     main.webContents.reload();
     await wait(() => evaluate("document.querySelectorAll('.home-recent').length === 2"));
     await evaluate("document.querySelector('.home-recent').click()");
     await select("B");
+    stage = "opening B acknowledges completion";
     main.focus();
+    main.webContents.focus();
     await wait(async () => !(await badge("B", "completed")));
     // 原 renderer（dbda9b1）在同样的普通会话切换中也会报告该布局警告。
     // 保留计数用于 UX-13 性能回放，其他 renderer 错误仍使本测试失败。
@@ -250,6 +318,7 @@ async function smoke() {
   } catch (error) {
     console.error(`Session activity smoke failed at ${stage}:`, error);
     console.error(rendererErrors);
+    console.error(await evaluate("({ focused: document.hasFocus(), visibility: document.visibilityState, selected: document.querySelector('.session-row[aria-current=page]')?.getAttribute('aria-label'), loading: !!document.querySelector('.session-loading'), content: document.querySelector('main')?.textContent.slice(-600) })").catch(() => undefined));
     await screenshot("failure.png").catch(() => undefined);
     process.exitCode = 1;
   } finally {

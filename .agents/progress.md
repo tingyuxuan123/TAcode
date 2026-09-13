@@ -1062,3 +1062,12 @@
 - 验证：全量 **112 文件 / 987 用例通过**；`pnpm typecheck`、`git diff --check` 通过。`TACODE_IME_SMOKE=1 node scripts/test-session-activity.mjs` 通过 Chromium 可信 composition 输入、确认文件/斜杠候选、Escape 保留文本、普通发送/换行和中文重命名。UX-02 完整草稿桌面回归通过。
 - 平台边界：自动化覆盖本机 macOS 上的 Chromium 原生组合输入及两种平台键码序列；未把这些结果称为实体 Windows 机器或所有第三方输入法的实测。
 - 下一项：UX-04 新建/切换保持后台运行、侧栏独立停止和导航竞态隔离。其余 14 项仍未完成。
+
+## 2026-09-13：UX-04 新建、切换与后台运行规则
+
+- [x] 新建/切项目只解除当前视图绑定；已开始的任务与审批继续保留，普通会话侧栏提供“停止任务”。停止显式绑定 runtime，B 的草稿、进程和运行状态不受 A 停止影响。
+- [x] 主进程、manager、preload 与 renderer 均对延迟 start/snapshot 做选择版本校验；失败启动、启动中停止不会留下可复用的坏句柄。压缩、撤销、模型与权限修改绑定发起句柄并隔离迟到 UI 更新；保存模型配置由下次发送应用，不打断已开始轮次。
+- [x] 输入提交锁按会话拆分，A 等待 preflight/审批不会锁住 B 的输入与发送。
+- 文件：main/agent-manager.ts、agent-lifecycle.test.ts、index.ts；preload/index.ts、index.test.ts；renderer/App.tsx、ui.tsx；shared/types.ts、i18n.ts；scripts/session-activity-smoke.ts。
+- 验证：全量 `pnpm test --reporter=dot` **113 文件 / 993 用例通过**；新增 preload 2 用例在补齐类型字段后再次通过，`pnpm typecheck`、`git diff --check` 通过。`TACODE_NAVIGATION_SMOKE=1 node scripts/test-session-activity.mjs` 通过新建不中断、等待确认仍可跨会话发送、延迟 A 快照不能抢回 B、侧栏单独停止 A；草稿与后台审批桌面回归通过。完成未读回归曾因测试窗口的 webContents 未获焦点超时，补上实际焦点后通过；原有 ResizeObserver 警告仍单独计数，留待 UX-13。
+- 下一项：UX-05 历史先展示、继续对话再准备运行环境，包含完整历史分页与分支语义。整份目标继续 active。

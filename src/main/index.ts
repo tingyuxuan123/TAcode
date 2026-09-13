@@ -274,6 +274,7 @@ const terminalManager = new TerminalManager((event) => {
   mainWindow?.webContents.send("terminal:event", event);
 });
 let activeAgentCwd: string | undefined;
+let agentViewVersion = 0;
 
 
 /**
@@ -1286,6 +1287,10 @@ function registerIpc(): void {
 
   ipcMain.handle("agent:start", async (_event, rawOptions: unknown) => {
     const options = validateAgentStartOptions(rawOptions);
+    const viewVersion = ++agentViewVersion;
+    agentManager.deactivate();
+    activeAgentCwd = undefined;
+    const ensureCurrentView = () => { if (viewVersion !== agentViewVersion) throw new Error("会话选择已改变。"); };
     const tasksDir = path.resolve(path.join(userDataPath, "tasks"));
     const cwd = options.cwd ? path.resolve(options.cwd) : tasksDir;
     await fsp.mkdir(cwd, { recursive: true });
@@ -1315,9 +1320,11 @@ function registerIpc(): void {
     // 命中已在运行的同一会话（切回后台会话，含 openSession 的 resume=false）：
     // 直接复用，不杀不重开。不依赖 resume 标志——只要该会话已有存活 host 就复用。
     const existing = agentManager.findBySession(sessionPath);
+    ensureCurrentView();
     if (existing?.isRunning()) {
       activeAgentCwd = cwd;
       if (options.project || cwd !== tasksDir) await recentWorkspaces.touch(cwd);
+      ensureCurrentView();
       const snapshot = await agentManager.resume(existing.runtimeId);
       return { ...snapshot, cwd, activity: agentActivities.bind(existing.runtimeId, existing.sessionKey ?? sessionPath) };
     }
@@ -1342,6 +1349,7 @@ function registerIpc(): void {
     const baseUrl = rawUrl ? apiBaseUrl(rawUrl) : undefined;
     const desktopProvider = startOptions.serviceId
       ? await resolveDesktopProvider(startOptions.serviceId, startOptions.model) : undefined;
+    ensureCurrentView();
     // 每个会话独立 host：已有实例（同会话重启）则复用，否则新建，绝不停止其它会话。
     const started = await agentManager.start({
       ...startOptions,
@@ -1417,6 +1425,11 @@ function registerIpc(): void {
   ipcMain.handle("agent:stop", (_event, runtimeId?: string) =>
     agentManager.stop(runtimeId),
   );
+  ipcMain.handle("agent:deactivate", () => {
+    agentViewVersion++;
+    activeAgentCwd = undefined;
+    agentManager.deactivate();
+  });
   ipcMain.handle("agent:runtimes", () => agentManager.list());
   ipcMain.handle("agent:activities", () => agentActivities.list());
   ipcMain.handle("agent:acknowledge-activity", (_event, rawRuntimeId: unknown, rawVersion: unknown) => {

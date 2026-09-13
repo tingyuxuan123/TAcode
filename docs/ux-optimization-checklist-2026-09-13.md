@@ -56,7 +56,7 @@
 
   **定位与风险。** [PromptBar.onKey](/Users/yfdl/project/TAcode/src/renderer/ui.tsx:2532)、[SessionRow 重命名](/Users/yfdl/project/TAcode/src/renderer/App.tsx:220)。风险低，浏览器合成键盘事件不能完全替代实际输入法验证。
 
-- [ ] **UX-04 · 统一新建、切换与后台运行规则**
+- [x] **UX-04 · 统一新建、切换与后台运行规则**
 
   **代码确认 + 产品建议。** 当前切项目允许旧任务继续后台运行，但 `newThread` 会对当前会话执行 abort 和 stop。两种看起来相近的导航操作，执行生命周期不同。普通主会话的侧栏也没有像委派子会话一样接入停止入口。
 
