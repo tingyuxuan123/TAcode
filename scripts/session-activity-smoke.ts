@@ -9,6 +9,7 @@ import { AgentHost } from "../src/main/agent-host";
 import { AgentManager } from "../src/main/agent-manager";
 import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/types";
 import { testComposerDrafts, type ComposerSmokeControls } from "./composer-drafts-smoke";
+import { testImeInput } from "./ime-smoke";
 
 /** 真实 App + preload + Electron IPC + Host 行协议；生成事件由本地夹具驱动，不访问模型服务。 */
 async function smoke() {
@@ -25,7 +26,9 @@ async function smoke() {
   const pendingPrompts = new Map<string, () => void>();
   const starts = new Map<string, number>();
   const draftSmoke = process.env.TACODE_COMPOSER_SMOKE === "1";
-  const controls: ComposerSmokeControls = { configured: true, failStart: false, prompt: draftSmoke ? "reject" : "approval", submitted: [] };
+  const imeSmoke = process.env.TACODE_IME_SMOKE === "1";
+  const controls: ComposerSmokeControls = { configured: true, failStart: false, prompt: draftSmoke || imeSmoke ? "reject" : "approval", submitted: [] };
+  const renames: string[] = [];
   const activity = new AgentActivityStore((value) => main?.webContents.send("agent:activity", value));
   const now = new Date().toISOString();
   const sessions: SessionSummary[] = ["A", "B"].map((name) => ({
@@ -121,9 +124,14 @@ async function smoke() {
     ipcMain.handle("vision:config", () => ({ profiles: [], activeProfileId: "" }));
     ipcMain.handle("app:log-diagnostic", () => {});
     ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }]);
-    ipcMain.handle("workspace:list", () => []);
+    ipcMain.handle("workspace:list", () => imeSmoke ? ["src/", "src/App.tsx", "src/中文.ts"] : []);
     ipcMain.handle("workspace:read", (_event, file) => ({ path: file, content: "", binary: false }));
     ipcMain.handle("sessions:list", () => sessions);
+    ipcMain.handle("sessions:rename", (_event, id, title) => {
+      renames.push(title);
+      const session = sessions.find((row) => row.id === id);
+      if (session) session.title = title;
+    });
     ipcMain.handle("delegations:list", () => []);
     ipcMain.handle("skills:list", () => ({ skills: [], projectTrusted: true }));
     ipcMain.handle("auth:status", () => [{ id: "openai", serviceId: "fixture", serviceVersion: "1", preferred: true, configured: controls.configured, defaultModel: "fixture", models: ["fixture"] }]);
@@ -152,10 +160,16 @@ async function smoke() {
     await evaluate("document.querySelector('.home-recent').click()");
     await select("A");
     const a = manager.findBySession(sessions[0].path)!;
-    if (!draftSmoke) emit(a, { type: "agent_start" });
+    if (!draftSmoke && !imeSmoke) emit(a, { type: "agent_start" });
     stage = "open B while A runs";
     await select("B");
     const b = manager.findBySession(sessions[1].path)!;
+    if (imeSmoke) {
+      await testImeInput({ main, evaluate, wait, stage: (next) => { stage = next; }, controls, renames });
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      console.log("IME smoke passed: native Chromium composition, file completion, slash commands, Escape preservation, Shift+Enter, send and session rename.");
+      return;
+    }
     if (draftSmoke) {
       await testComposerDrafts({ main, evaluate, select, wait, controls, screenshot, stage: (next) => { stage = next; }, failActive: () => {
         const host = manager.activeHost()!;

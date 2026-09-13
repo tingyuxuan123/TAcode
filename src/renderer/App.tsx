@@ -89,6 +89,7 @@ import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
 import { useAgentActivities } from "./use-agent-activities";
 import { composerDrafts, draftScope } from "./composer-drafts";
+import { createImeGuard } from "./ime";
 import { SessionActivityError, SessionActivityIndicator } from "./session-activity";
 import logo from "./logo.svg";
 import { useI18n } from "./i18n";
@@ -175,6 +176,7 @@ export function SessionRow({
   const { t } = useI18n();
   const [menu, setMenu] = useState<{ x: number; y: number }>();
   const [editing, setEditing] = useState(false);
+  const renameIme = useRef(createImeGuard()).current;
   const [stopping, setStopping] = useState(false);
 
   useEffect(() => {
@@ -218,6 +220,8 @@ export function SessionRow({
           className="session-rename"
           defaultValue={session.title}
           autoFocus
+          onCompositionStart={renameIme.start}
+          onCompositionEnd={renameIme.end}
           onFocus={(event) => event.currentTarget.select()}
           onBlur={(event) => {
             const next = event.currentTarget.value.trim();
@@ -225,7 +229,8 @@ export function SessionRow({
             if (next && next !== session.title) onRename(next);
           }}
           onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
+            if (renameIme.handles(event.nativeEvent)) return;
+            if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
             if (event.key === "Escape") {
               event.currentTarget.value = session.title;
               event.currentTarget.blur();

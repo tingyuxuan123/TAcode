@@ -12,7 +12,7 @@
   {
     "id": "UX-03",
     "description": "中文输入法与快捷键兼容。验收：macOS 和 Windows 中文输入法下，在 `@` 文件补全、`/` 命令候选和会话重命名中确认候选词，不触发额外操作；普通 Enter 发送、Shift+Enter 换行继续正常工作。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-03。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "UX-04",

@@ -46,7 +46,7 @@
 
   **定位与风险。** [PromptBar.sendNow](/Users/yfdl/project/TAcode/src/renderer/ui.tsx:2519)、[sendMessage](/Users/yfdl/project/TAcode/src/renderer/App.tsx:1358)、[composer-memory.ts](/Users/yfdl/project/TAcode/src/renderer/composer-memory.ts:7)。风险中等，重点是发送确认边界、草稿版本和图片存储。
 
-- [ ] **UX-03 · 中文输入法与快捷键兼容**
+- [x] **UX-03 · 中文输入法与快捷键兼容**
 
   **代码确认，需实机回归。** 普通 Enter 发送检查了 `isComposing`，但斜杠命令和文件补全分支先处理 Enter、方向键与 Escape，尚未检查组合输入状态。会话重命名也直接用 Enter 触发失焦提交。
 

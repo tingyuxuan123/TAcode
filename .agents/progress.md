@@ -1053,3 +1053,12 @@
 - 验证：`pnpm test --reporter=dot` **111 文件 / 980 用例通过**；`pnpm typecheck`、`git diff --check` 通过。`TACODE_COMPOSER_SMOKE=1 node scripts/test-session-activity.mjs` 使用真实 App/IndexedDB/preload/IPC，通过两图 A/B 隔离、重载恢复、拒绝、等待时新增文字、缺配置、spawn 失败、建立会话后的模型初始化失败、接收后模型失败场景。UX-01 桌面回归也通过；测试中的 fixture rejected / startup failed 是主动注入的预期错误，没有线上模型调用。
 - 已查看恢复草稿截图：原文字、新文字和两张缩略图同时保留，截图在 `/Users/yfdl/.codex/visualizations/2026/09/13/01a09958-0266-7751-adca-acfbab778dbd/ux-02/`。沿用 UX-01 已确认的 ResizeObserver 警告记录，后续 UX-13 处理。
 - 下一项：UX-03 中文输入法与快捷键兼容。其余 15 项仍未完成，整份目标保持 active。
+
+## 2026-09-13：UX-03 中文输入法与快捷键
+
+- [x] 新增统一 IME 判断：composition 生命周期、Chromium isComposing、Windows/macOS VK_PROCESSKEY 229，以及 compositionend 后同次 Enter 的短保护窗口。文件补全、斜杠菜单和会话重命名先判断输入法归属，再处理快捷键；表单提交也保护组合输入。
+- [x] 组合输入期间不改写 contenteditable DOM，结束后保存最终文字；相同文字的重复 input 不遗留错误的 hydrate 跳过标记。恢复草稿/切会话后同步光标位置。Escape 关闭候选面板保留原文字，普通 Enter 和 Shift+Enter 保持原行为。
+- 主要文件：renderer/ime.ts、ime.test.ts、App.tsx、ui.tsx；scripts/ime-smoke.ts 与现有桌面夹具。
+- 验证：全量 **112 文件 / 987 用例通过**；`pnpm typecheck`、`git diff --check` 通过。`TACODE_IME_SMOKE=1 node scripts/test-session-activity.mjs` 通过 Chromium 可信 composition 输入、确认文件/斜杠候选、Escape 保留文本、普通发送/换行和中文重命名。UX-02 完整草稿桌面回归通过。
+- 平台边界：自动化覆盖本机 macOS 上的 Chromium 原生组合输入及两种平台键码序列；未把这些结果称为实体 Windows 机器或所有第三方输入法的实测。
+- 下一项：UX-04 新建/切换保持后台运行、侧栏独立停止和导航竞态隔离。其余 14 项仍未完成。

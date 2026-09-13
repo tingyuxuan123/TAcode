@@ -18,6 +18,7 @@ import { EffortPicker, ModelPicker, usePickerPopover } from "./composer-pickers"
 import { PromptToolbar } from "./prompt-toolbar";
 import { MAX_DRAFT_IMAGE_SIZE, type DraftImage } from "./composer-drafts";
 import { useComposerDraft } from "./use-composer-draft";
+import { createImeGuard } from "./ime";
 import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, toolCommand, toolPath, toolSummary, toolWritePreview, toolWriteSource, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type DelegateTaskState, type FileChange, type SessionFile, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
 import { tokenizeCode } from "./highlight";
 import { isTightTableCell } from "./markdown-table";
@@ -2347,12 +2348,14 @@ export function PromptBar({
 }) {
   const { t } = useI18n();
   const { store: drafts, draft } = useComposerDraft(draftKey);
+  const ime = useRef(createImeGuard()).current;
   const value = draft.text;
   const attachments = draft.images;
   const setValue = (text: string) => drafts.update(draftKey, { text });
   const setAttachments = (update: DraftImage[] | ((previous: DraftImage[]) => DraftImage[])) =>
     drafts.update(draftKey, { images: typeof update === "function" ? update(drafts.get(draftKey).images) : update });
   const [cursor, setCursor] = useState(0);
+  const [dismissedCompletion, setDismissedCompletion] = useState<string>();
   const [files, setFiles] = useState<string[]>([]);
   const [listing, setListing] = useState(false);
   const [picked, setPicked] = useState(0);
@@ -2368,7 +2371,7 @@ export function PromptBar({
   const area = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const menu = useRef<HTMLDivElement>(null);
-  const mention = workspace ? mentionAt(value, cursor) : undefined;
+  const mention = workspace && dismissedCompletion !== value ? mentionAt(value, cursor) : undefined;
   const matches = mention ? filterMentionPaths(files, mention.query) : [];
 
   useEffect(() => {
@@ -2403,8 +2406,10 @@ export function PromptBar({
     const next = serializePrompt(root);
     setBlank(isPromptEmpty(root) && attachments.length === 0);
     setCursor(caretOffset(root));
-    skipHydrate.current = true;
-    if (next !== value) setValue(next);
+    if (next !== drafts.get(draftKey).text) {
+      skipHydrate.current = true;
+      setValue(next);
+    }
     return next;
   };
 
@@ -2434,6 +2439,7 @@ export function PromptBar({
   useEffect(() => {
     setPicked(0);
   }, [mention?.query, value]);
+  useEffect(() => { setDismissedCompletion(undefined); }, [value]);
 
   useEffect(() => {
     menu.current?.querySelector(".on")?.scrollIntoView({ block: "nearest" });
@@ -2457,6 +2463,10 @@ export function PromptBar({
     skipHydrate.current = false;
     if (serializePrompt(root) === value) return;
     hydratePrompt(root, value);
+    if (changedScope || draft.restored || draft.unconfirmed) {
+      setCursor(value.length);
+      if (document.activeElement === root) placeCaret(root, value.length);
+    }
   }, [draftKey, value, attachments.length]);
 
   const addUploads = async (list: FileList | File[]) => {
@@ -2516,7 +2526,7 @@ export function PromptBar({
     });
   };
 
-  const slash = (skillCommands.length > 0 || builtinCommands.length > 0) && (value === "/" || /^\/[^\s]*$/.test(value));
+  const slash = dismissedCompletion !== value && (skillCommands.length > 0 || builtinCommands.length > 0) && (value === "/" || /^\/[^\s]*$/.test(value));
   const commands = [
     ...builtinCommands.map((command) => ({ id: command.id, description: command.description, builtin: true })),
     ...skillCommands.map((skill) => ({ id: skillSlashCommand(skill.name), description: skill.description, builtin: false })),
@@ -2575,9 +2585,15 @@ export function PromptBar({
   };
 
   const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (ime.handles(event.nativeEvent)) return;
     const root = area.current;
     if (!root) return;
     setCursor(caretOffset(root));
+    if (event.key === "Escape" && (slash || mention)) {
+      event.preventDefault();
+      setDismissedCompletion(value);
+      return;
+    }
     if (slash && commands.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -2592,11 +2608,6 @@ export function PromptBar({
       if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey) {
         event.preventDefault();
         pickSlashCommand();
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setValue("");
         return;
       }
     }
@@ -2616,23 +2627,13 @@ export function PromptBar({
         insertFile(matches[picked] ?? matches[0]!, event.key === "Enter");
         return;
       }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        if (mention?.query) {
-          setValue(`${value.slice(0, cursor)} ${value.slice(cursor)}`);
-          setCursor(cursor + 1);
-        } else {
-          setValue(`${value.slice(0, mention?.start ?? cursor)}${value.slice(cursor)}`);
-        }
-        return;
-      }
     }
     if (slash && event.key === "Enter" && commands[0] && !event.shiftKey) {
       event.preventDefault();
       pickSlashCommand();
       return;
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       sendNow();
       return;
@@ -2736,6 +2737,7 @@ export function PromptBar({
           onDropCapture={dropIntoPrompt}
           onSubmit={(event) => {
             event.preventDefault();
+            if (ime.active() || ime.recent()) return;
             if (slash && commands[0]) {
               pickSlashCommand();
               return;
@@ -2785,7 +2787,9 @@ export function PromptBar({
           onMouseDown={(event) => {
             if ((event.target as HTMLElement).closest(".prompt-upload")) event.preventDefault();
           }}
-          onInput={emit}
+          onCompositionStart={ime.start}
+          onCompositionEnd={() => { ime.end(); emit(); }}
+          onInput={() => { if (!ime.active()) emit(); }}
           onKeyUp={() => area.current && setCursor(caretOffset(area.current))}
           onKeyDown={onKey}
           onPaste={(event) => {
