@@ -68,7 +68,7 @@ const api: DesktopApi = {
     read: (filePath, cwd) => ipcRenderer.invoke("workspace:read", filePath, cwd),
     open: (filePath, cwd) => ipcRenderer.invoke("workspace:open", filePath, cwd),
     reveal: (filePath, cwd) => ipcRenderer.invoke("workspace:reveal", filePath, cwd),
-    list: (cwd) => ipcRenderer.invoke("workspace:list", cwd),
+    list: (cwd, refresh) => ipcRenderer.invoke("workspace:list", cwd, refresh),
     restore: (files, cwd) => ipcRenderer.invoke("workspace:restore", files, cwd),
     onChanged: (listener) => subscribe<string>("workspace:changed", listener),
   },

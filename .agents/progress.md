@@ -1110,3 +1110,12 @@
 - 验证：全量 **119 文件 / 1023 测试通过**；后续补齐摘要阶段与保守时间戳路径后 6 个定向测试、`pnpm typecheck`、`git diff --check` 通过。真实受管命令覆盖写盘和异步边界；`TACODE_CHECKPOINT_SMOKE=1 node scripts/test-session-activity.mjs` 通过两个阶段及结束态的可见性验证，已查看截图 `ux-08/checkpoint-stage.png`。
 - 同本仓库 331 文件副本、交替六轮，后五轮检查中位数 **68.14 → 12.07 ms**，总耗时 **88.69 → 32.82 ms**，重复全文读取 **662 → 0 次**；首轮检查 **77.13 → 24.26 ms**。条件/原始数据见 `docs/ux-08-checkpoint-performance.md` 和 JSON，不将本地 APFS 样本外推到所有文件系统。
 - 下一项：UX-09 完整工作区文件检索与共享索引，处理深层文件和目录数量截断。整份目标继续 active。
+
+## 2026-09-13：UX-09 完整文件检索与共享索引
+
+- [x] 主进程建立完整路径索引，移除 8000 总文件/每目录 200 的静默截断；同根目录的并发请求共用扫描，已知文件增删只核对对应路径，目录改名只更新子树。保留最多 3 个工作区缓存，切回未监听的项目重新核对，刷新按钮可强制重建。索引与监听共用忽略规则，Skills 路径包含 `.agents` 与 `.pi`。
+- [x] 文件面板和输入框共用一份路径数组、一次 IPC 请求及一个变更订阅；卸载时释放订阅和无消费者的路径数组。搜索按完整相对路径匹配整个工作区；无查询时浏览当前目录，每次展示 200 项并可继续加载。
+- [x] 两个入口均区分加载失败与无匹配，提供重试，更新时保留现有可用列表；切项目重置目录位置。`@` 的中文输入法处理保持不变。
+- 文件：main/workspace-file-index.ts、index.ts；renderer/workspace-files.ts、browser/files-panel.tsx、ui.tsx；shared/types.ts、i18n.ts、preload；相关测试与桌面夹具。
+- 验证：全量 **121 文件 / 1027 测试通过**，`pnpm typecheck`、`git diff --check` 通过。8100 文件实盘样本覆盖后部检索、目录第 201 项、增删零目录重扫、改名子树、扫描失败重试。`TACODE_FILES_SMOKE=1 node scripts/test-session-activity.mjs` 通过真实 UI 的深层搜索、加载更多、后部文件引用、共享更新和错误重试；IME 桌面回归通过。已查看 `ux-09/deep-file-search.png`，脚本中的 listing failed 为主动注入。
+- 下一项：UX-10 预览按文件变更刷新，区分空文件、缺失、二进制、失败及截断，保留阅读位置。整份目标继续 active。

@@ -1,3 +1,4 @@
+import { useWorkspaceFiles } from "./workspace-files";
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { contextCapacity, generationSpeed } from "./context-stats";
@@ -2356,8 +2357,7 @@ export function PromptBar({
     drafts.update(draftKey, { images: typeof update === "function" ? update(drafts.get(draftKey).images) : update });
   const [cursor, setCursor] = useState(0);
   const [dismissedCompletion, setDismissedCompletion] = useState<string>();
-  const [files, setFiles] = useState<string[]>([]);
-  const [listing, setListing] = useState(false);
+  const { entries: files, loading: listing, error: fileListError, refresh: refreshFiles } = useWorkspaceFiles(workspace);
   const [picked, setPicked] = useState(0);
   const [dropOver, setDropOver] = useState(false);
   const [blank, setBlank] = useState(true);
@@ -2412,29 +2412,6 @@ export function PromptBar({
     }
     return next;
   };
-
-  const [tick, setTick] = useState(0);
-  useEffect(() => window.harness.workspace.onChanged(() => {
-    if (workspace) setTick((value) => value + 1);
-  }), [workspace]);
-  useEffect(() => {
-    if (!workspace) {
-      setFiles([]);
-      return;
-    }
-    let gone = false;
-    setListing(true);
-    void window.harness.workspace.list(workspace).then((next) => {
-      if (!gone) setFiles(next);
-    }).catch(() => {
-      if (!gone) setFiles([]);
-    }).finally(() => {
-      if (!gone) setListing(false);
-    });
-    return () => {
-      gone = true;
-    };
-  }, [workspace, tick]);
 
   useEffect(() => {
     setPicked(0);
@@ -2831,7 +2808,8 @@ export function PromptBar({
             onMouseDown={(event) => event.preventDefault()}
             onWheel={(event) => event.stopPropagation()}
           >
-            {matches.length === 0 && <p className="slash-empty">{listing ? t("composer.listingFiles") : t("composer.noFiles")}</p>}
+            {fileListError && <div className="slash-empty" role="alert"><span>{t("composer.filesUnavailable")}</span><button type="button" onClick={() => void refreshFiles()}>{t("common.retry")}</button></div>}
+            {!fileListError && matches.length === 0 && <p className="slash-empty">{listing ? t("composer.listingFiles") : t("composer.noFiles")}</p>}
             {matches.map((file, index) => (
               <button
                 key={file}
