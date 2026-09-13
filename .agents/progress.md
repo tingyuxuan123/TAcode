@@ -1,5 +1,13 @@
 # 模型供应商管理进度
 
+## 2026-09-13：修复主会话结束后子代理报告重复回灌与连续重启执行
+
+- 真实父会话记录确认：`delegate_wait` 已返回三个报告，主代理总结后，同样的报告又成为三条用户消息，用户依次中止三次。详情见 `docs/bug-subagent-report-redelivery-2026-09-13.md`。
+- 桌面桥接与本地 fallback 均先缓冲报告，等待工具保留并消费报告，主代理真正空闲后才合并通知未读报告。Pi 的 `agent_end` 与实际空闲分开判断；`delegate_continue` 返回的报告也不重复投递。
+- 中止撤销旧报告通知，只有真实用户输入恢复投递。Pi RPC 补丁改为先清 follow-up 队列再等待 abort，已用 pnpm 安装并更新 lockfile；报告和转录保留。
+- 回归：4 个定向文件 52 个用例通过；新增真实 RPC 测试覆盖三个报告先到、wait 后返回，以及一次停止清掉三条已排队跟进、之后新输入正常执行。全量 107 文件 949 用例、`pnpm typecheck`、`pnpm build`、`git diff --check` 通过。本次未重跑 Electron 综合界面冒烟。
+- 构建已更新；完整退出并重启 TACode，再启动新的 Agent 会话生效。保留此前「轮次上限留空真正不限」的实现。
+
 ## 2026-09-12：文件行对齐 ZCode——右侧文件标签 + 增删统计 + 文件名微高亮（09:50-10:15，Asia/Shanghai）
 
 - 起因：用户贴了两张 ZCode 截图（第二张就是 ZCode 里跑本会话的转录）指出三处差异：①ZCode 点「读取/写入/编辑」行会在右侧面板打开文件查看器，TACode 是行内展开；②ZCode 的文件名比标签亮一点（微高亮）；③ZCode 编辑行有 +N −M 增删统计。解包 ZCode asar 实证：工具行组件带 `diffCount`（`hideDiffCountWhenOpen`、挂载动画）与 `onOpenCodeViewer/onOpenFileLink`。

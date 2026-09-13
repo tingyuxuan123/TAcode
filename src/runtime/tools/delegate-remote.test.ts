@@ -11,7 +11,7 @@ function setup(startStatus: DelegationStatus = "running") {
   const tools = new Map<string, ToolDefinition<any, any, any>>();
   const listeners = new Set<(event: DelegationRecordSnapshot) => void>();
   const sendUserMessage = vi.fn();
-  const eventHandlers = new Map<string, (event: unknown) => void>();
+  const eventHandlers = new Map<string, (event: unknown, ctx?: ExtensionContext) => void>();
   const records: DelegationRecordSnapshot[] = [];
   const request = vi.fn(async (action: DelegationAction): Promise<unknown> => {
     if (action === "wait") return {
@@ -28,7 +28,10 @@ function setup(startStatus: DelegationStatus = "running") {
   registerRemoteDelegateTools({
     registerTool: (tool: ToolDefinition<any, any, any>) => tools.set(tool.name, tool),
     sendUserMessage,
-    on: (event: string, handler: (event: unknown) => void) => { eventHandlers.set(event, handler); },
+    on: (event: string, handler: (event: unknown, ctx?: ExtensionContext) => void) => {
+      const previous = eventHandlers.get(event);
+      eventHandlers.set(event, (value, ctx) => { previous?.(value, ctx); handler(value, ctx); });
+    },
   } as unknown as ExtensionAPI, {
     client: {
       request,
@@ -138,6 +141,20 @@ describe("background delegation completion notifications", () => {
     eventHandlers.get("agent_end")?.({});
     await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledOnce());
     for (let index = 0; index < 3; index += 1) expect(sendUserMessage.mock.calls[0][0]).toContain(`结果 child-${index}`);
+  });
+
+  it("agent_end 后会话仍在收尾时继续保留报告，真正空闲后才投递", async () => {
+    const { emit, sendUserMessage, eventHandlers, startBackground } = setup();
+    let idle = false;
+    const context = { isIdle: () => idle } as ExtensionContext;
+    eventHandlers.get("agent_start")?.({}, context);
+    const record = await startBackground();
+    eventHandlers.get("agent_end")?.({}, context);
+    emit({ ...record, status: "completed", report: "结果" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    idle = true;
+    await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledOnce());
   });
 
   it("wait 失败时释放未交付的报告，之后仍只通知一次", async () => {

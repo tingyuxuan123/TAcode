@@ -657,18 +657,37 @@ function watchParentDelivery(pi: ExtensionAPI, callbacks: { onIdle(): void; onAb
 } {
   let suspended = false;
   let running = false;
+  let context: ExtensionContext | undefined;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = undefined;
+  };
+  const notifyWhenIdle = () => {
+    clearIdleTimer();
+    if (running) return;
+    // Pi 的 agent_end 早于会话真正空闲，之后还可能压缩上下文或自动重试。
+    // 不能在事件处理器内 await 空闲，否则会阻塞 Pi 完成收尾。
+    if (context && !context.isIdle()) {
+      idleTimer = setTimeout(notifyWhenIdle, 50);
+      idleTimer.unref?.();
+      return;
+    }
+    callbacks.onIdle();
+  };
   pi.on("input", (event) => {
     if (event.source === "interactive" || event.source === "rpc") suspended = false;
   });
-  pi.on("agent_start", () => { running = true; });
+  pi.on("agent_start", (_event, ctx) => { running = true; context = ctx; clearIdleTimer(); });
   pi.on("turn_end", (event) => {
     if (event.message.role === "assistant" && event.message.stopReason === "aborted") {
       suspended = true;
       callbacks.onAbort();
     }
   });
-  pi.on("agent_end", () => { running = false; callbacks.onIdle(); });
-  return { isSuspended: () => suspended, isRunning: () => running };
+  pi.on("agent_end", (_event, ctx) => { running = false; context = ctx; notifyWhenIdle(); });
+  pi.on("session_shutdown", clearIdleTimer);
+  return { isSuspended: () => suspended, isRunning: () => running || Boolean(context && !context.isIdle()) };
 }
 
 export interface RemoteDelegateDeps {
