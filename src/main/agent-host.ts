@@ -105,6 +105,8 @@ export class AgentHost {
   public sessionKey?: string;
   /** 请求启动时传入的 sessionPath，用于 resume 时定位已有 host。 */
   public requestedSessionPath?: string;
+  public cwd?: string;
+  public serviceKey?: string;
 
   constructor(
     private readonly emitEvent: (event: AgentEvent) => void,
@@ -282,6 +284,7 @@ export class AgentHost {
     desktopProvider?: { config: unknown; apiKey: string };
   }): Promise<AgentSnapshot> {
     this.requestedSessionPath = options.sessionPath;
+    this.cwd = options.cwd;
     this.secrets = options.desktopProvider ? [options.desktopProvider.apiKey] : [];
     await this.stop();
     this.resetBrowser?.();

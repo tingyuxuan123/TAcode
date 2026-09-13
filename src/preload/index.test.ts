@@ -17,6 +17,20 @@ beforeEach(async () => {
 });
 
 describe("conversation routing", () => {
+  it("ignores a late attach after navigation to a different worker", async () => {
+    let finish!: (value: unknown) => void;
+    electron.ipcRenderer.invoke.mockImplementation((channel, target) => channel === "agent:attach"
+      ? target === "a" ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve({ runtimeId: "b" })
+      : Promise.resolve({}));
+    const attaching = api.agent.attach("a");
+    await api.agent.deactivate();
+    await api.agent.attach("b");
+    finish({ runtimeId: "a" });
+    await attaching;
+    await api.agent.command("get_state");
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("agent:command", "get_state", undefined, "b");
+  });
+
   it("does not restore default routing after a late start completes on a blank page", async () => {
     let finish!: (value: unknown) => void;
     electron.ipcRenderer.invoke.mockImplementation((channel) => channel === "agent:start"

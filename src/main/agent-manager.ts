@@ -44,6 +44,7 @@ const OUT_OF_BAND_COMMANDS = new Set(["abort"]);
 /** 主进程启动宿主时补充的壳层参数（扩展路径、桌面服务凭据等）。 */
 export type AgentHostStartOptions = AgentStartOptions & {
   cwd: string;
+  serviceKey?: string;
   /** 桌面主会话首条消息自动生成短标题。 */
   autoTitle?: boolean;
   visionExtension?: string;
@@ -150,6 +151,8 @@ export class AgentManager {
     const cut = host.lastSnapshotSeq;
     return {
       ...snapshot,
+      cwd: host.cwd ?? snapshot.cwd,
+      serviceKey: host.serviceKey,
       runtimeId: host.runtimeId,
       lastSeq: cut,
       replay: host.replaySince(cut),
@@ -246,6 +249,8 @@ export class AgentManager {
     selection: number,
   ): Promise<AgentStartResult> {
     let snapshot: AgentSnapshot;
+    host.cwd = options.cwd;
+    host.serviceKey = options.serviceKey;
     try {
       snapshot = await host.start(options);
       if (this.findRuntime(host.runtimeId) !== host) throw new Error("Agent session closed");
@@ -261,6 +266,7 @@ export class AgentManager {
     const cut = host.lastSnapshotSeq;
     return {
       ...snapshot,
+      serviceKey: host.serviceKey,
       runtimeId: host.runtimeId,
       lastSeq: cut,
       replay: host.replaySince(cut),

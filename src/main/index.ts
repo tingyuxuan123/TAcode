@@ -1061,9 +1061,9 @@ function registerIpc(): void {
     );
     return mergeLoadedSessions(mapped, cwd);
   });
-  ipcMain.handle("sessions:read", async (_event, rawPath: unknown) =>
+  ipcMain.handle("sessions:read", async (_event, rawPath: unknown, options?: unknown) =>
     // 只读转录（含子代理子会话）：不启动 worker、不切换活动会话。
-    readSessionTranscript(getTacodeSessionsDir(), rawPath));
+    readSessionTranscript(getTacodeSessionsDir(), rawPath, options));
   ipcMain.handle("delegations:list", (_event, rawParent?: unknown) => {
     const parent = rawParent === undefined ? undefined : requireString(rawParent, "parentSessionPath", { maxLength: 4_096 });
     return delegationCoordinator?.list(parent) ?? [];
@@ -1353,6 +1353,7 @@ function registerIpc(): void {
     // 每个会话独立 host：已有实例（同会话重启）则复用，否则新建，绝不停止其它会话。
     const started = await agentManager.start({
       ...startOptions,
+      serviceKey: desktopProvider?.serviceKey ?? ":",
       autoTitle: !delegatedSession,
       ...(delegatedSession ? { delegationDepth: 1 } : {}),
       ...(sessionPath ? { sessionPath } : {}),
@@ -1429,6 +1430,15 @@ function registerIpc(): void {
     agentViewVersion++;
     activeAgentCwd = undefined;
     agentManager.deactivate();
+  });
+  ipcMain.handle("agent:attach", async (_event, rawRuntimeId: unknown) => {
+    const runtimeId = requireString(rawRuntimeId, "runtimeId", { maxLength: 256 });
+    const version = ++agentViewVersion;
+    agentManager.deactivate();
+    activeAgentCwd = undefined;
+    const snapshot = await agentManager.resume(runtimeId);
+    if (version === agentViewVersion) activeAgentCwd = snapshot.cwd;
+    return { ...snapshot, activity: agentActivities.bind(runtimeId, agentManager.findRuntime(runtimeId)?.sessionKey) };
   });
   ipcMain.handle("agent:runtimes", () => agentManager.list());
   ipcMain.handle("agent:activities", () => agentActivities.list());

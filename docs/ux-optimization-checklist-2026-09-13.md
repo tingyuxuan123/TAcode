@@ -66,7 +66,7 @@
 
   **定位与风险。** [bindProject](/Users/yfdl/project/TAcode/src/renderer/App.tsx:1102)、[newThread](/Users/yfdl/project/TAcode/src/renderer/App.tsx:1141)、[SessionRow 调用](/Users/yfdl/project/TAcode/src/renderer/App.tsx:2004)。风险中等，属于需要明确产品语义的行为调整；依赖 UX-01 的后台状态可靠性。
 
-- [ ] **UX-05 · 历史先展示，继续对话时再准备运行环境**
+- [x] **UX-05 · 历史先展示，继续对话时再准备运行环境**
 
   **代码确认。** 主区打开历史走 `startAgent`：先检查模型配置，再启动或复用 worker、取快照；没有配置时提前返回并打开设置。查看旧记录因此依赖运行环境。项目已有不启动 worker 的只读转录接口，子会话面板正在使用它。
 

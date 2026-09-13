@@ -9333,3 +9333,15 @@ kbd {
   font-size: 12px;
   line-height: 1.5;
 }
+.session-history-controls {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin: 16px auto;
+  max-width: 760px;
+  padding: 0 20px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.session-history-controls details { width: 100%; }
+.session-history-controls p { white-space: pre-wrap; overflow-wrap: anywhere; }

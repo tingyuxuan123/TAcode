@@ -5,10 +5,12 @@ import type {
   AgentSessionStats,
   AgentSessionActivity,
   AgentSnapshot,
+  AgentStartResult,
   ExtensionUiRequest,
   PermissionMode,
   ProviderStatus,
   SessionSummary,
+  SessionTranscript,
   WorkspaceItem,
 } from "../shared/types";
 import type { AgentSkillCommand } from "../shared/skills";
@@ -91,6 +93,7 @@ import { useAgentActivities } from "./use-agent-activities";
 import { composerDrafts, draftScope } from "./composer-drafts";
 import { createImeGuard } from "./ime";
 import { SessionActivityError, SessionActivityIndicator } from "./session-activity";
+import { mergeHistoryMessages } from "./session-history";
 import logo from "./logo.svg";
 import { useI18n } from "./i18n";
 import { PreviewContext } from "./file-path-chip";
@@ -495,6 +498,12 @@ export function App() {
   const [thinkingLevels, setThinkingLevels] = useState<string[]>(["low", "medium", "high", "max"]);
   const [permission, setPermission] = useState<PermissionMode>("auto");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [history, setHistory] = useState<SessionTranscript>();
+  const [historyError, setHistoryError] = useState<string>();
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const historyRaw = useRef<unknown[]>([]);
+  const historySession = useRef<string | undefined>(undefined);
+  const historyStorage = useRef<string | undefined>(undefined);
   const displayMessages = useMemo(() => reconcileDelegationMessages(messages, delegationRecords), [messages, delegationRecords]);
   const [stats, setStats] = useState<AgentSessionStats>();
   const [promptFill, setPromptFill] = useState({ text: "", token: 0 });
@@ -655,6 +664,12 @@ export function App() {
     dropAgentSession();
     setLoading(false);
     setStopping(false);
+    setHistory(undefined);
+    setHistoryError(undefined);
+    setHistoryBusy(false);
+    historyRaw.current = [];
+    historySession.current = undefined;
+    historyStorage.current = undefined;
     pendingUndo.current = undefined;
     sandboxWaiter.current?.(false);
     sandboxWaiter.current = undefined;
@@ -843,6 +858,16 @@ export function App() {
     sourceDraftKey?: string,
   ) => {
     const seq = ++startSeq.current;
+    const browsing = Boolean(sessionPath) && !seedMessage && !resume;
+    let browsingSnapshot: AgentStartResult | undefined;
+    if (browsing || historySession.current !== sessionPath) {
+      setHistory(undefined);
+      setHistoryError(undefined);
+      setHistoryBusy(false);
+      historyRaw.current = [];
+      historySession.current = sessionPath;
+      historyStorage.current = storagePath;
+    }
     eventQueue.current?.clear();
     // 重新加载快照后事件序号重新对账：丢弃的记录由 replay 补齐。
     eventSeqRef.current.clear();
@@ -863,9 +888,41 @@ export function App() {
         setMessages([]);
       }
     }
+    if (browsing) {
+      void window.harness.agent.deactivate().catch(() => undefined);
+      setSteering([]);
+      setStats(undefined);
+      try {
+        const [transcript, runtimes] = await Promise.allSettled([
+          window.harness.sessions.read(sessionPath!, { storagePath, limit: 100, strict: true }),
+          window.harness.agent.runtimes(),
+        ]);
+        if (seq !== startSeq.current) return false;
+        const existing = runtimes.status === "fulfilled" ? runtimes.value.find((runtime) =>
+          runtime.sessionKey === sessionPath || runtime.requestedSessionPath === sessionPath || runtime.sessionKey === storagePath) : undefined;
+        if (transcript.status === "fulfilled") {
+          historyRaw.current = transcript.value.messages;
+          setHistory(transcript.value);
+          setMessages(normalizeMessages(transcript.value.messages));
+        } else if (!existing) throw transcript.reason;
+        if (!existing) {
+          setLoading(false);
+          void refreshAgentSkills(cwd);
+          return true;
+        }
+        browsingSnapshot = await window.harness.agent.attach(existing.runtimeId);
+        if (seq !== startSeq.current) return false;
+      } catch (error) {
+        if (seq === startSeq.current) {
+          setHistoryError(/ENOENT|no such file/i.test(String(error)) ? t("chat.historyMissing") : friendlyAgentError(error));
+          setLoading(false);
+        }
+        return false;
+      }
+    }
     let accounts: ProviderStatus[];
     try {
-      accounts = await window.harness.auth.status();
+      accounts = browsingSnapshot ? providersRef.current : await window.harness.auth.status();
     } catch (error) {
       if (seq === startSeq.current) {
         setToast(agentErrorToast(error));
@@ -875,21 +932,12 @@ export function App() {
     }
     if (seq !== startSeq.current) return false;
     setProviders(accounts);
-    const chat = activeChatProvider(accounts);
-    if (!chat?.configured) {
+    const chat: ProviderStatus = activeChatProvider(accounts) ?? { id: "openai", name: "", defaultModel: "", configured: false };
+    if (!browsingSnapshot && !chat.configured) {
       setLoginOpen(true);
       setToast(t("toast.fillConfig"));
       setLoading(false);
       return false;
-    }
-    if (!seedMessage && !resume) {
-      setSteering([]);
-      // Opening a thread: clear the pane so we don't keep showing the welcome/home shell.
-      if (sessionPath) {
-        setMessages([]);
-        setActiveSession(sessionPath);
-        sessionRef.current = sessionPath;
-      }
     }
     const requestedModel = modelRef.current.trim();
     const modelId = chat.serviceId && !chat.models?.includes(requestedModel) ? chat.defaultModel : requestedModel || chat.defaultModel;
@@ -902,15 +950,15 @@ export function App() {
         setWorkspace(undefined);
       }
     }
-    const sandbox = await resolveSandbox(asProject, mode, cwd);
+    const sandbox = browsingSnapshot ? "read-only" : await resolveSandbox(asProject, mode, cwd);
     if (seq !== startSeq.current) return false;
-    if (asProject && sandbox !== "danger-full-access" && window.harness.platform !== "darwin") {
+    if (!browsingSnapshot && asProject && sandbox !== "danger-full-access" && window.harness.platform !== "darwin") {
       setLoading(false);
       setToast(t("toast.sandboxCancelled"));
       return false;
     }
     try {
-      const snapshot = await window.harness.agent.start({
+      const snapshot = browsingSnapshot ?? await window.harness.agent.start({
         ...(cwd ? { cwd } : {}),
         project: asProject,
         provider: chat.id,
@@ -922,7 +970,7 @@ export function App() {
         sandbox,
         ...(mode === "auto" || mode === "full" ? { network: true } : {}),
         ...(sessionPath ? { sessionPath } : {}),
-        ...(storagePath ? { storagePath } : {}),
+        ...(storagePath || historyStorage.current ? { storagePath: storagePath ?? historyStorage.current } : {}),
         ...(resume ? { resume: true } : {}),
         ...(extraModels.length ? { extraModels } : {}),
       });
@@ -930,6 +978,7 @@ export function App() {
       if (snapshot.activity) mergeActivity(snapshot.activity);
       runtimeIdRef.current = snapshot.runtimeId;
       const file = sessionFileOf(snapshot) ?? sessionPath;
+      if (file && historySession.current === sessionPath) historySession.current = file;
       if (seedMessage && sourceDraftKey && file) composerDrafts().move(sourceDraftKey, draftScope(snapshot.cwd ?? cwd, file));
       if (file) {
         sessionRef.current = file;
@@ -947,13 +996,14 @@ export function App() {
       );
       const withReplay = (input: ChatMessage[]): ChatMessage[] =>
         replay.reduce((current, event) => applyAgentEvent(current, event), input);
+      const restored = mergeHistoryMessages(normalizeMessages(historyRaw.current), normalizeMessages(snapshot.messages));
       if (seedMessage) {
-        setMessages(withReplay([...normalizeMessages(snapshot.messages), seedMessage]));
+        setMessages(withReplay([...restored, seedMessage]));
         setStats(latestContextStats(replay, snapshot.stats));
         setAgentSkills(snapshot.skills ?? []);
         setRunning(true);
       } else {
-        const raw = normalizeMessages(snapshot.messages);
+        const raw = restored;
         const hadRunning = Boolean(raw.at(-1)?.tools.some((tool) => tool.status === "running"));
         const next = withReplay(resume ? finalizeInterruptedTurn(raw) : raw);
         setMessages(next);
@@ -998,7 +1048,7 @@ export function App() {
           .catch(() => undefined);
       }
       runtimeProviderRef.current = chat.id;
-      runtimeServiceRef.current = `${chat.serviceId ?? ""}:${chat.serviceVersion ?? ""}`;
+      runtimeServiceRef.current = snapshot.serviceKey ?? (browsingSnapshot ? "" : `${chat.serviceId ?? ""}:${chat.serviceVersion ?? ""}`);
       agentCwd.current = snapshot.cwd ?? cwd ?? agentCwd.current;
       agentModelsRef.current = snapshot.models ?? [];
       agentModelIdsRef.current = agentModelsRef.current.map((item) => item.id).filter(Boolean);
@@ -1036,7 +1086,7 @@ export function App() {
         // A brand-new thread's JSONL is only written when the first assistant message
         // is persisted; until then the disk-backed list misses it. Keep a placeholder
         // row visible during the first turn so the sidebar updates immediately.
-        if (seedMessage && file) {
+        if (seedMessage && file && !sessionPath) {
           const cwdForSeed = snapshot.cwd ?? cwd ?? workspace;
           const seedTitle = sessionTitlesRef.current.get(file) || fallbackSessionTitle(seedMessage.text) || t("common.unnamed");
           // Phase 1：缓存首次消息标题，切走/刷新后 `setSessionList` 会用它覆写主进程
@@ -1135,6 +1185,29 @@ export function App() {
     if (isSameSession(session, activeSession) && messages.length > 0 && !loading) return;
     void startAgent(session.cwd, session.path, true, false, permission, undefined, session.storagePath);
   }, [activeSession, loading, messages.length, permission, startAgent]);
+
+  const loadEarlier = useCallback(async () => {
+    if (!activeSession || !history?.nextCursor || historyBusy) return;
+    const seq = startSeq.current;
+    setHistoryBusy(true);
+    setHistoryError(undefined);
+    try {
+      const page = await window.harness.sessions.read(activeSession, {
+        before: history.nextCursor, limit: 100, strict: true,
+        storagePath: sessions.find((session) => isSameSession(session, activeSession))?.storagePath,
+      });
+      if (seq !== startSeq.current) return;
+      historyRaw.current = [...page.messages, ...historyRaw.current];
+      setHistory(page);
+      setMessages((current) => mergeHistoryMessages(normalizeMessages(historyRaw.current), current));
+      follow.following.current = false;
+      requestAnimationFrame(() => { if (seq === startSeq.current) follow.reanchor(); });
+    } catch (error) {
+      if (seq === startSeq.current) setHistoryError(friendlyAgentError(error));
+    } finally {
+      if (seq === startSeq.current) setHistoryBusy(false);
+    }
+  }, [activeSession, history, historyBusy, sessions, follow.reanchor]);
 
   const ensureModelReady = useCallback(async (): Promise<boolean> => {
     if (!agentCwd.current) return true;
@@ -1610,7 +1683,7 @@ export function App() {
     void refresh().then((status) => {
       const current = activeChatProvider(status);
       if (current?.configured) setModel(current.defaultModel);
-      if (!current?.configured) setLoginOpen(true);
+      // 阅读已有会话不需要服务配置；发送时再提示配置缺失。
     });
   }, []);
 
@@ -2305,7 +2378,14 @@ export function App() {
               )}
             </div>
           )}
-          {!home && groups.length === 0 && !uiRequest && (
+          {!home && (history?.nextCursor || history?.compaction || historyError) && (
+            <div className="session-history-controls">
+              {history?.nextCursor && <button type="button" className="ghost" disabled={historyBusy || loading} onClick={() => void loadEarlier()}>{t(historyBusy ? "chat.loadingEarlier" : "chat.loadEarlier")}</button>}
+              {history?.compaction && <details><summary>{t("chat.compactedHistory")}</summary><p>{history.compaction.summary}</p></details>}
+              {historyError && <div role="alert"><p>{historyError}</p><button type="button" className="ghost" onClick={() => void startAgent(workspace, activeSession, true, false, permission, undefined, sessions.find((session) => isSameSession(session, activeSession))?.storagePath)}>{t("common.retry")}</button></div>}
+            </div>
+          )}
+          {!home && groups.length === 0 && !uiRequest && !historyError && (
             <div className={loading ? "session-pane loading" : "session-pane"}>
               {loading ? (
                 <div className="session-loading" role="status" aria-live="polite">

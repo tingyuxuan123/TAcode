@@ -72,6 +72,18 @@ export interface SessionTranscript {
   /** 截断前的消息总数。 */
   totalMessages: number;
   truncated: boolean;
+  /** 继续读取更早的同一分支记录。未设置表示已到开头。 */
+  nextCursor?: string;
+  /** 原始记录仍可阅读；继续生成时由 Pi 使用压缩后的上下文。 */
+  compaction?: { summary: string; tokensBefore?: number };
+}
+
+export interface SessionReadOptions {
+  before?: string;
+  limit?: number;
+  storagePath?: string;
+  /** 已存在的主会话丢失时显示读取失败；未落盘的子任务仍允许空结果。 */
+  strict?: boolean;
 }
 
 export interface TerminalInfo {
@@ -168,6 +180,7 @@ export interface AgentSessionStats {
 }
 
 export interface AgentSnapshot {
+  serviceKey?: string;
   state: Record<string, unknown>;
   messages: unknown[];
   models: Array<ModelReasoningCapabilities & { provider: string; contextWindow?: number; input?: string[] }>;
@@ -305,7 +318,7 @@ export interface DesktopApi {
   sessions: {
     list(cwd?: string): Promise<SessionSummary[]>;
     /** 只读读取某个会话转录（子代理子会话在 `~/.tacode/sessions/`）。 */
-    read(sessionPath: string): Promise<SessionTranscript>;
+    read(sessionPath: string, options?: SessionReadOptions): Promise<SessionTranscript>;
     remove(id: string): Promise<void>;
     pin(id: string, pinned: boolean): Promise<void>;
     rename(id: string, title: string): Promise<void>;
@@ -351,6 +364,8 @@ export interface DesktopApi {
   agent: {
     start(options: AgentStartOptions): Promise<AgentStartResult>;
     deactivate(): Promise<void>;
+    /** 只接入已有 worker，不读取或要求模型配置。 */
+    attach(runtimeId: string): Promise<AgentStartResult>;
     stop(runtimeId?: string): Promise<void>;
     command<T = unknown>(type: string, data?: Record<string, unknown>, runtimeId?: string): Promise<T>;
     respondToUi(id: string, response: Record<string, unknown>, runtimeId?: string): Promise<void>;

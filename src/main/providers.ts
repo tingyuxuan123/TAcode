@@ -66,7 +66,7 @@ export async function resolveDesktopProvider(id: string, modelId?: string) {  co
   if (!provider) throw new Error("供应商已删除或禁用，请重新选择服务");
   const model = modelId || (store.defaultProviderId === id ? store.defaultModelId : provider.defaultModelId) || provider.models[0].id;
   if (!provider.models.some((m) => m.id === model)) throw new Error("模型不属于当前供应商，请重新选择模型");
-  return { model, config: serviceRuntimeConfig(provider), apiKey: await providerRepository().credentials.read(serviceCredentialId(id)) };
+  return { model, serviceKey: `${provider.id}:${provider.updatedAt}`, config: serviceRuntimeConfig(provider), apiKey: await providerRepository().credentials.read(serviceCredentialId(id)) };
 }
 
 export function registerProviderIpcHandlers(): void {

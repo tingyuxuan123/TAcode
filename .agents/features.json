@@ -22,7 +22,7 @@
   {
     "id": "UX-05",
     "description": "历史先展示，继续对话时再准备运行环境。验收：删除模型配置后仍能阅读已有会话；纯浏览多个已结束会话不增加 worker 数量；快速切 A/B 只显示最终选中的会话；长历史可以继续加载更早内容，不能把只读接口现有的 4 MiB / 2000 条尾部限制当作完整记录。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-05。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "UX-06",

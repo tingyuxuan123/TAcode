@@ -7,6 +7,7 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import { AgentActivityStore } from "../src/main/agent-activity";
 import { AgentHost } from "../src/main/agent-host";
 import { AgentManager } from "../src/main/agent-manager";
+import { readSessionTranscript } from "../src/main/session-transcript";
 import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/types";
 import { testComposerDrafts, type ComposerSmokeControls } from "./composer-drafts-smoke";
 import { testImeInput } from "./ime-smoke";
@@ -28,6 +29,7 @@ async function smoke() {
   const draftSmoke = process.env.TACODE_COMPOSER_SMOKE === "1";
   const imeSmoke = process.env.TACODE_IME_SMOKE === "1";
   const navigationSmoke = process.env.TACODE_NAVIGATION_SMOKE === "1";
+  const historySmoke = process.env.TACODE_HISTORY_SMOKE === "1";
   const controls: ComposerSmokeControls = { configured: true, failStart: false, prompt: draftSmoke || imeSmoke ? "reject" : "approval", submitted: [] };
   const renames: string[] = [];
   const activity = new AgentActivityStore((value) => main?.webContents.send("agent:activity", value));
@@ -40,6 +42,12 @@ async function smoke() {
     { role: "user", content: [{ type: "text", text: `${path.basename(file)} 的问题` }], timestamp: 1 },
     { role: "assistant", content: [{ type: "text", text: `${path.basename(file)} 的回复` }], stopReason: "stop", timestamp: 2 },
   ];
+  const writeTranscript = (file: string, count = 2) => writeFile(file, Array.from({ length: count }, (_, index) => ({
+    type: "message", id: `entry-${index}`, parentId: index ? `entry-${index - 1}` : null,
+    message: { role: index % 2 ? "assistant" : "user", content: [{ type: "text", text: `${path.basename(file)} 历史记录 ${index}` }], timestamp: 1789000000000 + index },
+  })).map((entry) => JSON.stringify(entry)).join("\n"));
+  let delayedHistory: string | undefined;
+  let releaseHistory: (() => void) | undefined;
   const emit = (host: AgentHost, event: Record<string, unknown>) => (host as unknown as { handleLine(line: string): void }).handleLine(JSON.stringify(event));
   const manager = new AgentManager({ createHost: (runtimeId) => {
     const host = new AgentHost(
@@ -128,6 +136,10 @@ async function smoke() {
     ipcMain.handle("workspace:list", () => imeSmoke ? ["src/", "src/App.tsx", "src/中文.ts"] : []);
     ipcMain.handle("workspace:read", (_event, file) => ({ path: file, content: "", binary: false }));
     ipcMain.handle("sessions:list", () => sessions);
+    ipcMain.handle("sessions:read", async (_event, file, options) => {
+      if (file === delayedHistory) await new Promise<void>((resolve) => { releaseHistory = resolve; });
+      return historySmoke ? readSessionTranscript(project, file, options) : { sessionPath: file, messages: transcript(file), totalMessages: 2, truncated: false };
+    });
     ipcMain.handle("sessions:rename", (_event, id, title) => {
       renames.push(title);
       const session = sessions.find((row) => row.id === id);
@@ -143,11 +155,15 @@ async function smoke() {
     ipcMain.handle("agent:command", (_event, type, data, id) => manager.command(id, type, data));
     ipcMain.handle("agent:stop", (_event, id) => manager.stop(id));
     ipcMain.handle("agent:deactivate", () => manager.deactivate());
+    ipcMain.handle("agent:attach", async (_event, id) => {
+      const snapshot = await manager.resume(id);
+      return { ...snapshot, cwd: project, activity: activity.bind(id, manager.findRuntime(id)?.sessionKey) };
+    });
     ipcMain.handle("agent:ui-response", (_event, id, response, runtimeId) => manager.respondToUi(runtimeId, id, response));
     ipcMain.handle("agent:start", async (_event, options) => {
       if (controls.failStart) throw new Error("fixture worker startup failed");
       const sessionPath = options.sessionPath ?? path.join(project, "new.jsonl");
-      const snapshot = await manager.start({ ...options, sessionPath, cwd: project });
+      const snapshot = await manager.start({ ...options, sessionPath, cwd: project, serviceKey: "fixture:1" });
       return { ...snapshot, cwd: project, activity: activity.bind(snapshot.runtimeId, sessionPath) };
     });
     main = new BrowserWindow({
@@ -155,8 +171,78 @@ async function smoke() {
       webPreferences: { preload: path.join(path.dirname(fileURLToPath(import.meta.url)), "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: false },
     });
     main.webContents.on("console-message", (_event, level, message) => { if (level >= 3) rendererErrors.push(`${stage}: ${message}`); });
+    // 活动/输入回归从已有 worker 开始；纯阅读回归单独验证零 worker。
+    if (historySmoke) {
+      controls.configured = false;
+      for (const session of sessions) await writeTranscript(session.path, session.id === "A" ? 460 : 2);
+    } else for (const session of sessions) await manager.start({ cwd: project, sessionPath: session.path, provider: "openai", permission: "auto", sandbox: "read-only", serviceKey: "fixture:1" });
+    manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (historySmoke) {
+      stage = "read histories without model configuration or workers";
+      await wait(() => evaluate("document.querySelectorAll('.home-recent').length === 2"));
+      await evaluate("document.querySelector('.home-recent').click()");
+      for (const name of ["A", "B", "A"]) await select(name);
+      assert.equal(manager.list().length, 0);
+      assert.equal(await evaluate("!!document.querySelector('.modal')"), false);
+      stage = "page back to the first recorded message";
+      let pages = 0;
+      while (await evaluate("!!document.querySelector('.session-history-controls button')")) {
+        await evaluate("document.querySelector('.session-history-controls button').click()");
+        await wait(() => evaluate("!document.querySelector('.session-history-controls button[disabled]')"));
+        if (++pages > 6) throw new Error("History cursor did not advance");
+      }
+      assert.equal(pages, 4);
+      await evaluate("document.querySelector('.conversation').scrollTop = 0");
+      await wait(() => evaluate("document.querySelector('.conversation .user')?.textContent.includes('A.jsonl 历史记录 0')"));
+      await screenshot("full-history.png");
+      stage = "late history response cannot replace final selection";
+      await select("B");
+      delayedHistory = sessions[0].path;
+      await evaluate("Array.from(document.querySelectorAll('.session-row')).find(el => el.getAttribute('aria-label') === '会话 A').click()");
+      await wait(async () => Boolean(releaseHistory));
+      await select("B");
+      releaseHistory!();
+      delayedHistory = undefined;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(await evaluate("document.querySelector('.session-row[aria-current=page]')?.getAttribute('aria-label')"), "会话 B");
+      assert.equal(manager.list().length, 0);
+      stage = "missing history is retryable and differs from empty";
+      await select("A");
+      await rm(sessions[1].path);
+      await evaluate("Array.from(document.querySelectorAll('.session-row')).find(el => el.getAttribute('aria-label') === '会话 B').click()");
+      await wait(() => evaluate("!!document.querySelector('.session-history-controls [role=alert]')"));
+      await writeTranscript(sessions[1].path);
+      await evaluate("document.querySelector('.session-history-controls [role=alert] button').click()");
+      await wait(() => evaluate("!document.querySelector('.session-history-controls [role=alert]') && !!document.querySelector('.conversation .user')"));
+      await select("A");
+      await writeTranscript(sessions[1].path, 0);
+      await evaluate("Array.from(document.querySelectorAll('.session-row')).find(el => el.getAttribute('aria-label') === '会话 B').click()");
+      await wait(() => evaluate("!!document.querySelector('.session-pane-empty') && !document.querySelector('.session-history-controls [role=alert]')"));
+      await writeTranscript(sessions[1].path);
+      await select("B");
+      stage = "continue starts one worker and later reading attaches without configuration";
+      controls.configured = true;
+      controls.prompt = "accept";
+      await evaluate("document.querySelector('.prompt-input').focus()");
+      await main.webContents.insertText("继续 B");
+      await evaluate("document.querySelector('.prompt button[type=submit]').click()");
+      await wait(async () => controls.submitted.length === 1);
+      const host = manager.findBySession(sessions[1].path)!;
+      assert.equal(manager.list().length, 1);
+      await select("A");
+      controls.configured = false;
+      emit(host, { type: "extension_ui_request", id: "history-approval", method: "confirm", title: "B 仍在运行并等待确认" });
+      await select("B");
+      await wait(() => evaluate("document.querySelector('.approval')?.textContent.includes('B 仍在运行')"));
+      assert.equal(manager.list().length, 1);
+      assert.equal(starts.get(host.runtimeId), 1);
+      assert.equal(await evaluate("!!document.querySelector('.modal')"), false);
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      console.log("History smoke passed: no-model reading, zero browse workers, full pagination, stale read isolation, missing/retry state, lazy continuation and live approval reattachment.");
+      return;
+    }
     stage = "open A";
     await wait(() => evaluate("document.querySelectorAll('.home-recent').length === 2"));
     await evaluate("document.querySelector('.home-recent').click()");

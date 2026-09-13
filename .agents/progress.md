@@ -1071,3 +1071,13 @@
 - 文件：main/agent-manager.ts、agent-lifecycle.test.ts、index.ts；preload/index.ts、index.test.ts；renderer/App.tsx、ui.tsx；shared/types.ts、i18n.ts；scripts/session-activity-smoke.ts。
 - 验证：全量 `pnpm test --reporter=dot` **113 文件 / 993 用例通过**；新增 preload 2 用例在补齐类型字段后再次通过，`pnpm typecheck`、`git diff --check` 通过。`TACODE_NAVIGATION_SMOKE=1 node scripts/test-session-activity.mjs` 通过新建不中断、等待确认仍可跨会话发送、延迟 A 快照不能抢回 B、侧栏单独停止 A；草稿与后台审批桌面回归通过。完成未读回归曾因测试窗口的 webContents 未获焦点超时，补上实际焦点后通过；原有 ResizeObserver 警告仍单独计数，留待 UX-13。
 - 下一项：UX-05 历史先展示、继续对话再准备运行环境，包含完整历史分页与分支语义。整份目标继续 active。
+
+## 2026-09-13：UX-05 历史先展示，继续时再准备运行环境
+
+- [x] 打开已结束会话先分页读取本地转录，不检查模型配置、不创建 worker；只有发送或运行时操作才准备环境。已有 worker 经独立 attach 接回，保留序号回放和审批。启动时缺配置不再遮挡历史；空会话、文件丢失和其他读取失败可区分并重试。
+- [x] 只读接口异步建立行偏移与父链索引，按当前分支返回完整原始记录；压缩前内容保留，压缩摘要单独提示。每页最多 2000 条 / 常规 4 MiB（主区默认 100 条），以稳定游标继续向前；单条超大正文完整返回。缓存最多 16 份偏移索引，mtime/ctime/size/inode 变化重新核对；读取 storage 兜底不重建运行链接，拒绝符号链接越界。
+- [x] 页间与运行快照合并保持消息 id；加载更早内容用 virtua prepend 保持位置，取消会与用户滚动争抢的补偿循环。续聊保留已加载旧记录和原会话标题；runtime 链接缺失时继续发送仍使用已知 storagePath。
+- 文件：main/session-transcript.ts、agent-manager.ts、agent-host.ts、providers.ts、index.ts；preload/index.ts；shared/types.ts、i18n.ts；renderer/App.tsx、conversation.ts、session-history.ts、message-list.tsx、styles.css；对应回归测试与 scripts/session-activity-smoke.ts。
+- 验证：`pnpm test --reporter=dot` **114 文件 / 1004 用例通过**；`pnpm typecheck`、`git diff --check` 通过。后端覆盖 2101 条且超过 4 MiB、单条超过 4 MiB、中文、分支、压缩、追加后的游标、替换检测、缺失链接及越界。`TACODE_HISTORY_SMOKE=1 node scripts/test-session-activity.mjs` 在真实 App/preload/Electron 下通过零 worker 无配置阅读、460 条分页到第一条、迟到读取隔离、缺失重试/空会话、按需续聊和无配置接回活跃审批；导航、草稿、后台审批三组桌面回归通过。
+- 已查看无模型配置下完整 230 轮记录的截图，位于 `/Users/yfdl/.codex/visualizations/2026/09/13/01a09958-0266-7751-adca-acfbab778dbd/ux-05/full-history.png`。无线上模型调用；既有 ResizeObserver 警告仍记入 UX-13。
+- 下一项：UX-06 启动先显示窗口，历史整理后台完成，记录 0 / 100 / 1000 会话的对照耗时。整份目标继续 active。

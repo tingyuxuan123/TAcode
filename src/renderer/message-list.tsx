@@ -1,4 +1,4 @@
-import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, type ReactNode, type RefObject } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, type ReactNode, type RefObject } from "react";
 import { Virtualizer, type VirtualizerHandle, type CacheSnapshot } from "virtua";
 
 /**
@@ -127,6 +127,10 @@ export const MessageList = forwardRef<MessageListHandle, {
   cacheKey?: string;
 }>(function MessageList({ items, scrollerRef, contentRef, progressActive = false, bufferSize = 1200, cacheKey = "" }, ref) {
   const virtualizer = useRef<VirtualizerHandle>(null);
+  const previousItems = useRef(items);
+  const prepended = items.length > previousItems.current.length && Boolean(previousItems.current.length)
+    && items[items.length - previousItems.current.length]?.key === previousItems.current[0]?.key;
+  useLayoutEffect(() => { previousItems.current = items; }, [items]);
 
   // 高度缓存按会话隔离：不同会话的消息 id 可能撞车，把 cacheKey 拼进缓存键。
   const recordHeight = useCallback((item: MessageListItem, node: HTMLElement) => {
@@ -228,7 +232,7 @@ export const MessageList = forwardRef<MessageListHandle, {
 
   return (
     <div className={progressActive ? "messages has-progress" : "messages"} ref={contentRef}>
-      <Virtualizer ref={virtualizer} data={items} scrollRef={scrollerRef} bufferSize={bufferSize} cache={cache}>
+      <Virtualizer ref={virtualizer} data={items} shift={prepended} scrollRef={scrollerRef} bufferSize={bufferSize} cache={cache}>
         {renderItem}
       </Virtualizer>
     </div>

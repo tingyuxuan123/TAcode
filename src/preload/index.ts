@@ -88,7 +88,7 @@ const api: DesktopApi = {
   sessions: {
     list: (cwd) => ipcRenderer.invoke("sessions:list", cwd),
     /** 只读读取某个会话转录（含子代理子会话），不启动 worker、不切活动会话。 */
-    read: (sessionPath) => ipcRenderer.invoke("sessions:read", sessionPath),
+    read: (sessionPath, options) => ipcRenderer.invoke("sessions:read", sessionPath, options),
     remove: (id) => ipcRenderer.invoke("sessions:remove", id),
     pin: (id, pinned) => ipcRenderer.invoke("sessions:pin", id, pinned),
     rename: (id, title) => ipcRenderer.invoke("sessions:rename", id, title),
@@ -142,6 +142,13 @@ const api: DesktopApi = {
       startToken++;
       activeRuntimeId = undefined;
       return ipcRenderer.invoke("agent:deactivate");
+    },
+    attach: async (runtimeId) => {
+      const token = ++startToken;
+      activeRuntimeId = undefined;
+      const result = await ipcRenderer.invoke("agent:attach", runtimeId);
+      if (token === startToken) activeRuntimeId = result.runtimeId;
+      return result;
     },
     stop: (runtimeId) => {
       const target = runtimeId ?? activeRuntimeId;

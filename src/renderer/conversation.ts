@@ -124,7 +124,7 @@ export function normalizeMessages(messages: unknown[]): ChatMessage[] {
       continue;
     }
     if (value.role !== "user" && value.role !== "assistant") continue;
-    const parsed = messageFromRecord(value, `history-${result.length}`);
+    const parsed = messageFromRecord(value, typeof value.__entryId === "string" ? `entry-${value.__entryId}` : `history-${result.length}`);
     if (!parsed) continue;
     result.push(isVisionHandoff(parsed.text)
       ? { ...parsed, text: visibleUserText(parsed.text), images: stagedImages(parsed.text) }
