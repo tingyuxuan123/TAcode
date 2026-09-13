@@ -1,8 +1,9 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Component, createRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import { useI18n } from "./i18n";
 import { getDisplayName, highlightToTokens, isHighlighterReady, onHighlighterReady, type HighlightTokensResult } from "./shiki";
 import { tokenizeCode, type CodeToken } from "./highlight";
+import { rememberPosition, restorePosition, type ReadingPosition } from "./reading-position";
 
 /**
  * CodeBlock — 块级代码组件。
@@ -243,36 +244,37 @@ export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockPro
 const HIGHLIGHT_THROTTLE_MS = 120;
 
 export function useShikiTokens(code: string, language: string, theme?: string): HighlightTokensResult | null {
-  const [result, setResult] = useState<HighlightTokensResult | null>(() =>
-    isHighlighterReady() ? highlightToTokens(code, language, theme) : null);
+  const [state, setState] = useState(() => ({ code, language, theme, tokens: isHighlighterReady() ? highlightToTokens(code, language, theme) : null }));
   const latest = useRef({ code, language, theme });
   latest.current = { code, language, theme };
   const lastRun = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   useEffect(() => {
-    if (!isHighlighterReady()) {
-      return onHighlighterReady(() => setResult(highlightToTokens(code, language, theme)));
-    }
-    const elapsed = Date.now() - lastRun.current;
-    if (elapsed >= HIGHLIGHT_THROTTLE_MS) {
-      lastRun.current = Date.now();
-      setResult(highlightToTokens(code, language, theme));
-      return undefined;
-    }
-    if (timer.current) return undefined;
-    timer.current = setTimeout(() => {
-      timer.current = null;
+    const update = () => {
       lastRun.current = Date.now();
       const next = latest.current;
-      setResult(highlightToTokens(next.code, next.language, next.theme));
-    }, HIGHLIGHT_THROTTLE_MS - elapsed);
-    return undefined;
+      setState({ ...next, tokens: highlightToTokens(next.code, next.language, next.theme) });
+    };
+    if (!isHighlighterReady()) return onHighlighterReady(update);
+    const elapsed = Date.now() - lastRun.current;
+    if (elapsed >= HIGHLIGHT_THROTTLE_MS) update();
+    else if (!timer.current) timer.current = setTimeout(() => { timer.current = null; update(); }, HIGHLIGHT_THROTTLE_MS - elapsed);
   }, [code, language, theme]);
-
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  // 高亮可能稍晚于正文；不能把上一版文件的 token 当作当前文件内容展示。
+  return state.code === code && state.language === language && state.theme === theme ? state.tokens : null;
+}
 
-  return result;
+/** token 异步就绪也会更换文本节点，在 React 提交前记录选区、提交后恢复。 */
+class PreserveFileSelection extends Component<{ children: ReactNode }, object, ReadingPosition | undefined> {
+  private root = createRef<HTMLSpanElement>();
+  getSnapshotBeforeUpdate(): ReadingPosition | undefined {
+    return this.root.current ? rememberPosition(this.root.current) : undefined;
+  }
+  componentDidUpdate(_props: { children: ReactNode }, _state: object, position: ReadingPosition | undefined): void {
+    if (position && this.root.current) restorePosition(this.root.current, position);
+  }
+  render() { return <span className="file-code-content" ref={this.root}>{this.props.children}</span>; }
 }
 
 /**
@@ -295,7 +297,7 @@ export function HighlightedFileCode({ code, language, lineGutter = true }: {
   const fallback = useMemo(() => shiki ? null : tokenizeCode(code, language), [shiki, code, language]);
 
   return (
-    <>
+    <PreserveFileSelection>
       {rawLines.map((rawLine, index) => (
         <span key={index} className={lineGutter ? "code-line" : "code-line no-gutter"}>
           {lineGutter && <i>{index + 1}</i>}
@@ -306,7 +308,7 @@ export function HighlightedFileCode({ code, language, lineGutter = true }: {
           </span>
         </span>
       ))}
-    </>
+    </PreserveFileSelection>
   );
 }
 

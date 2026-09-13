@@ -1119,3 +1119,13 @@
 - 文件：main/workspace-file-index.ts、index.ts；renderer/workspace-files.ts、browser/files-panel.tsx、ui.tsx；shared/types.ts、i18n.ts、preload；相关测试与桌面夹具。
 - 验证：全量 **121 文件 / 1027 测试通过**，`pnpm typecheck`、`git diff --check` 通过。8100 文件实盘样本覆盖后部检索、目录第 201 项、增删零目录重扫、改名子树、扫描失败重试。`TACODE_FILES_SMOKE=1 node scripts/test-session-activity.mjs` 通过真实 UI 的深层搜索、加载更多、后部文件引用、共享更新和错误重试；IME 桌面回归通过。已查看 `ux-09/deep-file-search.png`，脚本中的 listing failed 为主动注入。
 - 下一项：UX-10 预览按文件变更刷新，区分空文件、缺失、二进制、失败及截断，保留阅读位置。整份目标继续 active。
+
+## 2026-09-13：UX-10 文件预览刷新与可靠状态
+
+- [x] 活动预览按变更路径更新，隐藏时停止订阅/读取，重新激活时核对；迟到读响应不能覆盖新正文。文本滚动位置和仍存在的选区在正文更新及异步高亮就绪后保留。
+- [x] 空文件、已删除、二进制、读取失败、截断分别展示，失败可重试；提示不混入正文，复制仅取实际读取内容。后端有界读取并避免截断半个 UTF-8 字符。
+- [x] 文件标签绑定原项目，HTML 预览及相对资源使用对应项目 origin；最多保留 3 个项目 watcher，关闭窗口释放 watcher、重试/合批 timer。HTML iframe 会重新加载，不承诺跨 origin 内部阅读位置保留。
+- [x] 实际桌面验证发现 CSP 阻止 Shiki 的 WASM，增加仅允许 WASM 编译的指令；高亮降级消化初始化 rejection，过期 token 不再冒充新文件正文。
+- 文件：main/workspace-preview.ts、workspace-watcher.ts、index.ts；renderer/file-preview.tsx、reading-position.ts、codeblock.tsx、shiki.ts、ui.tsx、browser 文件标签；shared/preload、index.html、样式和测试。
+- 验证：全量 **124 文件 / 1033 测试通过**，`pnpm typecheck`、`git diff --check` 通过。`TACODE_PREVIEW_SMOKE=1 node scripts/test-session-activity.mjs` 使用真实 watcher/读取和生产 renderer，保存到预览更新 **238.3 ms**；覆盖滚动/选区、隐藏激活、过期响应、删除/空/失败重试及截断复制。已查看 `ux-10/file-preview-refreshed.png`；fixture read failure 为主动注入。
+- 下一项：UX-11 多聊天面板消息合批、隐藏面板减少渲染和性能回放。整份目标继续 active。

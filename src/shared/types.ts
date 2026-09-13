@@ -262,6 +262,17 @@ export type ExtensionUiRequest = {
   [key: string]: unknown;
 };
 
+export interface WorkspaceReadResult {
+  path: string;
+  content: string;
+  binary: boolean;
+  status?: "ready" | "missing" | "binary";
+  truncated?: boolean;
+  size?: number;
+  version?: string;
+  previewUrl?: string;
+}
+
 export interface DesktopApi {
   platform: NodeJS.Platform;
   capabilities: import("./capabilities").CapabilitiesApi;
@@ -292,12 +303,12 @@ export interface DesktopApi {
     choose(): Promise<string | null>;
     recent(): Promise<WorkspaceItem[]>;
     forget(path: string): Promise<WorkspaceItem[]>;
-    read(path: string, cwd?: string): Promise<{ path: string; content: string; binary: boolean }>;
+    read(path: string, cwd?: string): Promise<WorkspaceReadResult>;
     open(path: string, cwd?: string): Promise<void>;
     reveal(path: string, cwd?: string): Promise<void>;
     list(cwd?: string, refresh?: boolean): Promise<string[]>;
     restore(files: Array<{ path: string; content: string | null; mode?: number }>, cwd?: string): Promise<{ restored: string[]; failed: Array<{ path: string; error: string }> }>;
-    onChanged(listener: (root: string) => void): () => void;
+    onChanged(listener: (root: string, paths?: string[]) => void): () => void;
   };
   vision: {
     config(): Promise<{

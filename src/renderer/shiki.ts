@@ -103,7 +103,7 @@ export function onHighlighterReady(callback: () => void): () => void {
     return () => {};
   }
   readyListeners.add(callback);
-  void getHighlighter();
+  void getHighlighter().catch(() => { /* 调用方已显示基础着色，初始化失败不产生未处理 rejection。 */ });
   return () => readyListeners.delete(callback);
 }
 

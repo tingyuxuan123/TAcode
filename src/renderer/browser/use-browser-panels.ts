@@ -9,7 +9,7 @@ import {
 } from "./panel-state";
 
 /** 主窗口统一管理网页标签；独立窗口仍由 BrowserPanel 管理内部标签。 */
-export function useBrowserPanels() {
+export function useBrowserPanels(workspace?: string) {
   const [state, dispatch] = useReducer(panelReducer, initialPanelState);
   const openBrowser = useCallback((url?: string, activate = true) => {
     dispatch({ type: "open-browser", tab: createBrowserPanel(createBrowserPanelId(), url ? { url, title: "" } : undefined), activate });
@@ -32,8 +32,8 @@ export function useBrowserPanels() {
   /** 打开/激活文件查看标签；同一路径复用同一个标签（过程区文件行的点击入口）。 */
   const openFile = useCallback((path: string) => {
     const trimmed = path.trim();
-    if (trimmed) dispatch({ type: "open-file", path: trimmed });
-  }, []);
+    if (trimmed) dispatch({ type: "open-file", path: trimmed, workspace });
+  }, [workspace]);
   const openFiles = useCallback((path?: string) => dispatch({ type: "open-files", ...(path ? { path } : {}) }), []);
   const closePanel = useCallback((id: string) => dispatch({ type: "close", id }), []);
   const selectPanel = useCallback((id: string) => dispatch({ type: "select", id }), []);

@@ -116,7 +116,7 @@
 
   **定位与风险。** [FilesPanel.visible](/Users/yfdl/project/TAcode/src/renderer/browser/files-panel.tsx:48)、[listWorkspaceFiles](/Users/yfdl/project/TAcode/src/main/index.ts:2129)、[PromptBar 文件列表](/Users/yfdl/project/TAcode/src/renderer/ui.tsx:2396)。风险中等。修正搜索过滤本身可先单独完成，索引与分页随后实施。
 
-- [ ] **UX-10 · 文件预览及时刷新并区分状态**
+- [x] **UX-10 · 文件预览及时刷新并区分状态**
 
   **代码确认。** 文件标签和抽屉仅在路径、项目或语言变化时重新读取；打开后同一个文件被 Agent 或外部编辑器修改，不会自动刷新文本。主进程还把文件不存在转为成功的空字符串，界面难以区分空文件与已删除文件。
 

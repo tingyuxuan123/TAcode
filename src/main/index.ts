@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -61,7 +61,9 @@ import { LocalLogger } from "./local-logger";
 import { readSessionTranscript } from "./session-transcript";
 import { SessionMaintenance } from "./session-maintenance";
 import { SessionIndex } from "./session-index";
-import { WorkspaceFileIndex, skipWorkspacePath } from "./workspace-file-index";
+import { WorkspaceFileIndex } from "./workspace-file-index";
+import { WorkspaceWatchers } from "./workspace-watcher";
+import { readWorkspacePreview } from "./workspace-preview";
 import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { registerCapabilitiesIpc } from "./capabilities-ipc";
@@ -419,10 +421,13 @@ async function loadLoadedSessions(): Promise<void> {
   }
   if (pruned) persistLoadedSessions();
 }
-let workspaceWatcher: fs.FSWatcher | undefined;
 const workspaceFiles = new WorkspaceFileIndex();
-let watchedWorkspace = "";
-let watchTimer: ReturnType<typeof setTimeout> | undefined;
+const previewRoots = new Map<string, string>();
+const workspaceWatchers = new WorkspaceWatchers((root, paths) => {
+  if (paths) for (const file of paths) workspaceFiles.changed(root, file);
+  else workspaceFiles.changed(root);
+  mainWindow?.webContents.send("workspace:changed", { root, paths });
+}, () => sendAppCommand("workspace-watch-failed"));
 let updateCheckStarted = false;
 let appLocale: Locale = DEFAULT_LOCALE;
 
@@ -565,6 +570,9 @@ function createWindow(): void {
   mainWindow.webContents.on("did-finish-load", reportFullscreen);
   mainWindow.on("closed", () => {
     mainWindow = undefined;
+    workspaceWatchers.close();
+    workspaceFiles.clear();
+    previewRoots.clear();
     // Close browser popups and detached browser windows so they don't outlive the shell
     // (macOS keeps the app alive after the window closes).
     closeAllBrowserPopups();
@@ -774,29 +782,19 @@ function registerIpc(): void {
     async (_event, rawPath: unknown, workspacePath?: unknown) => {
       const relativePath = requireString(rawPath, "文件路径", { maxLength: 4_096 });
       try {
+        const cwd = workspacePath === undefined ? activeAgentCwd : requireString(workspacePath, "工作区路径", { maxLength: 4_096 });
         const resolved = await resolveInWorkspace(
           relativePath,
-          workspacePath === undefined
-            ? undefined
-            : requireString(workspacePath, "工作区路径", { maxLength: 4_096 }),
+          cwd,
         );
-        // 先 stat 再按需读：超大文件只取前缀，避免整块读进主进程内存。
-        const stat = await fsp.stat(resolved);
-        if (stat.isDirectory()) throw new Error("这是一个目录，无法预览");
-        const truncated = stat.size > IPC_LIMITS.workspaceReadBytes;
-        const buffer = truncated
-          ? await readFilePrefix(resolved, IPC_LIMITS.workspaceReadBytes)
-          : await fsp.readFile(resolved);
-        if (buffer.includes(0))
-          return { path: relativePath, binary: true, content: "" };
-        const text = buffer.toString("utf8");
-        return {
-          path: relativePath,
-          binary: false,
-          content: truncated
-            ? `${text}\n…（文件超过 ${formatBytes(IPC_LIMITS.workspaceReadBytes)}，仅显示开头）`
-            : text,
-        };
+        const root = path.resolve(cwd!);
+        watchWorkspace(root);
+        const host = `workspace-${createHash("sha256").update(root).digest("hex").slice(0, 32)}`;
+        previewRoots.delete(host);
+        previewRoots.set(host, root);
+        while (previewRoots.size > 12) previewRoots.delete(previewRoots.keys().next().value!);
+        const previewPath = path.relative(root, resolved).split(path.sep).map(encodeURIComponent).join("/");
+        return { ...await readWorkspacePreview(resolved, relativePath), previewUrl: `${PREVIEW_SCHEME}://${host}/${previewPath}` };
       } catch (error) {
         if (
           error &&
@@ -804,7 +802,7 @@ function registerIpc(): void {
           "code" in error &&
           error.code === "ENOENT"
         ) {
-          return { path: relativePath, binary: false, content: "" };
+          return { path: relativePath, binary: false, content: "", status: "missing" };
         }
         throw error;
       }
@@ -1720,7 +1718,9 @@ async function servePreview(request: Request): Promise<Response> {
     target = path.join(visionUploadsDir(), path.basename(name));
   } else {
     try {
-      target = await resolveInWorkspace(name);
+      const root = url.host.startsWith("workspace-") ? previewRoots.get(url.host) : undefined;
+      if (url.host.startsWith("workspace-") && !root) throw new Error("预览项目已关闭，请刷新预览。");
+      target = await resolveInWorkspace(name, root);
     } catch (error) {
       return new Response(
         error instanceof Error ? error.message : "Forbidden",
@@ -1896,18 +1896,6 @@ async function realpathExistingOrJoin(target: string): Promise<string> {
         throw new Error("Path outside workspace");
       cursor = parent;
     }
-  }
-}
-
-/** 读取文件前缀（至多 maxBytes）：用于超大文件预览，避免整块读入内存。 */
-async function readFilePrefix(file: string, maxBytes: number): Promise<Buffer> {
-  const handle = await fsp.open(file, "r");
-  try {
-    const buffer = Buffer.alloc(maxBytes);
-    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
-    return Buffer.from(buffer.subarray(0, bytesRead));
-  } finally {
-    await handle.close();
   }
 }
 
@@ -2103,60 +2091,8 @@ function isWorkspaceItem(value: unknown): value is WorkspaceItem {
   );
 }
 
-// ponytail: one recursive fs.watch, 200ms debounce. Ceiling: skip SKIP_DIRS/dotdirs; upgrade to chokidar if events drop on Linux/network FS.
-const WATCH_MAX_RETRIES = 3;
-let watchRetries = 0;
-
 function watchWorkspace(root: string): void {
-  if (watchedWorkspace === root && workspaceWatcher) return;
-  workspaceWatcher?.close();
-  workspaceWatcher = undefined;
-  watchedWorkspace = root;
-  workspaceFiles.changed(root);
-  watchRetries = 0;
-  startWorkspaceWatcher(root);
-}
-
-function startWorkspaceWatcher(root: string): void {
-  try {
-    workspaceWatcher = fs.watch(
-      root,
-      { persistent: false, recursive: true },
-      (_event, filename) => {
-        if (skipWatch(filename)) return;
-        workspaceFiles.changed(root, filename);
-        clearTimeout(watchTimer);
-        watchTimer = setTimeout(() => {
-          mainWindow?.webContents.send("workspace:changed", root);
-        }, 200);
-      },
-    );
-    workspaceWatcher.on("error", () => {
-      workspaceWatcher?.close();
-      workspaceWatcher = undefined;
-      retryWorkspaceWatcher(root);
-    });
-  } catch {
-    workspaceWatcher = undefined;
-    retryWorkspaceWatcher(root);
-  }
-}
-
-/** 监听器异常后有限退避重试；仍失败则明确提示用户重新打开项目。 */
-function retryWorkspaceWatcher(root: string): void {
-  if (watchRetries >= WATCH_MAX_RETRIES) {
-    watchedWorkspace = "";
-    sendAppCommand("workspace-watch-failed");
-    return;
-  }
-  watchRetries += 1;
-  setTimeout(() => {
-    if (watchedWorkspace === root && !workspaceWatcher) startWorkspaceWatcher(root);
-  }, 500 * 2 ** watchRetries);
-}
-
-function skipWatch(filename: string | null): boolean {
-  return filename ? skipWorkspacePath(filename) : false;
+  if (workspaceWatchers.watch(root)) workspaceFiles.changed(root);
 }
 
 app.whenReady().then(async () => {
@@ -2308,7 +2244,7 @@ app.on("before-quit", (event) => {
   // are detached; skipping this leaves orphan `sh -lc` / find / rg processes.
   event.preventDefault();
   quitting = true;
-  workspaceWatcher?.close();
+  workspaceWatchers.close();
   closeAllBrowserPopups();
   closeAllDetachedBrowserWindows();
   Promise.all([

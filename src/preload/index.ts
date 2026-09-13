@@ -70,7 +70,7 @@ const api: DesktopApi = {
     reveal: (filePath, cwd) => ipcRenderer.invoke("workspace:reveal", filePath, cwd),
     list: (cwd, refresh) => ipcRenderer.invoke("workspace:list", cwd, refresh),
     restore: (files, cwd) => ipcRenderer.invoke("workspace:restore", files, cwd),
-    onChanged: (listener) => subscribe<string>("workspace:changed", listener),
+    onChanged: (listener) => subscribe<string | { root: string; paths?: string[] }>("workspace:changed", (change) => typeof change === "string" ? listener(change) : listener(change.root, change.paths)),
   },
   vision: {
     config: () => ipcRenderer.invoke("vision:config"),

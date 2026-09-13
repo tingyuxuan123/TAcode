@@ -1,4 +1,5 @@
 import { useWorkspaceFiles } from "./workspace-files";
+import { FilePreviewActions, FilePreviewStatus, useFilePreview } from "./file-preview";
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { contextCapacity, generationSpeed } from "./context-stats";
@@ -2010,7 +2011,10 @@ function ChangeSummary({ files, onOpen }: { files: FileChange[]; onOpen?(file: F
 
 export function FileDrawer({ file, workspace, onClose }: { file: FileChange; workspace?: string; onClose(): void }) {
   const { t } = useI18n();
-  const [body, setBody] = useState(() => t("preview.reading"));
+  const filePreview = useFilePreview(file.path, workspace);
+  const { data, bodyRef, revision } = filePreview;
+  const body = data?.content ?? "";
+  const ready = data && !data.binary && data.status !== "missing";
   const [wide, setWide] = useState(false);
   const markdown = /\.(md|markdown)$/i.test(file.path);
   const html = /\.html?$/i.test(file.path);
@@ -2020,22 +2024,7 @@ export function FileDrawer({ file, workspace, onClose }: { file: FileChange; wor
     setDiffOpen(false);
     setRendered(markdown);
   }, [file.path, markdown]);
-  useEffect(() => {
-    let gone = false;
-    setBody(t("preview.reading"));
-    void window.harness.workspace.read(file.path, workspace).then(
-      (result) => {
-        if (!gone) setBody(result.binary ? t("preview.binary") : result.content);
-      },
-      (error: unknown) => {
-        if (!gone) setBody(error instanceof Error ? error.message : String(error));
-      },
-    );
-    return () => {
-      gone = true;
-    };
-  }, [file.path, workspace, t]);
-  const preview = rendered && (markdown || html);
+  const preview = rendered && (markdown || (html && !data?.truncated));
   const diff = Boolean(file.patch && diffOpen && !preview);
   return (
     <aside className={wide ? "drawer wide" : "drawer"}>
@@ -2080,7 +2069,7 @@ export function FileDrawer({ file, workspace, onClose }: { file: FileChange; wor
             />
           </button>
         )}
-        <CopyButton text={body} className="drawer-btn" size={15} />
+        <FilePreviewActions {...filePreview} />
         <button type="button" className="drawer-btn" aria-label={t("preview.open")} onClick={() => void window.harness.workspace.open(file.path, workspace)}>
           <Icon path="M13.5 5.5H18.5V10.5M18.5 5.5L11 13M10 5.5H6.5V18.5H18.5V14" size={15} />
         </button>
@@ -2098,6 +2087,8 @@ export function FileDrawer({ file, workspace, onClose }: { file: FileChange; wor
           <Icon path="M7 7l10 10M17 7L7 17" size={15} />
         </button>
       </header>
+      <FilePreviewStatus {...filePreview} />
+      <div className="file-drawer-body" ref={bodyRef}>
       {diff && (
         <div className="file-diff">
           {splitView(file.patch!).map((row, index) => (
@@ -2110,11 +2101,11 @@ export function FileDrawer({ file, workspace, onClose }: { file: FileChange; wor
           ))}
         </div>
       )}
-      {diff ? null : preview && html ? (
+      {diff || !ready ? null : preview && html ? (
         <iframe
           className="file-frame"
           title={t("preview.title", { path: file.path })}
-          src={previewUrl(file.path)}
+          src={`${data.previewUrl ?? previewUrl(file.path)}?revision=${revision}`}
           sandbox="allow-scripts allow-same-origin allow-forms"
         />
       ) : preview ? (
@@ -2126,6 +2117,7 @@ export function FileDrawer({ file, workspace, onClose }: { file: FileChange; wor
           <HighlightedFileCode code={body} language={file.path} />
         </pre>
       )}
+      </div>
     </aside>
   );
 }
