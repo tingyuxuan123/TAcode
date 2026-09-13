@@ -49,7 +49,10 @@ export function mergeDelegationSummaries(
       id: key, role: record.role, task: record.task, status: record.status,
       childSessionPath: record.childSessionPath,
       startedAt: record.startedAt, completedAt: record.completedAt,
-      live: record.live, report: record.report, error: record.error, uiRequest: record.uiRequest,
+      // 协调器快照里的 live（来自子 worker 实时事件）优先；旧构建没有这个字段时
+      // 保留父工具进度里的 live，别把 undefined 写上去。
+      ...(record.live ? { live: record.live } : {}),
+      report: record.report, error: record.error, uiRequest: record.uiRequest,
       mayAutoOpen: belongsToCurrent,
     });
   }

@@ -3651,48 +3651,6 @@ textarea::selection,
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.drawer-empty {
-  margin: 0;
-  color: var(--ink-3);
-  font-size: calc(11.5px * var(--ui-font-scale));
-}
-.delegate-activity {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: calc(11.5px * var(--ui-font-scale));
-}
-.delegate-activity-item {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  color: var(--ink-2);
-}
-.delegate-activity-item time {
-  color: var(--ink-3);
-  font-size: calc(10px * var(--ui-font-scale));
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.delegate-activity-item span {
-  min-width: 0;
-  word-break: break-word;
-}
-.delegate-activity-item.is-error span {
-  color: var(--red);
-}
-.delegate-activity-item.kind-report span {
-  color: var(--ink);
-}
-.delegate-activity-item.now span {
-  color: var(--accent, #3b82f6);
-}
-.delegate-activity-item.now time {
-  color: var(--brand);
-}
 .thought-tool-chip.running {
   color: var(--ink);
   border-color: var(--ink-3);

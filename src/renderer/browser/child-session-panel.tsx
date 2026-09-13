@@ -1,6 +1,7 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, LoaderCircle, Square } from "lucide-react";
 import {
+  applyAgentEvent,
   delegateStatusLabel,
   groupConversation,
   markRunningTail,
@@ -11,10 +12,9 @@ import {
 import { useI18n } from "../i18n";
 import { ApprovalCard, AssistantTurn, Markdown, UserTurn } from "../ui";
 import { useFollowScroll } from "../use-follow-scroll";
+import type { AgentEvent } from "../../shared/types";
 import type { ChildSessionPanelInfo } from "./panel-state";
 
-/** 运行中标签的刷新间隔：子会话 JSONL 边跑边写，面板按此频率跟随。 */
-const POLL_MS = 2_000;
 /** 常规任务状态复用委派卡片的文案，其余终态在面板单独翻译。 */
 const TASK_STATUSES = new Set<string>(["pending", "running", "completed", "failed"]);
 
@@ -40,18 +40,18 @@ const isTranscriptPath = (value: string | undefined): boolean => Boolean(value &
 const INJECTED_PROMPT = /^\s*(You are the .{0,80}subagent inside TACode|You are the .{0,80} subagent inside TACode)/;
 
 /**
- * 子代理子会话的只读视图（右侧面板标签）。
+ * 子代理子会话的只读直播视图（右侧面板标签）。
  *
- * 与「打开会话」的区别：不启动 worker、不改活动会话。有子会话文件时读盘渲染完整转录；
- * 没有文件（进程内委派）时回退展示卡片上的最终报告 + 活动流。两种形态都是只读。
+ * 与「打开会话」的区别：不启动 worker、不改活动会话。运行中订阅委派的实时事件流
+ * （`delegations.onAgentEvent`）边跑边渲染，与侧聊同一套机制；初始加载与终态对账
+ * 读子会话转录补齐已完成的前缀。没有文件（进程内委派）时回退展示卡片上的最终报告。
+ * 两种形态都是只读。
  */
 export const ChildSessionPanel = memo(function ChildSessionPanel({
   info,
-  isActive,
   delegationId,
 }: {
   info: ChildSessionPanelInfo;
-  isActive: boolean;
   delegationId?: string;
 }) {
   const { t } = useI18n();
@@ -66,13 +66,22 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
   const isRunning = info.status === "running" || info.status === "pending";
 
   /**
-   * 子会话是只读直播：内容每 2s 追加一段，视图必须跟着最新走。
-   * 用户往上滚时自动停止跟随、滚回底部附近再恢复（与主转录同一套语义）；
-   * 标签页切回时容器尺寸变化会重新贴底（隐藏标签保持挂载、display:none → 尺寸 0）。
+   * 子会话是实时直播（与侧聊同一套机制）：worker 的事件流推流式文本与工具行，
+   * JSONL 只在消息完成时落盘，仅用于初始加载与终态对账。初次读盘返回前到达的
+   * 事件先在这里排队，读盘后按序补齐——与主会话 snapshot+replay 的次序语义一致。
+   * null 表示快照已落定，之后的事件直接套到当前消息列表上。
+   */
+  const pendingRef = useRef<AgentEvent[] | null>([]);
+
+  /**
+   * 直播内容不断追加，视图必须跟着最新走。用户往上滚时自动停止跟随、
+   * 滚回底部附近再恢复（与主转录同一套语义）；标签页切回时容器尺寸变化会重新贴底
+   * （隐藏标签保持挂载、display:none → 尺寸 0）。
    */
   const follow = useFollowScroll(`child-session:${delegationId ?? sessionPath}`);
 
   useEffect(() => {
+    pendingRef.current = [];
     setMessages([]);
     setPhase(readable ? "loading" : "ready");
     setError("");
@@ -80,37 +89,69 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
     setControlError("");
   }, [readable, sessionPath]);
 
+  // 初始加载：转录里是已完成消息的前缀。标签未激活也加载——事件订阅不挑激活态，
+  // 否则后台标签会拿着空列表套事件，激活时反而缺前缀。
   useEffect(() => {
-    if (!readable || !isActive) return;
+    if (!readable) return;
     let gone = false;
-    let loading = false;
     const load = (): void => {
-      if (gone || loading) return;
-      loading = true;
       // 桥接缺失/同步抛错都不该炸掉整个界面：统一转成 rejected promise 走下面的错误分支。
       void Promise.resolve()
         .then(() => window.harness.sessions.read(sessionPath))
         .then((transcript) => {
           if (gone) return;
-          setMessages(normalizeMessages(transcript.messages));
+          const base = normalizeMessages(transcript.messages);
+          const buffered = pendingRef.current ?? [];
+          pendingRef.current = null;
+          setMessages(buffered.reduce((current, event) => applyAgentEvent(current, event), base));
           setTruncated(transcript.truncated);
           setPhase("ready");
         })
         .catch((cause: unknown) => {
           if (gone) return;
+          // 读盘失败也放行已缓冲的事件：直播继续，错误横幅提示快照缺失。
+          const buffered = pendingRef.current ?? [];
+          pendingRef.current = null;
+          setMessages(buffered.reduce((current, event) => applyAgentEvent(current, event), [] as ChatMessage[]));
           setError(cause instanceof Error ? cause.message : String(cause));
           setPhase("error");
-        }).finally(() => { loading = false; });
+        });
     };
     load();
-    // 长工具调用期间消息数可能很久不变，只有协调器的终态才算结束。
-    // 终态变化会重新运行 effect，读取最后一次转录后停止轮询。
-    const timer = isRunning ? window.setInterval(load, POLL_MS) : undefined;
-    return () => {
-      gone = true;
-      if (timer !== undefined) window.clearInterval(timer);
-    };
-  }, [readable, sessionPath, isActive, isRunning, info.completedAt]);
+    return () => { gone = true; };
+  }, [readable, sessionPath]);
+
+  // 实时事件流：流式文本、思考、工具行都从这里来。初次读盘返回前先排队，读盘后按序补齐。
+  useEffect(() => {
+    const api = window.harness.delegations;
+    if (!delegationId || !api?.onAgentEvent) return;
+    return api.onAgentEvent((payload) => {
+      if (payload.delegationId !== delegationId) return;
+      const pending = pendingRef.current;
+      if (pending) {
+        pending.push(payload.event);
+        return;
+      }
+      setMessages((current) => applyAgentEvent(current, payload.event));
+    });
+  }, [delegationId]);
+
+  // 终态对账：落终态时子会话已写完，读一次盘拿权威内容与截断标记。
+  // 初次读盘未返回时跳过：它本身就是最新快照，并发读盘会把已补齐的事件冲掉。
+  useEffect(() => {
+    if (!readable || isRunning || pendingRef.current !== null) return;
+    let gone = false;
+    void Promise.resolve()
+      .then(() => window.harness.sessions.read(sessionPath))
+      .then((transcript) => {
+        if (gone) return;
+        setMessages(normalizeMessages(transcript.messages));
+        setTruncated(transcript.truncated);
+        setPhase("ready");
+      })
+      .catch(() => undefined);
+    return () => { gone = true; };
+  }, [readable, sessionPath, isRunning, info.completedAt]);
 
   const stop = async () => {
     if (!delegationId || stopping) return;
@@ -127,7 +168,6 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
       !(index === 0 && message.role === "user" && INJECTED_PROMPT.test(message.text)));
     return markRunningTail(groupConversation(visible), isRunning);
   }, [messages, isRunning]);
-  const activity = info.activity ?? [];
   const meta = [
     info.uiRequest ? t("subagent.awaitingInput") : statusText(info.status, t),
     formatElapsed(info.startedAt, info.completedAt),
@@ -197,19 +237,6 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
             <section className="child-session-section">
               <h4>{t("delegate.detailReport")}</h4>
               <div className="child-session-report markdown"><Markdown>{info.report}</Markdown></div>
-            </section>
-          )}
-          {activity.length > 0 && (
-            <section className="child-session-section">
-              <h4>{t("delegate.detailActivity")}</h4>
-              <ul className="delegate-activity">
-                {activity.map((entry, index) => (
-                  <li key={`${entry.at}-${index}`} className={`delegate-activity-item kind-${entry.kind}${entry.isError ? " is-error" : ""}`}>
-                    <time>{new Date(entry.at).toLocaleTimeString()}</time>
-                    <span>{entry.text}</span>
-                  </li>
-                ))}
-              </ul>
             </section>
           )}
         </div>

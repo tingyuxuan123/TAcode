@@ -194,6 +194,19 @@ const diagnostics = new LocalLogger({
 
 let delegationCoordinator: DelegationCoordinator | undefined;
 
+/** 委派子会话转发给渲染层的事件白名单：面板的实时渲染只消费这几类（applyAgentEvent 的输入）。 */
+const DELEGATION_PANEL_EVENT_TYPES = new Set([
+  "agent_start",
+  "agent_end",
+  "agent_settled",
+  "message_start",
+  "message_update",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+]);
+
 function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | string = "main"): AgentHost {
   const sideChat = channel === "side-chat";
   const delegated = Boolean(channel && channel !== "main" && !sideChat);
@@ -201,6 +214,11 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
     (event) => {
       if (delegated) {
         delegationCoordinator?.handleWorkerEvent(channel, event);
+        // 子会话 JSONL 只落已完成的消息，快照轮询看不到流式过程；把 worker 的实时事件
+        // 直接交给渲染层（按 delegationId 路由），子代理面板才能像侧聊一样边跑边渲染。
+        if (mainWindow && !mainWindow.isDestroyed() && DELEGATION_PANEL_EVENT_TYPES.has(event.type)) {
+          mainWindow.webContents.send("delegations:agent-event", { delegationId: channel, event });
+        }
         return;
       }
       if (!sideChat && event.type === "agent_start" && event.__sessionId) {

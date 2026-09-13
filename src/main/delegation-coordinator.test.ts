@@ -1123,6 +1123,34 @@ describe("delegation lifecycle controls", () => {
     } finally { await coordinator.stopAll(); state.close(); }
   });
 
+  it("turns child tool starts into a live step and publishes it to the panel", async () => {
+    const { coordinator, state, hosts, events } = await fixture({ hostOptions: () => ({ neverSettle: true }) });
+    try {
+      const first = await coordinator.start("/tmp/parent.jsonl", startPayload);
+      await waitFor(() => hosts.some((host) => host.calls.includes("request:prompt")));
+      coordinator.handleWorkerEvent(first.delegationId, {
+        type: "tool_execution_start",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        args: { path: "src/main/index.ts" },
+        __runtimeId: hosts[0].runtimeId,
+      });
+      const record = coordinator.get("/tmp/parent.jsonl")[0];
+      expect(record.live).toBe("read_file src/main/index.ts");
+      expect(record.recent?.some((entry) => entry.kind === "tool" && entry.text.includes("read_file"))).toBe(true);
+      // 每次工具开始都发布快照：面板头部与委派卡片的“当前步骤”靠它刷新。
+      const published = events.filter((event) => event.delegationId === first.delegationId).at(-1);
+      expect(published?.live).toBe("read_file src/main/index.ts");
+      // 旧 runtime 的迟到事件不能改写 live。
+      coordinator.handleWorkerEvent(first.delegationId, {
+        type: "tool_execution_start",
+        toolName: "stale_tool",
+        __runtimeId: "delegation-runtime-someone-else",
+      });
+      expect(coordinator.get("/tmp/parent.jsonl")[0].live).toBe("read_file src/main/index.ts");
+    } finally { await coordinator.stopAll(); state.close(); }
+  });
+
   it("钉选模型启动失败时改用父会话模型原位重跑一次", async () => {
     mockSubagents.definitions[0] = { ...mockSubagents.definitions[0], model: { providerId: "kimi", modelId: "kimi-k2" } };
     const { coordinator, hosts, parent, state } = await fixture({

@@ -300,6 +300,8 @@ export interface DesktopApi {
     stop(delegationId: string): Promise<import("./delegation").DelegationRecordSnapshot>;
     respondToUi(delegationId: string, requestId: string, response: Record<string, unknown>): Promise<void>;
     onEvent(listener: (event: import("./delegation").DelegationRecordSnapshot) => void): () => void;
+    /** 子会话 worker 的实时代理事件（流式文本/工具执行），子代理面板据此边跑边渲染。 */
+    onAgentEvent(listener: (payload: { delegationId: string; event: AgentEvent }) => void): () => void;
   };
   terminal: {
     start(cwd: string): Promise<TerminalInfo>;

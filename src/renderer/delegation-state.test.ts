@@ -54,4 +54,17 @@ describe("authoritative delegation state", () => {
     const plan = planDelegationTabs({ delegations: merged, openKeys: new Set([record.delegationId]), autoOpenedKeys: new Set([record.delegationId]) });
     expect(plan.requests[0]).toMatchObject({ activate: false, info: { status: "cancelled" } });
   });
+
+  it("keeps the parent-derived live step unless the record snapshot carries a fresher one", () => {
+    // 旧主进程构建的快照没有 live 字段：父工具进度里推导出的当前步骤不能被 undefined 冲掉。
+    const merged = mergeDelegationSummaries([
+      { id: record.delegationId, role: record.role, task: record.task, status: "running", childSessionPath: record.childSessionPath, live: "read_file src/main/index.ts" },
+    ], new Map([[record.delegationId, { ...record, status: "running" as const }]]), record.parentSessionPath, new Set([record.delegationId]));
+    expect(merged[0]?.live).toBe("read_file src/main/index.ts");
+    // 协调器快照自带 live（来自子 worker 实时事件）时优先生效。
+    const overridden = mergeDelegationSummaries([
+      { id: record.delegationId, role: record.role, task: record.task, status: "running", childSessionPath: record.childSessionPath, live: "read_file stale.ts" },
+    ], new Map([[record.delegationId, { ...record, status: "running" as const, live: "search_files todo" }]]), record.parentSessionPath, new Set([record.delegationId]));
+    expect(overridden[0]?.live).toBe("search_files todo");
+  });
 });

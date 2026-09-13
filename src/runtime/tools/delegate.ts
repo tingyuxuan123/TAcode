@@ -30,6 +30,7 @@ import {
   DELEGATION_LOCAL_WAIT_TIMEOUT_SECONDS,
   DELEGATION_MAX_TIMEOUT_SECONDS,
   DELEGATION_REPORT_NUDGE,
+  describeToolCall,
   isDelegationTerminal,
   isPreambleReport,
   isUntrustedReportEnd,
@@ -157,17 +158,6 @@ const continueParameters = Type.Object({
 
 function boundedReport(value: string): string {
   return boundedDelegationText(value, MAX_SUBAGENT_REPORT_CHARS);
-}
-
-function describeToolCall(name: string, args: unknown): string {
-  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-  const target =
-    (typeof record.path === "string" && record.path) ||
-    (typeof record.cmd === "string" && record.cmd.split("\n")[0]) ||
-    (typeof record.pattern === "string" && record.pattern) ||
-    (typeof record.input === "string" && record.input.split("\n")[0]) ||
-    "";
-  return target ? `${name} ${target.slice(0, 120)}` : name;
 }
 
 function statusLabel(status: DelegationStatus): string {

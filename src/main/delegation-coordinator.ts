@@ -15,6 +15,7 @@ import {
   DELEGATION_MAX_TIMEOUT_SECONDS,
   isDelegationTerminal,
   isDelegationAction,
+  describeToolCall,
   type DelegationAction,
   type DelegationActivity,
   type DelegationBridgeEvent,
@@ -420,6 +421,13 @@ export class DelegationCoordinator {
       && ["select", "confirm", "input", "editor"].includes(String(event.method))) {
       entry.record.uiRequest = event as ExtensionUiRequest;
       this.pushActivity(entry, { at: Date.now(), kind: "notice", text: "Waiting for user input in the subagent panel." });
+      this.publish(entry);
+    } else if (event.type === "tool_execution_start" && typeof event.toolName === "string" && event.toolName) {
+      // 面板头部的“当前步骤”：JSONL 快照只落已完成的消息，live 文案只能从实时事件来。
+      // 每次工具开始发布一条快照（低频），委派卡片与子代理面板头部都跟着更新。
+      const live = describeToolCall(event.toolName, event.args ?? event.input);
+      entry.record.live = live;
+      this.pushActivity(entry, { at: Date.now(), kind: "tool", text: live });
       this.publish(entry);
     } else if (event.type === "agent_settled" && entry.record.uiRequest) {
       delete entry.record.uiRequest;

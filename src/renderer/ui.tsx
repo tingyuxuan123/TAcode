@@ -953,7 +953,7 @@ function DelegateDetail({ tool, tools }: { tool: ToolActivity; tools?: ToolActiv
   };
   const selectedTask = selected !== null ? tasks[selected] : undefined;
   const panelActions = usePanelActions();
-  // 点击子代理行 = 在右侧面板打开它的标签（只读转录；没有子会话文件时展示卡片上的报告/活动流）。
+  // 点击子代理行 = 在右侧面板打开它的标签（实时事件流 + 只读转录；没有子会话文件时展示卡片报告）。
   // 详情抽屉保留在行尾 ⓘ 按钮上；只有在桥接不可用（无 context）时才回退到抽屉。
   const openTask = (item: DelegateTaskState, index: number): void => {
     if (!panelActions.openChildSession) {
@@ -977,7 +977,6 @@ function DelegateDetail({ tool, tools }: { tool: ToolActivity; tools?: ToolActiv
       ...(item.toolCalls !== undefined ? { toolCalls: item.toolCalls } : {}),
       ...(item.turns !== undefined ? { turns: item.turns } : {}),
       ...(item.usage?.totalTokens !== undefined ? { totalTokens: item.usage.totalTokens } : {}),
-      ...(item.recent?.length ? { activity: item.recent } : {}),
       ...(outputOf(item) ? { report: outputOf(item) } : {}),
     });
   };
@@ -1127,7 +1126,7 @@ function DelegateTaskRow({
   );
 }
 
-/** 子代理详情抽屉：头部元信息 + 任务 + 活动流 + 最终报告（借鉴 PI-Desktop 的子智能体面板）。 */
+/** 子代理详情抽屉：头部元信息 + 任务 + 最终报告（借鉴 PI-Desktop 的子智能体面板）。 */
 function SubagentDrawer({
   task,
   output,
@@ -1140,8 +1139,6 @@ function SubagentDrawer({
   onClose(): void;
 }) {
   const { t } = useI18n();
-  const activity = task.recent ?? [];
-  const bodyRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (event: WindowEventMap["keydown"]): void => {
       if (event.key === "Escape") onClose();
@@ -1150,10 +1147,6 @@ function SubagentDrawer({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const running = task.status === "running";
-  useEffect(() => {
-    const node = bodyRef.current;
-    if (node && running) node.scrollTop = node.scrollHeight;
-  }, [activity.length, task.live, running]);
   const meta = [
     task.model ? `${task.model.providerId}/${task.model.modelId}` : "",
     delegateStatusLabel(task.status),
@@ -1177,31 +1170,13 @@ function SubagentDrawer({
             <X size={15} />
           </button>
         </header>
-        <div className="drawer-body" ref={bodyRef}>
+        <div className="drawer-body">
           <p className="delegate-task-text">{task.task}</p>
           {task.childSessionPath && (
             <p className="delegate-task-meta delegate-child-session">
               {t("delegate.detailChildSession")}：<code>{task.childSessionPath}</code>
             </p>
           )}
-          <section className="delegate-drawer-section">
-            <h4>{t("delegate.detailActivity")}</h4>
-            {activity.length === 0 && !task.live?.trim()
-              ? <p className="drawer-empty">{t("delegate.detailEmpty")}</p>
-              : (
-                <ul className="delegate-activity">
-                  {activity.map((entry, index) => (
-                    <li key={`${entry.at}-${index}`} className={`delegate-activity-item kind-${entry.kind}${entry.isError ? " is-error" : ""}`}>
-                      <time>{new Date(entry.at).toLocaleTimeString()}</time>
-                      <span>{entry.text}</span>
-                    </li>
-                  ))}
-                  {running && task.live?.trim() && (
-                    <li className="delegate-activity-item now"><time aria-hidden="true">•</time><span>{task.live}</span></li>
-                  )}
-                </ul>
-              )}
-          </section>
           {output?.trim() && (
             <section className="delegate-drawer-section">
               <h4>{t("delegate.detailReport")}</h4>

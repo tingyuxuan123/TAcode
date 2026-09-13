@@ -174,6 +174,21 @@ export function isUntrustedReportEnd(stopReason: string | undefined): boolean {
   return stopReason === "error" || stopReason === "aborted";
 }
 
+/**
+ * 把一次工具调用压成一行可读的“当前步骤”（委派卡片与子代理面板头部的 live 文案）。
+ * 主进程的协调器与 runtime 的 delegate 工具都靠它描述子代理正在做什么。
+ */
+export function describeToolCall(name: string, args: unknown): string {
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  const target =
+    (typeof record.path === "string" && record.path) ||
+    (typeof record.cmd === "string" && record.cmd.split("\n")[0]) ||
+    (typeof record.pattern === "string" && record.pattern) ||
+    (typeof record.input === "string" && record.input.split("\n")[0]) ||
+    "";
+  return target ? `${name} ${target.slice(0, 120)}` : name;
+}
+
 /** Serializable metadata shared by main, runtime and renderer. */
 export interface DelegationRecordSnapshot {
   delegationId: string;

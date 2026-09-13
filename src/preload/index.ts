@@ -98,6 +98,8 @@ const api: DesktopApi = {
     stop: (delegationId) => ipcRenderer.invoke("delegations:stop", delegationId),
     respondToUi: (delegationId, requestId, response) => ipcRenderer.invoke("delegations:ui-response", delegationId, requestId, response),
     onEvent: (listener) => subscribe("delegations:event", listener),
+    /** 子会话 worker 的实时代理事件（流式文本/工具执行），按 delegationId 路由给子代理面板。 */
+    onAgentEvent: (listener) => subscribe("delegations:agent-event", listener),
   },
   terminal: {
     start: (cwd) => ipcRenderer.invoke("terminal:start", cwd),

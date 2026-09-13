@@ -64,9 +64,8 @@ export interface ChildSessionPanelInfo {
   live?: string;
   uiRequest?: import("../../shared/types").ExtensionUiRequest;
   error?: string;
-  /** 没有子会话转录（进程内委派）时的回退内容：最终报告 + 活动流。 */
+  /** 没有子会话转录（进程内委派）时的回退内容：最终报告。 */
   report?: string;
-  activity?: Array<{ at: number; kind: string; text: string; isError?: boolean }>;
 }
 
 export interface ChildSessionPanelTab {

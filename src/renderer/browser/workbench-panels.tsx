@@ -194,7 +194,7 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
       ))}
       {tabs.filter((tab) => tab.type === "child-session").map((tab) => (
         <div key={tab.id} className="child-session-host" style={{ display: tab.id === active ? "flex" : "none" }}>
-          <ChildSessionPanel info={tab.info} isActive={tab.id === active} delegationId={tab.key} />
+          <ChildSessionPanel info={tab.info} delegationId={tab.key} />
         </div>
       ))}
       {tabs.filter((tab) => tab.type === "file").map((tab) => (
