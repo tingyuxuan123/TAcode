@@ -223,20 +223,22 @@ async function smoke() {
     assert(await host("document.querySelector('.child-session-head').textContent.includes('48 个步骤')"), "header meta");
 
     stage = "delegation card in the main conversation opens the same kind of tab";
+    // 委派卡片重构后根节点是 .delegate-node，开标签的点击目标是 .delegate-node-header，
+    // 详情按钮是 .delegate-node-details（旧的 .delegate-task / .delegate-task-details 已不存在）。
     await host("document.querySelector('[data-fixture-delegate-turn] .flow-tool-line').click()");
-    await wait(async () => host("!!document.querySelector('[data-fixture-delegate-turn] .delegate-task')"));
-    await host("document.querySelector('[data-fixture-delegate-turn] .delegate-task').click()");
+    await wait(async () => host("!!document.querySelector('[data-fixture-delegate-turn] .delegate-node')"));
+    await host("document.querySelector('[data-fixture-delegate-turn] .delegate-node-header').click()");
     await new Promise((resolve) => setTimeout(resolve, 400));
     assert.equal(await host("!!document.querySelector('.delegate-drawer')"), false, "card click must not open the drawer");
     assert((await labels()).includes("分析委派链路"), "card click must open the child-session tab");
-    await host("document.querySelector('[data-fixture-delegate-turn] .delegate-task-details').click()");
+    await host("document.querySelector('[data-fixture-delegate-turn] .delegate-node-details').click()");
     await wait(async () => host("!!document.querySelector('.delegate-drawer')"), "info button still opens the drawer");
     await host("document.querySelector('.delegate-drawer .drawer-close').click()");
 
     stage = "in-process delegation without a session file still opens a tab with its report";
     await host("document.querySelector('[data-fixture-inline-turn] .flow-tool-line').click()");
-    await wait(async () => host("!!document.querySelector('[data-fixture-inline-turn] .delegate-task')"));
-    await host("document.querySelector('[data-fixture-inline-turn] .delegate-task').click()");
+    await wait(async () => host("!!document.querySelector('[data-fixture-inline-turn] .delegate-node')"));
+    await host("document.querySelector('[data-fixture-inline-turn] .delegate-node-header').click()");
     await new Promise((resolve) => setTimeout(resolve, 400));
     assert.equal(await host("!!document.querySelector('.delegate-drawer')"), false, "in-process delegation must not open the drawer");
     assert((await labels()).includes("跑一遍聚焦测试"), "in-process card must open a tab");
@@ -246,7 +248,9 @@ async function smoke() {
     // 卡片与侧栏是同一个委派（delegation-1）→ 标签栏只应出现一次，且内容仍是子会话转录。
     assert.equal(await host("Array.from(document.querySelectorAll('.child-session-host')).length"), 2, "两个委派各一个标签（含进程内那张卡片）");
     assert.equal(await host("Array.from(document.querySelectorAll('.inspect-tab-label')).filter(el => el.textContent === '分析委派链路').length"), 1, "同一个委派只出现一次");
-    assert(await host(`${visibleHost}.textContent.includes('子代理转录内容')`), "同一标签内容保持一致");
+    // 焦点在刚打开的进程内标签上（它的报告/活动断言在上面），这里要钉的是「卡片复用的那个委派标签
+    // 内容仍是子会话转录」，所以按内容找它，而不是取当前聚焦的那个 host。
+    assert(await host("Array.from(document.querySelectorAll('.child-session-host')).some(el => el.textContent.includes('子代理转录内容'))"), "同一标签内容保持一致");
 
     stage = "report markdown wraps short table labels on one line and keeps a readable scale";
     const layout = await host(`(() => {
