@@ -1104,6 +1104,26 @@ function registerIpc(): void {
           deletedSessionPaths.add(path);
         }
       }
+      // 级联清理委派子会话：主会话删了，子会话不能变成孤儿——否则它们会以独立会话的
+      // 身份浮到侧栏顶部（父会话不在列表时 groupDelegatedSessions 按平铺兜底）。
+      // 委派 host 由协调器托管，下面循环里的 stopParent（父会话路径）已把它们全部停掉；
+      // 这里负责子会话自己的注册表条目、墓碑与归档。子会话文件可能还没落盘（委派刚
+      // 注册就被删），archive 的 rename 会 ENOENT：逐个兜底，不能让一个坏孩子挡住删父。
+      const resolvedTargets = new Set([...targets].map((item) => path.resolve(item)));
+      const children = resolvedTargets.size > 0
+        ? store.list().filter((item) =>
+            item.parentSessionPath !== undefined
+            && resolvedTargets.has(path.resolve(item.parentSessionPath)))
+        : [];
+      for (const child of children) {
+        for (const childPath of [child.sessionPath, child.storagePath]) {
+          if (!childPath) continue;
+          targets.add(childPath);
+          loadedSessions.delete(childPath);
+          deletedSessionPaths.add(childPath);
+        }
+        await store.archive(child.id).catch(() => undefined);
+      }
       // 同步清理该会话对应的 host（停止并移出注册表），避免删除后残留后台进程。
       for (const path of targets) {
         await delegationCoordinator?.stopParent(path);
