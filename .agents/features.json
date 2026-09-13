@@ -42,7 +42,7 @@
   {
     "id": "UX-09",
     "description": "文件搜索范围正确、结果完整。验收：根目录能搜到深层的 `App.tsx`；同目录第 201 个文件可浏览和引用；超过 8000 文件的仓库可检索后部文件；加载失败与“没有匹配”分开；连续文件变化不会让两个组件重复全量扫描。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-09。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "UX-10",

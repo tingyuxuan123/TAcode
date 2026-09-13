@@ -61,6 +61,7 @@ import { LocalLogger } from "./local-logger";
 import { readSessionTranscript } from "./session-transcript";
 import { SessionMaintenance } from "./session-maintenance";
 import { SessionIndex } from "./session-index";
+import { WorkspaceFileIndex, skipWorkspacePath } from "./workspace-file-index";
 import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { registerCapabilitiesIpc } from "./capabilities-ipc";
@@ -130,7 +131,6 @@ import {
   type SessionSummary,
   type WorkspaceItem,
 } from "../shared/types";
-import { PROJECT_SKILL_ROOTS } from "../shared/skills";
 import {
   NO_ACTIVE_SESSION_MESSAGE,
   agentNoSessionResult,
@@ -421,6 +421,7 @@ async function loadLoadedSessions(): Promise<void> {
   if (pruned) persistLoadedSessions();
 }
 let workspaceWatcher: fs.FSWatcher | undefined;
+const workspaceFiles = new WorkspaceFileIndex();
 let watchedWorkspace = "";
 let watchTimer: ReturnType<typeof setTimeout> | undefined;
 let updateCheckStarted = false;
@@ -902,7 +903,8 @@ function registerIpc(): void {
       return { restored, failed };
     },
   );
-  ipcMain.handle("workspace:list", async (_event, workspacePath?: string) => {
+  ipcMain.handle("workspace:list", async (_event, workspacePath?: string, refresh?: unknown) => {
+    if (workspacePath !== undefined) requireString(workspacePath, "工作区路径", { maxLength: 4096 });
     const root = path.resolve(
       typeof workspacePath === "string" && workspacePath
         ? workspacePath
@@ -914,9 +916,9 @@ function registerIpc(): void {
       (await recentWorkspaces.list()).some(
         (item) => path.resolve(item.path) === root,
       );
-    if (!allowed) return [];
+    if (!allowed) throw new Error("请先打开该工作区，再浏览文件。");
     watchWorkspace(root);
-    return listWorkspaceFiles(root);
+    return workspaceFiles.list(root, refresh === true);
   });
 
   ipcMain.handle("terminal:start", async (_event, rawCwd: unknown) => {
@@ -2108,29 +2110,6 @@ function isWorkspaceItem(value: unknown): value is WorkspaceItem {
   );
 }
 
-const SKIP_DIRS = new Set([
-  ".git",
-  "node_modules",
-  "dist",
-  "dist-dev",
-  "dist-production",
-  "build",
-  "out",
-  "coverage",
-  ".next",
-  ".nuxt",
-  ".output",
-  ".turbo",
-  ".vite",
-  ".cache",
-  ".tacode",
-  ".build",
-  "DerivedData",
-  "Pods",
-  "__pycache__",
-  ".pnpm-store",
-]);
-
 // ponytail: one recursive fs.watch, 200ms debounce. Ceiling: skip SKIP_DIRS/dotdirs; upgrade to chokidar if events drop on Linux/network FS.
 const WATCH_MAX_RETRIES = 3;
 let watchRetries = 0;
@@ -2140,6 +2119,7 @@ function watchWorkspace(root: string): void {
   workspaceWatcher?.close();
   workspaceWatcher = undefined;
   watchedWorkspace = root;
+  workspaceFiles.changed(root);
   watchRetries = 0;
   startWorkspaceWatcher(root);
 }
@@ -2151,6 +2131,7 @@ function startWorkspaceWatcher(root: string): void {
       { persistent: false, recursive: true },
       (_event, filename) => {
         if (skipWatch(filename)) return;
+        workspaceFiles.changed(root, filename);
         clearTimeout(watchTimer);
         watchTimer = setTimeout(() => {
           mainWindow?.webContents.send("workspace:changed", root);
@@ -2182,97 +2163,7 @@ function retryWorkspaceWatcher(root: string): void {
 }
 
 function skipWatch(filename: string | null): boolean {
-  if (!filename) return false;
-  return filename
-    .replaceAll("\\", "/")
-    .split("/")
-    .some(
-      (part) =>
-        SKIP_DIRS.has(part) || (part.startsWith(".") && part !== ".agents"),
-    );
-}
-
-// ponytail: dirs always complete; files capped globally + per folder so DFS doesn't starve later siblings.
-async function listWorkspaceFiles(
-  root: string,
-  fileLimit = 8000,
-  perDirLimit = 200,
-): Promise<string[]> {
-  const dirs: string[] = [];
-  const files: string[] = [];
-  async function walk(dir: string): Promise<void> {
-    let entries;
-    try {
-      entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    entries.sort(
-      (left, right) =>
-        Number(right.isDirectory()) - Number(left.isDirectory()) ||
-        left.name.localeCompare(right.name),
-    );
-    let localFiles = 0;
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
-        dirs.push(
-          `${path.relative(root, path.join(dir, entry.name)).replaceAll("\\", "/")}/`,
-        );
-        await walk(path.join(dir, entry.name));
-        continue;
-      }
-      if (files.length >= fileLimit || localFiles >= perDirLimit) continue;
-      if (!entry.isFile() || entry.name.startsWith(".")) continue;
-      files.push(
-        path.relative(root, path.join(dir, entry.name)).replaceAll("\\", "/"),
-      );
-      localFiles += 1;
-    }
-  }
-  await walk(root);
-  await addSkillManifests(root, files);
-  return dirs.concat(files);
-}
-
-const SKILL_ROOTS = PROJECT_SKILL_ROOTS;
-
-async function addSkillManifests(root: string, files: string[]): Promise<void> {
-  const seen = new Set(files);
-  for (const rel of SKILL_ROOTS) {
-    let entries;
-    try {
-      entries = await fsp.readdir(path.join(root, rel), {
-        withFileTypes: true,
-      });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const skill = `${rel}/${entry.name}/SKILL.md`;
-      try {
-        await fsp.stat(path.join(root, skill));
-      } catch {
-        continue;
-      }
-      if (!seen.has(skill)) {
-        files.push(skill);
-        seen.add(skill);
-      }
-    }
-  }
-  for (const extra of [".agents/features.json", ".agents/progress.md"]) {
-    try {
-      await fsp.stat(path.join(root, extra));
-    } catch {
-      continue;
-    }
-    if (!seen.has(extra)) {
-      files.push(extra);
-      seen.add(extra);
-    }
-  }
+  return filename ? skipWorkspacePath(filename) : false;
 }
 
 app.whenReady().then(async () => {

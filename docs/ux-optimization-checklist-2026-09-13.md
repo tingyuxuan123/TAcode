@@ -106,7 +106,7 @@
 
   **定位与风险。** [captureWorkspaceCheckpoint](/Users/yfdl/project/TAcode/src/runtime/tools/checkpoint.ts:46)、[exec_command 接入](/Users/yfdl/project/TAcode/src/runtime/tools/commands.ts:264)。风险较高，涉及撤销正确性。`mtime + size` 不能单独证明内容未变；只看命令名或 `git status` 也不足以覆盖普通 shell 命令和未跟踪文件。建议先做 UX-06/07 等边界更清晰的性能项。
 
-- [ ] **UX-09 · 文件搜索范围正确、结果完整**
+- [x] **UX-09 · 文件搜索范围正确、结果完整**
 
   **代码确认。** 文件面板文案是“搜索工作区文件”，实现却先把所有路径折叠到当前目录的第一层，再筛选候选。例如从根目录搜 `App.tsx`，`src/renderer/App.tsx` 会先变成 `src/`，无法命中。另外，工作区列表默认限制总文件数 8000、每目录 200，结果类型没有截断信息；输入框文件补全也使用这份列表。
 

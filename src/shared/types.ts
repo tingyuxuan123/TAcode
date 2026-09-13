@@ -295,7 +295,7 @@ export interface DesktopApi {
     read(path: string, cwd?: string): Promise<{ path: string; content: string; binary: boolean }>;
     open(path: string, cwd?: string): Promise<void>;
     reveal(path: string, cwd?: string): Promise<void>;
-    list(cwd?: string): Promise<string[]>;
+    list(cwd?: string, refresh?: boolean): Promise<string[]>;
     restore(files: Array<{ path: string; content: string | null; mode?: number }>, cwd?: string): Promise<{ restored: string[]; failed: Array<{ path: string; error: string }> }>;
     onChanged(listener: (root: string) => void): () => void;
   };

@@ -1141,3 +1141,11 @@
 - 收尾修复不同名称目标分支的 HEAD 推送、目标规范化、排队取消、准备期间关闭、迟到 token 清理、post-commit hook 取消后的本地提交结果、URL/错误详情脱敏，以及 420px 英文工具栏溢出。
 - 验证：`pnpm test --reporter=dot --maxWorkers=1`（**127 文件 / 1121 用例**）、`pnpm typecheck`、`pnpm build`、`git diff --check`、生产 Electron `pnpm test:git-review` 及 `pnpm test:file-review` 通过。Git 烟测 **23 阶段**，refresh **305/311ms**，网络 0、renderer 错误 0、关闭后资源计数为 0。构建和全量测试顺序运行，文件监听抖动用例最终单进程通过。详情及截图 `docs/file-review-fr-05.md`。
 - 下一项 FR-06：生产文件索引和读取服务；总复刻目标仍为 active。
+## 2026-09-13：UX-09 完整文件检索与共享索引
+
+- [x] 主进程建立完整路径索引，移除 8000 总文件/每目录 200 的静默截断；同根目录的并发请求共用扫描，已知文件增删只核对对应路径，目录改名只更新子树。保留最多 3 个工作区缓存，切回未监听的项目重新核对，刷新按钮可强制重建。索引与监听共用忽略规则，Skills 路径包含 `.agents` 与 `.pi`。
+- [x] 文件面板和输入框共用一份路径数组、一次 IPC 请求及一个变更订阅；卸载时释放订阅和无消费者的路径数组。搜索按完整相对路径匹配整个工作区；无查询时浏览当前目录，每次展示 200 项并可继续加载。
+- [x] 两个入口均区分加载失败与无匹配，提供重试，更新时保留现有可用列表；切项目重置目录位置。`@` 的中文输入法处理保持不变。
+- 文件：main/workspace-file-index.ts、index.ts；renderer/workspace-files.ts、browser/files-panel.tsx、ui.tsx；shared/types.ts、i18n.ts、preload；相关测试与桌面夹具。
+- 验证：全量 **121 文件 / 1027 测试通过**，`pnpm typecheck`、`git diff --check` 通过。8100 文件实盘样本覆盖后部检索、目录第 201 项、增删零目录重扫、改名子树、扫描失败重试。`TACODE_FILES_SMOKE=1 node scripts/test-session-activity.mjs` 通过真实 UI 的深层搜索、加载更多、后部文件引用、共享更新和错误重试；IME 桌面回归通过。已查看 `ux-09/deep-file-search.png`，脚本中的 listing failed 为主动注入。
+- 下一项：UX-10 预览按文件变更刷新，区分空文件、缺失、二进制、失败及截断，保留阅读位置。整份目标继续 active。

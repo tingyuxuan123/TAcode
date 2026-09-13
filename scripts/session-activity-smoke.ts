@@ -10,6 +10,7 @@ import { AgentManager } from "../src/main/agent-manager";
 import { readSessionTranscript } from "../src/main/session-transcript";
 import { SessionMaintenance } from "../src/main/session-maintenance";
 import { SessionIndex } from "../src/main/session-index";
+import { WorkspaceFileIndex } from "../src/main/workspace-file-index";
 import { initializeTacodeHome } from "../src/runtime/home";
 import { listTacodeThreads } from "../src/runtime/state";
 import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/types";
@@ -46,6 +47,10 @@ async function smoke() {
   const historySmoke = process.env.TACODE_HISTORY_SMOKE === "1";
   const startupSmoke = process.env.TACODE_STARTUP_SMOKE === "1";
   const listSmoke = process.env.TACODE_SESSION_LIST_SMOKE === "1";
+  const filesSmoke = process.env.TACODE_FILES_SMOKE === "1";
+  const fileIndex = new WorkspaceFileIndex();
+  let fileListCalls = 0;
+  let failFileList = false;
   const startupBaseline = process.env.TACODE_STARTUP_BASELINE === "1";
   const startupCount = Number(process.env.TACODE_STARTUP_COUNT ?? 0);
   let startupAt = 0;
@@ -149,6 +154,12 @@ async function smoke() {
   const watchdog = setTimeout(() => { console.error(`Activity smoke timed out: ${stage}`); app.exit(1); }, 90_000);
   try {
     await app.whenReady();
+    if (filesSmoke) {
+      await mkdir(path.join(project, "src", "renderer"), { recursive: true });
+      await mkdir(path.join(project, "bulk"));
+      await writeFile(path.join(project, "src", "renderer", "App.tsx"), "export {};\n");
+      for (let offset = 0; offset < 8100; offset += 200) await Promise.all(Array.from({ length: Math.min(200, 8100 - offset) }, (_, i) => writeFile(path.join(project, "bulk", `${String(offset + i).padStart(5, "0")}.ts`), "")));
+    }
     if (startupSmoke || listSmoke) {
       await mkdir(sessionDirectory, { recursive: true });
       await Promise.all(sessions.map((session) => writeFile(session.path, [
@@ -170,7 +181,14 @@ async function smoke() {
     ipcMain.handle("vision:config", () => ({ profiles: [], activeProfileId: "" }));
     ipcMain.handle("app:log-diagnostic", () => {});
     ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }]);
-    ipcMain.handle("workspace:list", () => imeSmoke ? ["src/", "src/App.tsx", "src/中文.ts"] : []);
+    ipcMain.handle("workspace:list", (_event, cwd, refresh) => {
+      if (filesSmoke) {
+        fileListCalls++;
+        if (failFileList) throw new Error("fixture file listing failed");
+        return fileIndex.list(cwd, refresh);
+      }
+      return imeSmoke ? ["src/", "src/App.tsx", "src/中文.ts"] : [];
+    });
     ipcMain.handle("workspace:read", (_event, file) => ({ path: file, content: "", binary: false }));
     ipcMain.handle("sessions:list", () => {
       if (closing) return [];
@@ -251,6 +269,52 @@ async function smoke() {
     manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (filesSmoke) {
+      stage = "shared complete file index and deep path search";
+      await wait(() => evaluate("!!document.querySelector('.project-row')"));
+      await evaluate("document.querySelector('.project-row').click()");
+      await wait(() => evaluate("!!document.querySelector('.prompt-input[contenteditable=true]')"));
+      await evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', metaKey: true }))");
+      await wait(() => evaluate("!!document.querySelector('.files-entry[title=\"src/\"]')"));
+      assert.equal(fileListCalls, 1);
+      const searchFiles = async (query: string) => {
+        await evaluate("document.querySelector('.files-search input').focus(); document.querySelector('.files-search input').select()");
+        await main!.webContents.insertText(query || " ");
+      };
+      await searchFiles("App.tsx");
+      await wait(() => evaluate("!!document.querySelector('.files-entry[title=\"src/renderer/App.tsx\"]')"));
+      await screenshot("deep-file-search.png");
+      await searchFiles("");
+      await wait(() => evaluate("!!document.querySelector('.files-entry[title=\"bulk/\"]')"));
+      await evaluate("document.querySelector('.files-entry[title=\"bulk/\"]').click()");
+      await wait(() => evaluate("document.querySelectorAll('.files-entry').length === 200 && !!document.querySelector('.files-load-more')"));
+      await evaluate("document.querySelector('.files-load-more').click()");
+      await wait(() => evaluate("!!document.querySelector('.files-entry[title=\"bulk/00200.ts\"]')"));
+      stage = "files beyond the old 8000 limit can be referenced";
+      await evaluate("document.querySelector('.prompt-input').focus()");
+      await main.webContents.insertText("@bulk/08099.ts");
+      await wait(() => evaluate("Array.from(document.querySelectorAll('.slash-menu.files button')).some(el => el.textContent === 'bulk/08099.ts')"));
+      await evaluate("Array.from(document.querySelectorAll('.slash-menu.files button')).find(el => el.textContent === 'bulk/08099.ts').click()");
+      assert.equal(await evaluate("document.querySelector('.prompt-input').textContent.includes('@bulk/08099.ts')"), true);
+      stage = "file changes update both consumers once and failed listings remain retryable";
+      await writeFile(path.join(project, "bulk", "new.ts"), "");
+      fileIndex.changed(project, "bulk/new.ts");
+      const calls = fileListCalls;
+      main.webContents.send("workspace:changed", project);
+      await wait(async () => fileListCalls === calls + 1);
+      await searchFiles("new.ts");
+      await wait(() => evaluate("!!document.querySelector('.files-entry[title=\"bulk/new.ts\"]')"));
+      failFileList = true;
+      await evaluate("document.querySelector('.files-panel-toolbar button[aria-label=\"刷新文件列表\"]').click()");
+      await wait(() => evaluate("!!document.querySelector('.files-panel [role=alert]')"));
+      assert.equal(await evaluate("document.querySelector('.files-panel-body').textContent.includes('没有匹配')"), false);
+      failFileList = false;
+      await evaluate("document.querySelector('.files-panel [role=alert] button').click()");
+      await wait(() => evaluate("!document.querySelector('.files-panel [role=alert]') && !!document.querySelector('.files-entry')"));
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      console.log("Files smoke passed: deep search, 201st sibling, >8000 reference, shared updates, error/retry.");
+      return;
+    }
     if (listSmoke) {
       stage = "session list actions preserve optimistic results through delayed responses";
       await wait(() => evaluate("document.querySelectorAll('.home-recent').length === 2"));
