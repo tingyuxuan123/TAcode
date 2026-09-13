@@ -14,6 +14,7 @@ import { WorkspaceFileIndex } from "../src/main/workspace-file-index";
 import { WorkspaceWatchers } from "../src/main/workspace-watcher";
 import { readWorkspacePreview } from "../src/main/workspace-preview";
 import { testFilePreview, type PreviewSmokeControls } from "./file-preview-smoke";
+import { createPanelFixture, testPanelPerformance } from "./panel-performance-smoke";
 import { initializeTacodeHome } from "../src/runtime/home";
 import { listTacodeThreads } from "../src/runtime/state";
 import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/types";
@@ -52,6 +53,7 @@ async function smoke() {
   const listSmoke = process.env.TACODE_SESSION_LIST_SMOKE === "1";
   const filesSmoke = process.env.TACODE_FILES_SMOKE === "1";
   const previewSmoke = process.env.TACODE_PREVIEW_SMOKE === "1";
+  const panelsSmoke = process.env.TACODE_PANELS_SMOKE === "1";
   const previewControls: PreviewSmokeControls = { reads: 0, fail: false, hold: false };
   const fileIndex = new WorkspaceFileIndex();
   const workspaceWatchers = new WorkspaceWatchers((root, paths) => {
@@ -78,7 +80,8 @@ async function smoke() {
     id: name, title: `会话 ${name}`, path: path.join(sessionDirectory, `${name}.jsonl`), storagePath: path.join(sessionDirectory, `${name}.jsonl`),
     cwd: project, createdAt: now, updatedAt: now, messageCount: 2, pinned: false, archived: false,
   }));
-  const transcript = (file: string) => [
+  const panelFixture = panelsSmoke ? createPanelFixture(project, sessions[0].path) : undefined;
+  const transcript = (file: string) => panelFixture?.messages.get(file) ?? [
     { role: "user", content: [{ type: "text", text: `${path.basename(file)} 的问题` }], timestamp: Date.parse(now) + 1 },
     { role: "assistant", content: [{ type: "text", text: `${path.basename(file)} 的回复` }], stopReason: "stop", timestamp: Date.parse(now) + 2 },
   ];
@@ -250,7 +253,12 @@ async function smoke() {
       await sessionIndex.store.archive(id);
       sessionIndex.changed();
     });
-    ipcMain.handle("delegations:list", () => []);
+    ipcMain.handle("delegations:list", () => panelFixture?.records ?? []);
+    if (panelFixture) {
+      ipcMain.handle("side-chat:start", () => ({ runtimeId: "perf-side", messages: panelFixture.messages.get(sessions[0].path), models: [] }));
+      ipcMain.handle("side-chat:command", () => ({}));
+      ipcMain.handle("side-chat:stop", () => {});
+    }
     ipcMain.handle("skills:list", () => ({ skills: [], projectTrusted: true }));
     ipcMain.handle("auth:status", () => [{ id: "openai", serviceId: "fixture", serviceVersion: "1", preferred: true, configured: controls.configured, defaultModel: "fixture", models: ["fixture"] }]);
     ipcMain.handle("agent:runtimes", () => manager.list());
@@ -290,6 +298,15 @@ async function smoke() {
     manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (panelsSmoke && panelFixture) {
+      stage = "multiple chat panel performance";
+      await wait(() => evaluate("!!document.querySelector('.project-row')"));
+      await evaluate("document.querySelector('.project-row').click()");
+      await select("A");
+      await testPanelPerformance(main, sessions[0].path, panelFixture, (event) => emit(manager.findBySession(sessions[0].path)!, event), screenshot);
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      return;
+    }
     if (previewSmoke) {
       stage = "file previews";
       await testFilePreview(main, project, previewControls, screenshot);

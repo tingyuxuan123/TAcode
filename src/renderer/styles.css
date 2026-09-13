@@ -9356,3 +9356,7 @@ kbd {
 .session-history-controls p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .session-index-status { margin: 4px 16px 12px; display: flex; flex-wrap: wrap; gap: 6px; color: var(--ink-2); font-size: 11px; }
 .session-index-status details { width: 100%; overflow-wrap: anywhere; }
+
+/* 子会话与侧聊使用主对话的虚拟列表，保留各自紧凑的面板宽度。 */
+.child-session-flow .messages, .side-chat-flow .messages { width: 100%; max-width: none; padding: 0; margin: 0; }
+.child-session-flow .message-item, .side-chat-flow .message-item { min-width: 0; }

@@ -52,7 +52,7 @@
   {
     "id": "UX-11",
     "description": "多个聊天面板保持流畅。验收：用固定事件速率回放主会话加 3 个子会话，记录输入响应、长任务和 React 提交耗时；隐藏面板的渲染工作明显下降，切回内容完整；审批、失败和完成状态仍即时更新，后台任务正常执行。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-11。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "UX-12",

@@ -1,21 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LoaderCircle, MessageCirclePlus, Plus } from "lucide-react";
 import type { AgentSessionStats, PermissionMode, ProviderStatus } from "../../shared/types";
 import type { ModelOption } from "../../shared/model-selection";
 import { toPromptImages } from "../../shared/vision-api";
 import {
-  applyAgentEvent,
   friendlyAgentError,
   groupConversation,
   normalizeMessages,
-  type ChatMessage,
+  type ConversationGroup,
 } from "../conversation";
-import { AssistantTurn, ContextStats, PermissionPicker, UserTurn } from "../ui";
+import { ContextStats, PermissionPicker } from "../ui";
 import { EffortPicker, ModelPicker } from "../composer-pickers";
 import { PromptToolbar } from "../prompt-toolbar";
 import { useI18n } from "../i18n";
 import { modelOptionKey } from "../../shared/model-selection";
 import { useFollowScroll } from "../use-follow-scroll";
+import { usePanelMessageStream } from "../panel-message-stream";
+import { PanelMessageList } from "./panel-message-list";
 
 /** 主进程已无该 runtime（被 stop / worker 退出）时的报错特征：回到「已结束」态而不是裸错误。 */
 const NO_SESSION_PATTERN = /no active agent session|agent session closed|session not found/i;
@@ -28,7 +29,7 @@ const MAX_ATTACHMENTS = 6;
  * 在跑时通过运行时命令即时下发），发送位在运行中变成停止键。顶部不设标题行——
  * 标签上已经写明是哪个侧边聊天。
  */
-export function SideChatPanel({ workspace, provider, model, modelKey, models, effort, effortLevels, permission, ordinal, sourceSession, draft, onRecreate }: {
+export function SideChatPanel({ workspace, provider, model, modelKey, models, effort, effortLevels, permission, ordinal, sourceSession, draft, onRecreate, active = true }: {
   workspace?: string;
   provider?: ProviderStatus;
   /** 初始模型（主会话当前值）；此后由本面板的选择器独立管理。 */
@@ -43,9 +44,10 @@ export function SideChatPanel({ workspace, provider, model, modelKey, models, ef
   sourceSession?: string;
   draft?: string;
   onRecreate?(): void;
+  active?: boolean;
 }) {
   const { t } = useI18n();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { messages, setMessages, push } = usePanelMessageStream(active);
   const [input, setInput] = useState(draft ?? "");
   const [attachments, setAttachments] = useState<string[]>([]);
   const [runtimeId, setRuntimeId] = useState<string>();
@@ -65,7 +67,10 @@ export function SideChatPanel({ workspace, provider, model, modelKey, models, ef
    * 侧边聊天是流式直播：回合不断追加，视图必须跟着最新走（与主转录、子代理面板同一套语义）。
    * 用户往上滚时停止跟随，滚回底部附近自动恢复；标签切回时容器尺寸变化会重新贴底。
    */
-  const follow = useFollowScroll(`side-chat:${sourceSession ?? "session"}:${ordinal}`);
+  const scope = `side-chat:${sourceSession ?? "session"}:${ordinal}`;
+  const follow = useFollowScroll(scope, active);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const setViewport = useCallback((node: HTMLDivElement | null) => { scrollerRef.current = node; follow.viewportRef(node); }, [follow.viewportRef]);
 
   useEffect(() => {
     const offEvent = window.harness.sideChat.onEvent((event) => {
@@ -74,7 +79,7 @@ export function SideChatPanel({ workspace, provider, model, modelKey, models, ef
       if (event.type === "agent_settled") setRunning(false);
       const withStats = event as { stats?: unknown };
       if (withStats.stats && typeof withStats.stats === "object") setStats(withStats.stats as AgentSessionStats);
-      setMessages((current) => applyAgentEvent(current, event));
+      push(event);
     });
     const offError = window.harness.sideChat.onError((payload) => {
       if (payload.__runtimeId && payload.__runtimeId !== runtimeRef.current) return;
@@ -104,7 +109,12 @@ export function SideChatPanel({ workspace, provider, model, modelKey, models, ef
     if (id) void window.harness.sideChat.stop(id);
   };
 
-  const groups = useMemo(() => groupConversation(messages), [messages]);
+  const previousGroups = useRef<ConversationGroup[]>([]);
+  const groups = useMemo(() => {
+    const grouped = groupConversation(messages, previousGroups.current);
+    previousGroups.current = grouped;
+    return grouped;
+  }, [messages]);
   // 已产生过对话且 runtime 不在：这是声明式临时会话的「已结束」态（Codex 的 expired 语义）。
   const ended = messages.length > 0 && !runtimeId && !running && !starting;
 
@@ -230,13 +240,11 @@ export function SideChatPanel({ workspace, provider, model, modelKey, models, ef
 
   return (
     <div className="side-chat-panel">
-      <div className="side-chat-body" ref={follow.viewportRef}>
+      <div className="side-chat-body" ref={setViewport}>
         {groups.length === 0 && !running && !starting && <div className="side-chat-empty"><MessageCirclePlus size={24} strokeWidth={1.5} /><p>{t("panel.sideChatEmpty")}</p><p className="side-chat-empty-note">{t("panel.sideChatEphemeral")}</p></div>}
         {/* contentRef 必须挂在内层：滚动容器高度由 flex 固定，内容变高时它自己不会 resize。 */}
         <div className="side-chat-flow" ref={follow.contentRef}>
-          {groups.map((group) => group.type === "user"
-            ? <UserTurn key={group.id} text={group.message.text} images={group.message.images} />
-            : <AssistantTurn key={group.id} messages={group.messages} running={running} canAutoCollapse={false} />)}
+          <PanelMessageList groups={groups} running={running} scope={scope} scrollerRef={scrollerRef} />
           {ended && (
             <div className="side-chat-ended" role="status">
               <span>{t("panel.sideChatEnded")}</span>

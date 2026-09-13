@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, LoaderCircle, Square } from "lucide-react";
 import {
   applyAgentEvent,
@@ -7,11 +7,14 @@ import {
   markRunningTail,
   normalizeMessages,
   type ChatMessage,
+  type ConversationGroup,
   type DelegateTaskStatus,
 } from "../conversation";
 import { useI18n } from "../i18n";
-import { ApprovalCard, AssistantTurn, Markdown, UserTurn } from "../ui";
+import { ApprovalCard, Markdown } from "../ui";
 import { useFollowScroll } from "../use-follow-scroll";
+import { usePanelMessageStream } from "../panel-message-stream";
+import { PanelMessageList } from "./panel-message-list";
 import type { AgentEvent } from "../../shared/types";
 import type { ChildSessionPanelInfo } from "./panel-state";
 
@@ -50,14 +53,16 @@ const INJECTED_PROMPT = /^\s*(You are the .{0,80}subagent inside TACode|You are 
 export const ChildSessionPanel = memo(function ChildSessionPanel({
   info,
   delegationId,
+  active = true,
 }: {
   info: ChildSessionPanelInfo;
   delegationId?: string;
+  active?: boolean;
 }) {
   const { t } = useI18n();
   const sessionPath = info.sessionPath ?? "";
   const readable = isTranscriptPath(sessionPath);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { messages, setMessages, push, clearPending } = usePanelMessageStream(active);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">(readable ? "loading" : "ready");
   const [error, setError] = useState("");
   const [truncated, setTruncated] = useState(false);
@@ -71,17 +76,21 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
    * 事件先在这里排队，读盘后按序补齐——与主会话 snapshot+replay 的次序语义一致。
    * null 表示快照已落定，之后的事件直接套到当前消息列表上。
    */
-  const pendingRef = useRef<AgentEvent[] | null>([]);
+  const pendingRef = useRef<AgentEvent[] | null>(readable ? [] : null);
 
   /**
    * 直播内容不断追加，视图必须跟着最新走。用户往上滚时自动停止跟随、
    * 滚回底部附近再恢复（与主转录同一套语义）；标签页切回时容器尺寸变化会重新贴底
    * （隐藏标签保持挂载、display:none → 尺寸 0）。
    */
-  const follow = useFollowScroll(`child-session:${delegationId ?? sessionPath}`);
+  const scope = `child-session:${delegationId ?? sessionPath}`;
+  const follow = useFollowScroll(scope, active);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const setViewport = useCallback((node: HTMLDivElement | null) => { scrollerRef.current = node; follow.viewportRef(node); }, [follow.viewportRef]);
 
   useEffect(() => {
-    pendingRef.current = [];
+    pendingRef.current = readable ? [] : null;
+    clearPending();
     setMessages([]);
     setPhase(readable ? "loading" : "ready");
     setError("");
@@ -132,9 +141,9 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
         pending.push(payload.event);
         return;
       }
-      setMessages((current) => applyAgentEvent(current, payload.event));
+      push(payload.event);
     });
-  }, [delegationId]);
+  }, [delegationId, push]);
 
   // 终态对账：落终态时子会话已写完，读一次盘拿权威内容与截断标记。
   // 初次读盘未返回时跳过：它本身就是最新快照，并发读盘会把已补齐的事件冲掉。
@@ -162,11 +171,14 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
     finally { setStopping(false); }
   };
 
+  const previousGroups = useRef<ConversationGroup[]>([]);
   const groups = useMemo(() => {
     const visible = messages.filter((message, index) =>
       // 注入的 prompt 作为第一条 user 消息出现，隐藏它（任务单独展示）。
       !(index === 0 && message.role === "user" && INJECTED_PROMPT.test(message.text)));
-    return markRunningTail(groupConversation(visible), isRunning);
+    const grouped = groupConversation(visible, previousGroups.current);
+    previousGroups.current = grouped;
+    return markRunningTail(grouped, isRunning);
   }, [messages, isRunning]);
   const meta = [
     info.uiRequest ? t("subagent.awaitingInput") : statusText(info.status, t),
@@ -192,7 +204,7 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
           </button>
         )}
       </header>
-      <div className="child-session-body" ref={follow.viewportRef}>
+      <div className="child-session-body" ref={setViewport}>
         {/* contentRef 必须挂在内层：只观察滚动容器本身，内容长高（容器高度不变）时不会触发。 */}
         <div className="child-session-flow" ref={follow.contentRef}>
           {controlError && <p className="child-session-note is-error" role="alert">{controlError}</p>}
@@ -220,19 +232,7 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
           {readable && phase === "ready" && groups.length === 0 && (
             <p className="child-session-note">{isRunning ? t("preview.reading") : t("chat.emptySession")}</p>
           )}
-          {groups.map((group, index) => group.type === "user"
-            ? <UserTurn key={group.id} text={group.message.text} images={group.message.images} />
-            : (
-              <AssistantTurn
-                key={group.id}
-                messages={group.messages}
-                running={isRunning && index === groups.length - 1}
-                // 等用户确认 / 正在停止：与侧边聊天同款的状态呈现，别让过程区在这两个状态下看起来还在闷头跑。
-                awaiting={Boolean(info.uiRequest) && index === groups.length - 1}
-                stopping={stopping && index === groups.length - 1}
-                canAutoCollapse={false}
-              />
-            ))}
+          <PanelMessageList groups={groups} running={isRunning} awaiting={Boolean(info.uiRequest)} stopping={stopping} scope={scope} scrollerRef={scrollerRef} />
           {info.report?.trim() && (!readable || phase === "error" || groups.length === 0) && (
             <section className="child-session-section">
               <h4>{t("delegate.detailReport")}</h4>

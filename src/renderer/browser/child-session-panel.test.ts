@@ -17,8 +17,8 @@ describe("child session panel follow scroll", () => {
   const css = readFileSync(path.join(rendererDir, "styles.css"), "utf8");
 
   it("把跟随滚动的视口/内容 ref 接到面板上", () => {
-    expect(panel).toMatch(/useFollowScroll\(`child-session:\$\{delegationId \?\? sessionPath\}`\)/);
-    expect(panel).toContain('className="child-session-body" ref={follow.viewportRef}');
+    expect(panel).toContain("useFollowScroll(scope, active)");
+    expect(panel).toContain('className="child-session-body" ref={setViewport}');
     expect(panel).toContain('className="child-session-flow" ref={follow.contentRef}');
   });
 
@@ -33,7 +33,7 @@ describe("child session panel follow scroll", () => {
     expect(panel).toMatch(/window\.harness\.delegations/);
     expect(panel).toMatch(/api\?\.onAgentEvent/);
     expect(panel).toContain("payload.delegationId !== delegationId");
-    expect(panel).toContain("applyAgentEvent(current, payload.event)");
+    expect(panel).toContain("push(payload.event)");
   });
 
   it("初次读盘返回前事件先排队，快照落定后按序补齐", () => {

@@ -126,7 +126,7 @@
 
   **定位与风险。** [FilePanel](/Users/yfdl/project/TAcode/src/renderer/browser/file-panel.tsx:18)、[FileDrawer](/Users/yfdl/project/TAcode/src/renderer/ui.tsx:2019)、[workspace:read](/Users/yfdl/project/TAcode/src/main/index.ts:737)。风险低到中等，重点是文件变更合并、项目隔离和过期读响应。
 
-- [ ] **UX-11 · 多个聊天面板保持流畅**
+- [x] **UX-11 · 多个聊天面板保持流畅**
 
   **代码确认，实际帧耗时待测。** 主会话已有按动画帧合批和虚拟列表；子会话、侧边聊天仍在事件到达时调用消息更新，子会话使用全量 `groups.map`。多个非活动面板通过 `display: none` 保持挂载，其订阅与计算也仍存在。React 自身可能合并部分更新，不能把“每个事件调用更新”直接等同于“每个事件都提交一帧”。
 

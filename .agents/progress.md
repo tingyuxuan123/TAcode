@@ -1129,3 +1129,12 @@
 - 文件：main/workspace-preview.ts、workspace-watcher.ts、index.ts；renderer/file-preview.tsx、reading-position.ts、codeblock.tsx、shiki.ts、ui.tsx、browser 文件标签；shared/preload、index.html、样式和测试。
 - 验证：全量 **124 文件 / 1033 测试通过**，`pnpm typecheck`、`git diff --check` 通过。`TACODE_PREVIEW_SMOKE=1 node scripts/test-session-activity.mjs` 使用真实 watcher/读取和生产 renderer，保存到预览更新 **238.3 ms**；覆盖滚动/选区、隐藏激活、过期响应、删除/空/失败重试及截断复制。已查看 `ux-10/file-preview-refreshed.png`；fixture read failure 为主动注入。
 - 下一项：UX-11 多聊天面板消息合批、隐藏面板减少渲染和性能回放。整份目标继续 active。
+
+## 2026-09-13：UX-11 多聊天面板合批与窗口化
+
+- [x] 子会话和侧边聊天复用 rAF 消息合批；隐藏面板继续归并到最新消息，只在激活时发布正文状态。暂停隐藏面板的跟随滚动监听，保留阅读意图；跨父会话切换也保持子面板和事件订阅。
+- [x] 两类面板使用主区 MessageList 虚拟列表与稳定分组/条目缓存；只让尾部回答处于运行态，已结束历史不跟着转圈。无转录路径的子会话直接处理实时事件，不再无期限积累等待快照的队列。
+- 验证：全量 **125 文件 / 1035 测试通过**，typecheck 与 diff check 通过；既有接线测试随新的滚动 ref/消息入口更新。四路固定速率桌面回放六次均通过，最后补充普通侧聊隐藏期间的 100 次更新、切回正文及结束状态验证通过；审批/失败/完成信息保留，已查看 `ux-11/multiple-chat-panels.png`。
+- 三轮中位数：两个隐藏正文 DOM 更新 **726 → 0**，累计 React render duration **443.6 → 0.2 ms**，App 子树 **808.3 → 380.8 ms**，输入 p95 **23.2 → 20.6 ms**。两边长任务均为 0，不称为消除了原有卡顿。条件和原始数据见 `docs/ux-11-panel-performance.md` 与 JSON；Profiler 记录 render duration，不是完整 DOM 提交耗时。
+- 文件：renderer/panel-message-stream.ts、browser/panel-message-list.tsx、child-session-panel.tsx、side-chat-panel.tsx、workbench-panels.tsx、样式；stream/接线测试、panel-performance-smoke.ts 与构建计时插件。
+- 下一项：UX-12 停止反馈、超时操作及异步进程树清理。整份目标继续 active。

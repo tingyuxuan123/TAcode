@@ -186,15 +186,16 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
             key={tab.id}
             {...sideChatProps}
             ordinal={tab.ordinal}
+            active={tab.id === active && isPanelVisible(tab, panels.session)}
             sourceSession={tab.sourceSession}
             draft={tab.draft}
             onRecreate={() => openSideChat()}
           />
         </div>
       ))}
-      {tabs.filter((tab) => tab.type === "child-session").map((tab) => (
-        <div key={tab.id} className="child-session-host" style={{ display: tab.id === active ? "flex" : "none" }}>
-          <ChildSessionPanel info={tab.info} delegationId={tab.key} />
+      {panels.tabs.filter((tab) => tab.type === "child-session").map((tab) => (
+        <div key={tab.id} className="child-session-host" style={{ display: tab.id === active && isPanelVisible(tab, panels.session) ? "flex" : "none" }}>
+          <ChildSessionPanel info={tab.info} delegationId={tab.key} active={tab.id === active && isPanelVisible(tab, panels.session)} />
         </div>
       ))}
       {tabs.filter((tab) => tab.type === "file").map((tab) => (

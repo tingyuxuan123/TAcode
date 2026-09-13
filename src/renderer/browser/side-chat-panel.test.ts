@@ -15,8 +15,8 @@ describe("side chat panel follow scroll", () => {
   const css = readFileSync(path.join(rendererDir, "styles.css"), "utf8");
 
   it("把跟随滚动的视口/内容 ref 接到面板上", () => {
-    expect(panel).toMatch(/useFollowScroll\(`side-chat:\$\{sourceSession \?\? "session"\}:\$\{ordinal\}`\)/);
-    expect(panel).toContain('className="side-chat-body" ref={follow.viewportRef}');
+    expect(panel).toContain("useFollowScroll(scope, active)");
+    expect(panel).toContain('className="side-chat-body" ref={setViewport}');
     expect(panel).toContain('className="side-chat-flow" ref={follow.contentRef}');
   });
 
