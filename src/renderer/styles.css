@@ -7634,7 +7634,16 @@ kbd {
 
 /* 子代理只读标签：内容区沿用审查面板的滚动/内边距语言 */
 /* 右侧面板的文件查看标签（过程区文件行打开） */
-.file-panel { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 14px 18px 28px; }
+.file-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.file-panel-toolbar { display: flex; align-items: center; gap: 4px; min-height: 38px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+.file-panel-toolbar > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); }
+.file-panel-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px 28px; }
+.file-preview-notice { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 16px; color: var(--ink-3); font-size: calc(12px * var(--ui-font-scale)); background: var(--inset); }
+.file-preview-notice button { flex: none; text-decoration: underline; }
+.file-preview-notice[role=alert] { color: var(--red); }
+.file-drawer-body { flex: 1; min-height: 0; overflow: auto; }
+.file-drawer-body .file-code, .file-drawer-body .file-preview, .file-drawer-body .file-diff { overflow: visible; }
+.file-drawer-body .file-frame { width: 100%; height: 100%; }
 .file-panel-code { margin: 0; font-family: var(--mono); font-size: calc(12.5px * var(--code-font-scale)); line-height: 1.6; }
 .file-panel-error { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: calc(12.5px * var(--ui-font-scale)); }
 .file-panel-frame { flex: 1; width: 100%; height: 100%; border: none; background: #fff; }

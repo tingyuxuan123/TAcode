@@ -572,7 +572,7 @@ export function App() {
   const [fullscreen, setFullscreen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FileChange>();
-  const browserPanels = useBrowserPanels();
+  const browserPanels = useBrowserPanels(workspace);
   const panelDispatch = browserPanels.dispatch;
   // 侧边聊天锚定发起时的主会话（Codex 模式临时语义）：切换/新建会话后，
   // 不属于新会话的临时侧边聊天一并关闭，runtime 由面板卸载逻辑兜底停止。

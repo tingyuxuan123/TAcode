@@ -136,7 +136,7 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
         : tab.type === "child-session"
           ? { id: tab.id, label: childSessionPanelLabel(tab.info, t("delegate.detailChildSession"), t("subagent.awaitingInput")), title: tab.info.sessionPath ?? tab.info.task ?? "" }
           : tab.type === "file"
-            ? { id: tab.id, label: filePanelLabel(tab.path), title: tab.path }
+            ? { id: tab.id, label: filePanelLabel(tab.path), title: [tab.workspace, tab.path].filter(Boolean).join("/") }
             : { id: tab.id, label: browserPanelLabel(tab.page, t("browser.newTab")), title: [tab.page?.title, tab.page?.url].filter(Boolean).join("\n") })}
       active={active}
       onSelect={selectPanel}
@@ -199,7 +199,7 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
       ))}
       {tabs.filter((tab) => tab.type === "file").map((tab) => (
         <div key={tab.id} className="child-session-host" style={{ display: tab.id === active ? "flex" : "none" }}>
-          <FilePanel path={tab.path} workspace={workspace} />
+          <FilePanel path={tab.path} workspace={tab.workspace ?? workspace} active={tab.id === active} />
         </div>
       ))}
       {tabs.filter((tab) => tab.type === "browser").map((tab) => (

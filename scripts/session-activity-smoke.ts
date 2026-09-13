@@ -11,6 +11,9 @@ import { readSessionTranscript } from "../src/main/session-transcript";
 import { SessionMaintenance } from "../src/main/session-maintenance";
 import { SessionIndex } from "../src/main/session-index";
 import { WorkspaceFileIndex } from "../src/main/workspace-file-index";
+import { WorkspaceWatchers } from "../src/main/workspace-watcher";
+import { readWorkspacePreview } from "../src/main/workspace-preview";
+import { testFilePreview, type PreviewSmokeControls } from "./file-preview-smoke";
 import { initializeTacodeHome } from "../src/runtime/home";
 import { listTacodeThreads } from "../src/runtime/state";
 import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/types";
@@ -48,7 +51,14 @@ async function smoke() {
   const startupSmoke = process.env.TACODE_STARTUP_SMOKE === "1";
   const listSmoke = process.env.TACODE_SESSION_LIST_SMOKE === "1";
   const filesSmoke = process.env.TACODE_FILES_SMOKE === "1";
+  const previewSmoke = process.env.TACODE_PREVIEW_SMOKE === "1";
+  const previewControls: PreviewSmokeControls = { reads: 0, fail: false, hold: false };
   const fileIndex = new WorkspaceFileIndex();
+  const workspaceWatchers = new WorkspaceWatchers((root, paths) => {
+    if (paths) for (const file of paths) fileIndex.changed(root, file);
+    else fileIndex.changed(root);
+    if (!closing) main?.webContents.send("workspace:changed", { root, paths });
+  });
   let fileListCalls = 0;
   let failFileList = false;
   const startupBaseline = process.env.TACODE_STARTUP_BASELINE === "1";
@@ -182,14 +192,25 @@ async function smoke() {
     ipcMain.handle("app:log-diagnostic", () => {});
     ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }]);
     ipcMain.handle("workspace:list", (_event, cwd, refresh) => {
-      if (filesSmoke) {
+      if (filesSmoke || previewSmoke) {
         fileListCalls++;
         if (failFileList) throw new Error("fixture file listing failed");
         return fileIndex.list(cwd, refresh);
       }
       return imeSmoke ? ["src/", "src/App.tsx", "src/中文.ts"] : [];
     });
-    ipcMain.handle("workspace:read", (_event, file) => ({ path: file, content: "", binary: false }));
+    ipcMain.handle("workspace:read", async (_event, file, cwd = project) => {
+      if (!previewSmoke) return { path: file, content: "", binary: false };
+      previewControls.reads++;
+      workspaceWatchers.watch(cwd);
+      if (previewControls.fail) throw new Error("fixture read failure");
+      const result = await readWorkspacePreview(path.join(cwd, file), file, previewControls.maxBytes);
+      if (previewControls.hold) {
+        previewControls.hold = false;
+        await new Promise<void>((resolve) => { previewControls.release = resolve; });
+      }
+      return result;
+    });
     ipcMain.handle("sessions:list", () => {
       if (closing) return [];
       const job = (async () => {
@@ -269,6 +290,12 @@ async function smoke() {
     manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (previewSmoke) {
+      stage = "file previews";
+      await testFilePreview(main, project, previewControls, screenshot);
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      return;
+    }
     if (filesSmoke) {
       stage = "shared complete file index and deep path search";
       await wait(() => evaluate("!!document.querySelector('.project-row')"));
@@ -639,6 +666,7 @@ async function smoke() {
   } finally {
     clearTimeout(watchdog);
     closing = true;
+    workspaceWatchers.close();
     await startupMaintenance.cancel();
     await manager.stopAll();
     main?.destroy();

@@ -37,6 +37,7 @@ export interface FilePanelTab {
   id: string;
   type: "file";
   path: string;
+  workspace?: string;
 }
 
 /**
@@ -102,7 +103,7 @@ export function delegationPanelKey(id?: string, sessionPath?: string): string {
   return "";
 }
 
-export const filePanelId = (path: string): string => `file-${path}`;
+export const filePanelId = (path: string, workspace?: string): string => workspace ? `file-${JSON.stringify([workspace, path])}` : `file-${path}`;
 export const filePanelLabel = (path: string): string => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? path;
 export const childSessionPanelId = (key: string): string => `child-session-${key}`;
 export const createChildSessionPanel = (key: string, info: ChildSessionPanelInfo): ChildSessionPanelTab => ({
@@ -129,7 +130,7 @@ export type PanelAction =
   | { type: "focus-side-chat" }
   | { type: "session-changed"; sourceSession?: string }
   | { type: "open-child-session"; panel: ChildSessionPanelTab; activate?: boolean }
-  | { type: "open-file"; path: string; activate?: boolean }
+  | { type: "open-file"; path: string; workspace?: string; activate?: boolean }
   | { type: "open-browser"; tab: BrowserPanelTab; activate: boolean }
   | { type: "select"; id: string }
   | { type: "close"; id: string }
@@ -301,10 +302,10 @@ function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
       };
     }
     case "open-file": {
-      const id = filePanelId(action.path);
+      const id = filePanelId(action.path, action.workspace);
       const exists = state.tabs.some((tab) => tab.id === id);
       if (exists) return { ...state, active: action.activate === false ? state.active : id };
-      return { tabs: [...state.tabs, { id, type: "file", path: action.path }], active: action.activate === false ? state.active : id, session: state.session, sessionActive: state.sessionActive };
+      return { tabs: [...state.tabs, { id, type: "file", path: action.path, ...(action.workspace ? { workspace: action.workspace } : {}) }], active: action.activate === false ? state.active : id, session: state.session, sessionActive: state.sessionActive };
     }
     case "open-browser":
       return {
