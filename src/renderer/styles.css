@@ -2457,6 +2457,11 @@ textarea::selection,
 .flow-tool-summary.mono { font-family: var(--mono); font-size: calc(12px * var(--code-font-scale)); }
 /* 文件名比标签亮一档（对齐 ZCode 的「微高亮」文件名） */
 .flow-tool-summary.mono { color: var(--ink-2); }
+/* 文件行（读取/写入/编辑）：文件类型图标 + 文件名 + 所在目录（对齐 ZCode 的编辑行） */
+.flow-tool-file { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.flow-tool-file-icon { display: inline-flex; flex: none; }
+.flow-tool-filename { flex-shrink: 0; color: var(--ink-2); font-weight: 500; }
+.flow-tool-dir { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); opacity: 0.75; }
 /* 编辑/补丁行的 +N −M 增删统计（对齐 ZCode 的 diffCount） */
 .flow-tool-diff { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .flow-tool-diff .add { color: var(--green); font-weight: 500; }
@@ -2468,6 +2473,8 @@ textarea::selection,
 .flow-tool-detail pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .flow-empty-detail, .flow-pending { color: var(--ink-3); font-size: calc(12px * var(--ui-font-scale)); }
 .flow-pending { display: flex; align-items: center; gap: 8px; }
+/* 会话底部的运行指示（对齐 ZCode）：贴着消息流末尾，小而低调 */
+.flow-running-indicator { display: flex; align-items: center; padding: 10px 0 2px 6px; color: var(--ink-3); }
 .flow-reply + .flow-reply { margin-top: 14px; }
 .flow-error { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0; color: var(--red); font-size: calc(13px * var(--ui-font-scale)); overflow-wrap: anywhere; }
 .flow-error > svg { flex: none; margin-top: 3px; }
@@ -2512,7 +2519,9 @@ textarea::selection,
 .progress-task.nested::before { content: ""; position: absolute; left: 14px; top: 50%; width: 7px; height: 1px; background: var(--line-strong); }
 .progress-task-ordinal { flex: none; min-width: 12px; color: var(--ink-3); font-size: calc(11px * var(--ui-font-scale)); font-variant-numeric: tabular-nums; text-align: right; }
 .progress-role-chip { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--ink-3); font-size: calc(10.5px * var(--ui-font-scale)); }
-.flow-spinner { animation: flow-spin 1.1s linear infinite; }
+/* 八叶 Loader 用步进旋转：每步 45° 正好对齐相邻叶片，是经典的“咔咔转”观感
+   （圆弧形的 LoaderCircle 用 linear 才对，所以两条规则分开写） */
+.flow-spinner { animation: flow-spin 0.9s steps(8) infinite; }
 @keyframes flow-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .conversation-latest, .progress-overlay, .progress-overlay-trigger, .progress-task { transition: none; }

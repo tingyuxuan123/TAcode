@@ -1592,7 +1592,7 @@ export function toolRow(tool: ToolActivity, index = 0, tools?: ToolActivity[]): 
       label: isEdit ? ct("trace.edit") : lines > 0 ? ct("trace.writeLines", { n: lines }) : ct("trace.write"),
       chip: baseName(file),
       path: file || undefined,
-      diff: isEdit && patch.trim() ? patchStats(patch) : undefined,
+      diff: isEdit ? editDiffStats(tool, patch) : undefined,
     };
   }
   if (/grep|glob|search|find/.test(name)) {
@@ -1614,6 +1614,20 @@ function patchStats(patch: string): { added: number; removed: number } {
     added: rows.filter((row) => row.kind === "add").length,
     removed: rows.filter((row) => row.kind === "del").length,
   };
+}
+
+/**
+ * 编辑行的增删统计：优先数补丁参数（args.input）；有些 edit 工具不回传补丁，
+ * 退回工具结果里的统计（details.additions/deletions，再退 output 里的「+N -M」摘要）。
+ */
+function editDiffStats(tool: ToolActivity, patch: string): { added: number; removed: number } | undefined {
+  if (patch.trim()) return patchStats(patch);
+  const details = isRecord(tool.details) ? tool.details : {};
+  const added = typeof details.additions === "number" ? details.additions : 0;
+  const removed = typeof details.deletions === "number" ? details.deletions : 0;
+  if (added > 0 || removed > 0) return { added, removed };
+  const fromOutput = changesFromOutput(tool.output).find((change) => change.additions > 0 || change.deletions > 0);
+  return fromOutput ? { added: fromOutput.additions, removed: fromOutput.deletions } : undefined;
 }
 
 export function webSearchCard(tool: ToolActivity) {

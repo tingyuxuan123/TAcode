@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { contextCapacity, generationSpeed } from "./context-stats";
-import { Bot, Check, Download, Info, MessageCirclePlus, PanelLeftClose, PanelLeftOpen, Blocks, Target, X } from "lucide-react";
+import { Bot, Check, Download, Info, Loader, MessageCirclePlus, PanelLeftClose, PanelLeftOpen, Blocks, Target, X } from "lucide-react";
 import { Streamdown, defaultRehypePlugins, defaultRemarkPlugins, type Components } from "streamdown";
 import type { AgentSessionStats, ExtensionUiRequest, PermissionMode } from "../shared/types";
 import { workspacePreviewUrl } from "../shared/preview";
@@ -1442,6 +1442,7 @@ export const AssistantTurn = memo(function AssistantTurn({
   errorRecovered = false,
   recoverableFailStreak = 0,
   onRetry,
+  workspace,
 }: {
   messages: ChatMessage[];
   running?: boolean;
@@ -1455,6 +1456,8 @@ export const AssistantTurn = memo(function AssistantTurn({
   errorRecovered?: boolean;
   recoverableFailStreak?: number;
   onRetry?(): void;
+  /** 当前工作区：文件行据此展示相对目录（对齐 ZCode）。 */
+  workspace?: string;
 }) {
   const view = useMemo(() => buildTurnPresentation(messages), [messages]);
   const tools = view.tools;
@@ -1490,6 +1493,7 @@ export const AssistantTurn = memo(function AssistantTurn({
         onOpenFile={onOpenPath}
         renderText={renderFlowText}
         renderTool={renderFlowTool}
+        workspace={workspace}
       />
       <ChangeSummary files={changes} onOpen={onOpenFile} />
       {!live && text.trim() && (
@@ -1503,6 +1507,15 @@ export const AssistantTurn = memo(function AssistantTurn({
 
 function fileGlyph(path: string) {
   return /\.(tsx?|jsx?|mjs|cjs|css|json|ya?ml)$/i.test(path) ? "M8 8l-4 4 4 4M16 8l4 4-4 4" : "M6 3h9l5 5v13H6z";
+}
+
+/**
+ * 八叶加载圈（对齐 ZCode 的运行指示）：比圆弧形 LoaderCircle 的旋转醒目得多，
+ * 配合 `.flow-spinner` 的 steps(8) 步进旋转就是经典的“咔咔转”观感。
+ * 主会话底部的运行指示与过程区的运行中工具行共用。
+ */
+export function FlowSpinner({ size = 15, label }: { size?: number; label?: string }) {
+  return <Loader size={size} className="flow-spinner" aria-hidden={label ? undefined : true} aria-label={label} />;
 }
 
 export type PanelTab = { id: string; label: string; title?: string; icon?: ReactNode };

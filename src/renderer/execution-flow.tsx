@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
-import { Brain, ChevronRight, CircleAlert, CircleHelp, FilePenLine, FileText, Globe, LoaderCircle, Search, SquareTerminal, Workflow, Wrench } from "lucide-react";
-import { toolRow, type buildTurnPresentation, type ToolActivity, type WorkItem } from "./conversation";
+import { Brain, ChevronRight, CircleAlert, CircleHelp, FilePenLine, FileText, Globe, Loader, Search, SquareTerminal, Workflow, Wrench } from "lucide-react";
+import { FileIcon } from "@react-symbols/icons/utils";
+import { baseName, toolRow, workspaceRelative, type buildTurnPresentation, type ToolActivity, type WorkItem } from "./conversation";
 import { useI18n } from "./i18n";
 
 type Presentation = ReturnType<typeof buildTurnPresentation>;
@@ -131,8 +132,8 @@ const Thought = memo(function Thought({ itemId, text, active, expanded, pending,
 });
 
 const toolIcons = { think: Brain, run: SquareTerminal, write: FilePenLine, read: FileText, search: Search, look: Globe, tool: Wrench };
-const ToolLine = memo(function ToolLine({ itemId, tool, expanded, onToggle, onOpenFile, render }: {
-  itemId: string; tool: ToolActivity; expanded: boolean; onToggle(id: string, defaultOpen?: boolean): void;
+const ToolLine = memo(function ToolLine({ itemId, tool, workspace, expanded, onToggle, onOpenFile, render }: {
+  itemId: string; tool: ToolActivity; workspace?: string; expanded: boolean; onToggle(id: string, defaultOpen?: boolean): void;
   /** 文件类工具行点击时在右侧面板开文件标签（对齐 ZCode 的 code viewer）；缺省回退行内展开。 */
   onOpenFile?(path: string): void;
   render(tool: ToolActivity): ReactNode;
@@ -148,12 +149,24 @@ const ToolLine = memo(function ToolLine({ itemId, tool, expanded, onToggle, onOp
   // 文件行（读取/写入/编辑）点击开右侧文件标签，不做行内展开——对齐 ZCode 的
   // code viewer 交互；没有 onOpenFile（探针环境）时保持旧行为。
   const fileRow = Boolean(row.path) && Boolean(onOpenFile);
+  // 文件行用 ZCode 式展示：文件类型图标 + 文件名 + 所在目录（workspace 相对路径）。
+  const fileName = row.path ? baseName(row.path) : "";
+  const relPath = row.path && workspace ? workspaceRelative(row.path, workspace) : undefined;
+  const dir = relPath && relPath.includes("/") ? relPath.slice(0, relPath.lastIndexOf("/") + 1) : undefined;
   return (
     <div className={`flow-tool${error ? " error" : ""}`} data-tool-id={tool.id}>
       <button type="button" className="flow-tool-line" aria-expanded={fileRow ? undefined : expanded} aria-controls={fileRow ? undefined : id} onClick={() => { if (fileRow) onOpenFile?.(row.path!); else onToggle(itemId, error); }} title={[tool.name, row.label, row.chip, state].filter(Boolean).join(" · ")}>
-        {pending ? <LoaderCircle size={15} className="flow-spinner" aria-hidden="true" /> : error ? <CircleAlert size={15} aria-hidden="true" /> : unknown ? <CircleHelp size={15} aria-hidden="true" /> : <Glyph size={15} aria-hidden="true" />}
+        {pending ? <Loader size={15} className="flow-spinner" aria-hidden="true" /> : error ? <CircleAlert size={15} aria-hidden="true" /> : unknown ? <CircleHelp size={15} aria-hidden="true" /> : <Glyph size={15} aria-hidden="true" />}
         <span className="flow-tool-label">{row.label}</span>
-        {row.chip && <><span className="flow-separator" aria-hidden="true">·</span><span className={`flow-tool-summary${row.mono ? " mono" : ""}`}>{row.chip}</span></>}
+        {fileName ? (
+          <span className="flow-tool-file">
+            <span className="flow-tool-file-icon" aria-hidden="true">
+              <FileIcon fileName={fileName} autoAssign width={13} height={13} />
+            </span>
+            <span className="flow-tool-filename">{fileName}</span>
+            {dir && <span className="flow-tool-dir">{dir}</span>}
+          </span>
+        ) : row.chip && <><span className="flow-separator" aria-hidden="true">·</span><span className={`flow-tool-summary${row.mono ? " mono" : ""}`}>{row.chip}</span></>}
         {row.diff && (row.diff.added > 0 || row.diff.removed > 0) && (
           <span className="flow-tool-diff">
             {row.diff.added > 0 && <b className="add">+{row.diff.added}</b>}
@@ -191,7 +204,7 @@ const FreezeCell = memo(function FreezeCell({ freeze, signature, build }: {
   return cache.current.node;
 });
 
-export function ExecutionFlow({ view, live, streaming, awaiting, stopping, interrupted, error, errorTone, clock, canAutoCollapse = true, onRetry, onOpenFile, renderText, renderTool }: {
+export function ExecutionFlow({ view, live, streaming, awaiting, stopping, interrupted, error, errorTone, clock, canAutoCollapse = true, onRetry, onOpenFile, renderText, renderTool, workspace }: {
   view: Presentation;
   live: boolean;
   streaming: boolean;
@@ -208,6 +221,8 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
   onOpenFile?(path: string): void;
   renderText: TextRenderer;
   renderTool(tool: ToolActivity): ReactNode;
+  /** 当前工作区：文件行用它算出相对目录展示（对齐 ZCode 的「文件名 + 目录」）。 */
+  workspace?: string;
 }) {
   const { t } = useI18n();
   const failed = Boolean(error) || view.tools.some((tool) => tool.status === "error");
@@ -304,7 +319,7 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
           : item.type === "text" ? <FlowText text={item.text} streaming={item.id === active?.id && live} render={renderText} />
             : (() => {
               const tool = toolMap.get(item.toolId);
-              return tool ? <ToolLine itemId={item.id} tool={tool} expanded={expanded[item.id] ?? tool.status === "error"} onToggle={toggleItem} onOpenFile={onOpenFile} render={renderTool} /> : null;
+              return tool ? <ToolLine itemId={item.id} tool={tool} workspace={workspace} expanded={expanded[item.id] ?? tool.status === "error"} onToggle={toggleItem} onOpenFile={onOpenFile} render={renderTool} /> : null;
             })()}
       </div>
     );
@@ -334,7 +349,7 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
               <div id={id} className="flow-viewport scrollbar-none" aria-label={t("flow.process")}>
                 <div className="flow-items">
                   {processEntries.map(renderEntry)}
-                  {live && !view.items.length && <div className="flow-pending"><LoaderCircle size={14} className="flow-spinner" aria-hidden="true" />{t("think.waiting")}</div>}
+                  {live && !view.items.length && <div className="flow-pending"><Loader size={14} className="flow-spinner" aria-hidden="true" />{t("think.waiting")}</div>}
                 </div>
               </div>
             </div>}

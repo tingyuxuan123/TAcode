@@ -61,6 +61,7 @@ import {
   Chat,
   Dots,
   FileDrawer,
+  FlowSpinner,
   Icon,
   InspectPanel,
   Login,
@@ -1742,6 +1743,7 @@ export function App() {
             recoverableFailStreak={recoverableFailStreak}
             onOpenFile={setPreview}
             onOpenPath={(path) => browserPanels.openFile(path)}
+            workspace={workspace}
             onRetry={showRetry ? () => {
               void sendMessage(t("composer.retryContinue"));
             } : undefined}
@@ -1792,6 +1794,18 @@ export function App() {
             }}
             onError={setToast}
           />
+        ),
+      });
+    }
+    // 会话底部的运行指示（对齐 ZCode）：回合进行中在消息流末尾挂一个加载圈，
+    // 等审批（uiRequest）或正在停止时不挂——这两种状态各有自己的呈现，圈会撒谎。
+    if (running && !stopping && !uiRequest) {
+      items.push({
+        key: "flow-running",
+        render: () => (
+          <div className="flow-running-indicator">
+            <FlowSpinner size={14} />
+          </div>
         ),
       });
     }
