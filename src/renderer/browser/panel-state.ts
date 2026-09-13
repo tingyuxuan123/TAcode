@@ -50,6 +50,11 @@ export interface ChildSessionPanelInfo {
    * 卡片入口与侧栏入口都会带上它；进程内委派没有文件，此时只有报告/活动流可看。
    */
   sessionPath?: string;
+  /**
+   * 所属主会话（父会话）路径：子会话标签只在该会话的上下文里显示，切走隐藏、
+   * 切回恢复（与侧边聊天的 sourceSession 同一套规则）。未记录的旧标签保持可见。
+   */
+  parentSession?: string;
   /** 标签标题用（子会话标题/任务摘要），缺省回落到 role。 */
   title?: string;
   status?: string;
@@ -138,13 +143,20 @@ export const initialPanelState: PanelState = { tabs: [{ id: "review", type: "rev
 /** 会话记忆的 key：首页（无会话）用空串，和 undefined 区分开。 */
 const sessionActiveKey = (session: string | undefined): string => session ?? "";
 
-/** 侧边聊天只属于发起它的主会话：会话不匹配就在标签栏隐藏（组件保持挂载，切回即恢复）。 */
-export const isSideChatVisible = (tab: WorkbenchPanelTab, session: string | undefined): boolean =>
-  tab.type !== "side-chat" || tab.sourceSession === session;
+/**
+ * 标签是否属于当前主会话上下文：侧边聊天锚定发起会话，委派子会话标签锚定父会话
+ * （info.parentSession 未记录的旧标签保持可见），其余类型全可见。不可见的标签保持
+ * 挂载，切回对应会话原样恢复。
+ */
+export const isPanelVisible = (tab: WorkbenchPanelTab, session: string | undefined): boolean => {
+  if (tab.type === "side-chat") return tab.sourceSession === session;
+  if (tab.type === "child-session") return !tab.info.parentSession || tab.info.parentSession === session;
+  return true;
+};
 
-/** 标签栏与面板主体应展示的标签（对侧边聊天按当前主会话过滤，其余类型全可见）。 */
+/** 标签栏与面板主体应展示的标签（侧边聊天与子会话标签按当前主会话过滤，其余类型全可见）。 */
 export function visiblePanelTabs(state: PanelState): WorkbenchPanelTab[] {
-  return state.tabs.filter((tab) => isSideChatVisible(tab, state.session));
+  return state.tabs.filter((tab) => isPanelVisible(tab, state.session));
 }
 export const createBrowserPanelId = (): string => `browser-${crypto.randomUUID()}`;
 export const createBrowserPanel = (id: string, page?: BrowserTabSnapshot): BrowserPanelTab => ({
@@ -222,16 +234,16 @@ function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
     }
     case "focus-side-chat": {
       // 快捷键语义：当前会话已有侧边聊天时聚焦最新一个，一个都没有才新建（避免连按爆标签）。
-      const existing = state.tabs.filter((tab) => isSideChatVisible(tab, state.session));
+      const existing = state.tabs.filter((tab) => tab.type === "side-chat" && isPanelVisible(tab, state.session));
       if (existing.length > 0) return { ...state, active: existing[existing.length - 1].id, session: state.session };
       const tab = createSideChatPanel(nextSideChatOrdinal(state.tabs), { sourceSession: state.session });
       return { tabs: [...state.tabs, tab], active: tab.id, session: state.session, sessionActive: state.sessionActive };
     }
     case "session-changed": {
       if (state.session === action.sourceSession) return state;
-      // 只切换「当前主会话」上下文：别的会话的侧边聊天从标签栏隐藏但保持挂载，
-      // 切回来原样恢复；只有手动关闭（带确认）或退出应用才真正销毁。
-      const isVisible = (tab: WorkbenchPanelTab) => isSideChatVisible(tab, action.sourceSession);
+      // 只切换「当前主会话」上下文：别的会话的侧边聊天与子会话标签从标签栏隐藏但保持
+      // 挂载，切回来原样恢复；只有手动关闭（带确认）或退出应用才真正销毁。
+      const isVisible = (tab: WorkbenchPanelTab) => isPanelVisible(tab, action.sourceSession);
       // 每个会话记住自己上次的激活标签：离开时记录当前激活，回来时优先恢复记忆；
       // 记忆的标签已被关闭时，回落到新上下文里离它最近的可见标签。
       const sessionActive = { ...state.sessionActive, [sessionActiveKey(state.session)]: state.active };
@@ -262,14 +274,20 @@ function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
         const merged: ChildSessionPanelTab = { ...existing, info: { ...existing.info, ...action.panel.info } };
         return {
           tabs: state.tabs.map((tab) => tab.id === existing.id ? merged : tab),
-          // 实时刷新（activate=false）不抢焦点：用户在看别的标签时不该被顶走。
-          active: action.activate === false ? state.active : existing.id,
+          // 实时刷新（activate=false）不抢焦点；别的会话的标签同样不抢（打开即隐藏，
+          // 把 active 指过去会让面板主体空掉）。
+          active: action.activate === false || !isPanelVisible(merged, state.session) ? state.active : existing.id,
           session: state.session,
           sessionActive: state.sessionActive,
         };
       }
-      // 自动开标签时抢焦点；后台更新（activate=false）只建标签不切换。
-      return { tabs: [...state.tabs, action.panel], active: action.activate === false ? state.active : action.panel.id, session: state.session, sessionActive: state.sessionActive };
+      // 自动开标签时抢焦点；后台更新（activate=false）与别的会话的标签只建不切换。
+      return {
+        tabs: [...state.tabs, action.panel],
+        active: action.activate === false || !isPanelVisible(action.panel, state.session) ? state.active : action.panel.id,
+        session: state.session,
+        sessionActive: state.sessionActive,
+      };
     }
     case "open-file": {
       const id = filePanelId(action.path);

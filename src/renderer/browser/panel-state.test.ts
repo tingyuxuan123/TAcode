@@ -258,4 +258,33 @@ describe("子代理子会话标签状态", () => {
     expect(childSessionPanelLabel({ role: "explorer", task: "分析委派链路" }, "子代理会话", "等待确认"))
       .toBe("分析委派链路");
   });
+
+  it("子会话标签只属于父会话：切走隐藏（保持挂载），切回恢复激活", () => {
+    let state = panelReducer(initialPanelState, { type: "session-changed", sourceSession: "/sessions/a.jsonl" });
+    state = panelReducer(state, { type: "open-child-session", panel: panel("delegation-1", { parentSession: "/sessions/a.jsonl" }) });
+    const childTab = state.tabs.at(-1)!.id;
+    state = panelReducer(state, { type: "open-terminal" });
+    state = panelReducer(state, { type: "select", id: childTab });
+    // 切到会话 b：a 的子会话标签隐藏但保持挂载，激活回落到它之前最近的可见标签（审查）。
+    state = panelReducer(state, { type: "session-changed", sourceSession: "/sessions/b.jsonl" });
+    expect(state.tabs.some((tab) => tab.id === childTab)).toBe(true);
+    expect(visiblePanelTabs(state).filter((tab) => tab.type === "child-session")).toHaveLength(0);
+    expect(state.active).toBe("review");
+    // 切回 a：恢复 a 记住的激活标签（子会话标签）。
+    state = panelReducer(state, { type: "session-changed", sourceSession: "/sessions/a.jsonl" });
+    expect(state.active).toBe(childTab);
+    expect(visiblePanelTabs(state).filter((tab) => tab.type === "child-session")).toHaveLength(1);
+  });
+
+  it("没记录 parentSession 的旧标签保持可见（兼容不识父会话的入口）", () => {
+    const state = panelReducer({ ...initialPanelState, session: "/sessions/a.jsonl" }, { type: "open-child-session", panel: panel("delegation-1") });
+    expect(visiblePanelTabs(state).filter((tab) => tab.type === "child-session")).toHaveLength(1);
+  });
+
+  it("别的会话的子会话标签打开时不抢激活标签（避免 active 指向隐藏标签）", () => {
+    let state = panelReducer(initialPanelState, { type: "session-changed", sourceSession: "/sessions/b.jsonl" });
+    state = panelReducer(state, { type: "open-child-session", panel: panel("delegation-1", { parentSession: "/sessions/a.jsonl" }) });
+    expect(state.tabs.some((tab) => tab.type === "child-session")).toBe(true);
+    expect(state.active).toBe("review");
+  });
 });

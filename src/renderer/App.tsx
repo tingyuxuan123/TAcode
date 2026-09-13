@@ -84,7 +84,7 @@ import { useSidebarLayout } from "./sidebar-layout";
 import { branchAutoExpanded, groupDelegatedSessions } from "./session-tree";
 import { ProgressOverlay } from "./progress-overlay";
 import { PanelActionsProvider } from "./panel-actions";
-import { delegationPanelKey } from "./browser/panel-state";
+import { delegationPanelKey, type ChildSessionPanelInfo } from "./browser/panel-state";
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
 import { useAgentActivities } from "./use-agent-activities";
@@ -563,8 +563,11 @@ export function App() {
   // 直接走 browserPanels 原入口、不经过这里，不抢抽屉。
   const [drawerSignal, setDrawerSignal] = useState(0);
   const openChildSessionFromClick = useCallback(
-    (...args: Parameters<typeof browserPanels.openChildSession>) => {
-      browserPanels.openChildSession(...args);
+    (key: string, info: ChildSessionPanelInfo, options?: { activate?: boolean }) => {
+      // 子会话标签锚定父会话（可见性跟会话走）：点击都发生在当前主会话的上下文里，
+      // 委派卡片深链拿不到会话路径，在这里兜底补上；侧栏行自带准确的 parentSessionPath，
+      // 展开覆盖这个默认值。
+      browserPanels.openChildSession(key, { parentSession: sessionRef.current, ...info }, options);
       setDrawerSignal((value) => value + 1);
     },
     [browserPanels.openChildSession],
@@ -1041,6 +1044,9 @@ export function App() {
     openChildSessionFromClick(key, {
       role: session.delegationRole ?? "subagent",
       sessionPath: session.path,
+      // 标签归属父会话（可见性跟会话走）：当前会话是某个子会话时点兄弟行，
+      // parentSessionPath 仍是父会话，不能依赖兜底的 sessionRef.current。
+      ...(session.parentSessionPath ? { parentSession: session.parentSessionPath } : {}),
       ...(session.title ? { title: session.title } : {}),
       ...(session.delegationStatus ? { status: session.delegationStatus } : {}),
       ...(Number.isFinite(startedAt) ? { startedAt } : {}),

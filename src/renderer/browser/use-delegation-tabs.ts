@@ -47,6 +47,7 @@ export function useDelegationTabs(
       openKeys,
       autoOpenedKeys: autoOpened.current,
       attentionSeen: attentionSeen.current,
+      parentSession: parentSessionPath,
     });
     if (plan.autoOpened.length === 0 && plan.requests.length === 0) return;
     for (const key of plan.autoOpened) autoOpened.current.add(key);
@@ -54,5 +55,5 @@ export function useDelegationTabs(
     for (const request of plan.requests) {
       openChildSession(request.key, request.info, { activate: request.activate });
     }
-  }, [delegations, openKeys, openChildSession]);
+  }, [delegations, openKeys, openChildSession, parentSessionPath]);
 }

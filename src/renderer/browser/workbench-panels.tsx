@@ -9,7 +9,7 @@ import { ChildSessionPanel } from "./child-session-panel";
 import { FilePanel } from "./file-panel";
 import { SideChatPanel } from "./side-chat-panel";
 import { TerminalPanel } from "./terminal-panel";
-import { browserPanelLabel, childSessionPanelLabel, filePanelLabel, isSideChatVisible, visiblePanelTabs, type SideChatPanelTab } from "./panel-state";
+import { browserPanelLabel, childSessionPanelLabel, filePanelLabel, isPanelVisible, visiblePanelTabs, type SideChatPanelTab } from "./panel-state";
 import type { useBrowserPanels } from "./use-browser-panels";
 import { SkillsPanel } from "../capabilities/skills-panel";
 import { McpPanel } from "../capabilities/mcp-panel";
@@ -51,7 +51,7 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
 }) {
   const { t } = useI18n();
   const { active, dispatch, openPanel, openBrowser, openSideChat, closePanel, selectPanel } = panels;
-  // 标签栏只显示当前主会话的侧边聊天；其他会话的实例保持挂载（display:none），切回即原样恢复。
+  // 标签栏只显示当前主会话上下文的标签（侧边聊天、子会话标签跟会话走）；其他会话的实例保持挂载（display:none），切回即原样恢复。
   const tabs = visiblePanelTabs(panels);
   const activeTab = tabs.find((tab) => tab.id === active);
   // 快捷键提示跟随平台样式；浏览器暂无快捷键，不显示提示。
@@ -181,7 +181,7 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
         </div>
       ))}
       {panels.tabs.filter((tab) => tab.type === "side-chat").map((tab) => (
-        <div key={tab.id} className="panel-host" style={{ display: tab.id === active && isSideChatVisible(tab, panels.session) ? "flex" : "none" }}>
+        <div key={tab.id} className="panel-host" style={{ display: tab.id === active && isPanelVisible(tab, panels.session) ? "flex" : "none" }}>
           <SideChatPanel
             key={tab.id}
             {...sideChatProps}

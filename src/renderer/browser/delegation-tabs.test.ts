@@ -83,6 +83,23 @@ describe("planDelegationTabs", () => {
     expect(plan.autoOpened).toEqual(["delegation-1"]);
   });
 
+  it("info 带上父会话（parentSession），标签可见性因此跟会话走", () => {
+    const plan = planDelegationTabs({
+      delegations: [summary()],
+      openKeys: new Set(),
+      autoOpenedKeys: new Set(),
+      parentSession: "/sessions/parent.jsonl",
+    });
+    expect(plan.requests[0]?.info.parentSession).toBe("/sessions/parent.jsonl");
+    // 调用方没给父会话时不写字段，标签按兼容规则保持可见。
+    const unstamped = planDelegationTabs({
+      delegations: [summary()],
+      openKeys: new Set(),
+      autoOpenedKeys: new Set(),
+    });
+    expect(unstamped.requests[0] && "parentSession" in unstamped.requests[0].info).toBe(false);
+  });
+
   it("已开着的标签只做实时刷新、不抢焦点", () => {
     const plan = planDelegationTabs({
       delegations: [summary({ toolCalls: 9, live: "正在读取 index.ts" })],

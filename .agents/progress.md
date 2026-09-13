@@ -1,5 +1,14 @@
 # 模型供应商管理进度
 
+## 2026-09-13：右侧面板子会话标签只跟随当前会话（15:50，Asia/Shanghai）
+
+- 起因：用户贴截图指出上一条只修了左侧栏——右侧面板的委派子会话标签（审查 / 只读任务…）在切换会话后仍然显示上一个会话的子代理。根因：标签存在全局列表里，`ChildSessionPanelInfo` 没有父会话字段，切换会话不清理（当初「标签开了就保留」的设计）。用户拍板方案 A：隐藏而非关闭，切回恢复。
+- 改动：
+  1. `browser/panel-state.ts`：`ChildSessionPanelInfo` 新增 `parentSession`；`isSideChatVisible` 泛化为 `isPanelVisible`——侧边聊天锚定发起会话、子会话标签锚定父会话（未记录 parentSession 的旧标签保持可见兜底），复用现成的 `session-changed` 每会话激活记忆/恢复逻辑；`open-child-session` 对「打开即隐藏」的标签不抢 active（避免面板主体空掉）；`focus-side-chat` 的「已有侧边聊天」判断改为只数侧边聊天，不被子会话标签干扰。
+  2. 三个入口都打上父会话：侧栏行用 `session.parentSessionPath`（当前会话是子会话点兄弟行时也准确）；委派卡片深链在 `openChildSessionFromClick` 里用 `sessionRef.current` 兜底；自动开标签链路 `planDelegationTabs` 新增 `parentSession` 入参、由 `useDelegationTabs` 传入。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 111 文件 979 用例全绿（新增：子会话标签切会话隐藏/恢复、旧标签兜底可见、异会话标签不抢 active、plan 写入 parentSession）。用户实测验收交互。
+- 提交说明：本次提交只含上述文件；App.tsx 采用「HEAD + 仅本条改动」合成版本入暂存区——工作区里并行的 UX-02（composer-drafts 草稿保存）改动留在工作区由其会话提交。UX-01 已由并行会话以 7393f31 提交，与本条无冲突。
+
 ## 2026-09-13：侧栏子代理只跟随当前会话（15:25，Asia/Shanghai）
 
 - 起因：用户指出「侧边栏的子代理应该是相对于当前会话的，如果切换会话，那么侧边栏子代理不应该看到」。旧规则是「父会话活跃，或任一子会话活跃/运行中」，再叠加一个整局持久的 `railOpen` 手动开合覆盖——两条路都会让别的会话的子代理在切换后仍然挂着：手动开合跨会话残留；后台运行中的子会话把非当前分支强行展开。

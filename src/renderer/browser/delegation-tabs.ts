@@ -102,6 +102,8 @@ export function planDelegationTabs(input: {
   autoOpenedKeys: ReadonlySet<string>;
   /** 已经提醒过的审批请求 id：同一个请求只抢一次焦点，应答后不再重开标签。 */
   attentionSeen?: ReadonlySet<string>;
+  /** 委派所属的父会话：写进标签 info，可见性才能跟会话走。 */
+  parentSession?: string;
 }): { requests: DelegationTabRequest[]; autoOpened: string[]; /** 本次新出现的审批请求 id（调用方负责记入 attentionSeen）。 */ attention: string[] } {
   const requests: DelegationTabRequest[] = [];
   const autoOpened: string[] = [];
@@ -115,6 +117,7 @@ export function planDelegationTabs(input: {
       title: item.task.replace(/\s+/g, " ").trim().slice(0, TITLE_CHARS),
       task: item.task,
       sessionPath: item.childSessionPath,
+      ...(input.parentSession ? { parentSession: input.parentSession } : {}),
       status: item.status,
       live: item.live,
       report: item.report,
