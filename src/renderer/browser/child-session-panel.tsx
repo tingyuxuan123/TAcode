@@ -9,6 +9,7 @@ import {
 } from "../conversation";
 import { useI18n } from "../i18n";
 import { ApprovalCard, AssistantTurn, Markdown, UserTurn } from "../ui";
+import { useFollowScroll } from "../use-follow-scroll";
 import type { ChildSessionPanelInfo } from "./panel-state";
 
 /** 运行中标签的刷新间隔：子会话 JSONL 边跑边写，面板按此频率跟随。 */
@@ -62,6 +63,13 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
   const [stopping, setStopping] = useState(false);
   const [controlError, setControlError] = useState("");
   const isRunning = info.status === "running" || info.status === "pending";
+
+  /**
+   * 子会话是只读直播：内容每 2s 追加一段，视图必须跟着最新走。
+   * 用户往上滚时自动停止跟随、滚回底部附近再恢复（与主转录同一套语义）；
+   * 标签页切回时容器尺寸变化会重新贴底（隐藏标签保持挂载、display:none → 尺寸 0）。
+   */
+  const follow = useFollowScroll(`child-session:${delegationId ?? sessionPath}`);
 
   useEffect(() => {
     setMessages([]);
@@ -143,61 +151,64 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
           </button>
         )}
       </header>
-      <div className="child-session-body">
-        {controlError && <p className="child-session-note is-error" role="alert">{controlError}</p>}
-        {info.status === "failed" && info.error && <p className="child-session-note is-error" role="alert">{info.error}</p>}
-        {info.uiRequest && delegationId && (
-          <ApprovalCard
-            key={info.uiRequest.id}
-            request={info.uiRequest}
-            onDone={() => setControlError("")}
-            onError={setControlError}
-            onRespond={(response) => window.harness.delegations.respondToUi(delegationId, info.uiRequest!.id, response)}
-          />
-        )}
-        {info.live?.trim() && isRunning && !info.uiRequest && (
-          <p className="child-session-live-step">
-            <LoaderCircle size={12} className="progress-spinner" aria-hidden="true" />
-            <span>{info.live}</span>
-          </p>
-        )}
-        {info.task?.trim() && <p className="child-session-task">{info.task}</p>}
-        {truncated && <p className="child-session-note">{t("subagent.truncated")}</p>}
-        {!readable && <p className="child-session-note">{t("subagent.noTranscript")}</p>}
-        {readable && phase === "loading" && <p className="child-session-note">{t("preview.reading")}</p>}
-        {readable && phase === "error" && <p className="child-session-note is-error">{error}</p>}
-        {readable && phase === "ready" && groups.length === 0 && (
-          <p className="child-session-note">{isRunning ? t("preview.reading") : t("chat.emptySession")}</p>
-        )}
-        {groups.map((group, index) => group.type === "user"
-          ? <UserTurn key={group.id} text={group.message.text} images={group.message.images} />
-          : (
-            <AssistantTurn
-              key={group.id}
-              messages={group.messages}
-              running={isRunning && index === groups.length - 1}
-              canAutoCollapse={false}
+      <div className="child-session-body" ref={follow.viewportRef}>
+        {/* contentRef 必须挂在内层：只观察滚动容器本身，内容长高（容器高度不变）时不会触发。 */}
+        <div className="child-session-flow" ref={follow.contentRef}>
+          {controlError && <p className="child-session-note is-error" role="alert">{controlError}</p>}
+          {info.status === "failed" && info.error && <p className="child-session-note is-error" role="alert">{info.error}</p>}
+          {info.uiRequest && delegationId && (
+            <ApprovalCard
+              key={info.uiRequest.id}
+              request={info.uiRequest}
+              onDone={() => setControlError("")}
+              onError={setControlError}
+              onRespond={(response) => window.harness.delegations.respondToUi(delegationId, info.uiRequest!.id, response)}
             />
-          ))}
-        {info.report?.trim() && (!readable || phase === "error" || groups.length === 0) && (
-          <section className="child-session-section">
-            <h4>{t("delegate.detailReport")}</h4>
-            <div className="child-session-report markdown"><Markdown>{info.report}</Markdown></div>
-          </section>
-        )}
-        {activity.length > 0 && (
-          <section className="child-session-section">
-            <h4>{t("delegate.detailActivity")}</h4>
-            <ul className="delegate-activity">
-              {activity.map((entry, index) => (
-                <li key={`${entry.at}-${index}`} className={`delegate-activity-item kind-${entry.kind}${entry.isError ? " is-error" : ""}`}>
-                  <time>{new Date(entry.at).toLocaleTimeString()}</time>
-                  <span>{entry.text}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
+          )}
+          {info.live?.trim() && isRunning && !info.uiRequest && (
+            <p className="child-session-live-step">
+              <LoaderCircle size={12} className="progress-spinner" aria-hidden="true" />
+              <span>{info.live}</span>
+            </p>
+          )}
+          {info.task?.trim() && <p className="child-session-task">{info.task}</p>}
+          {truncated && <p className="child-session-note">{t("subagent.truncated")}</p>}
+          {!readable && <p className="child-session-note">{t("subagent.noTranscript")}</p>}
+          {readable && phase === "loading" && <p className="child-session-note">{t("preview.reading")}</p>}
+          {readable && phase === "error" && <p className="child-session-note is-error">{error}</p>}
+          {readable && phase === "ready" && groups.length === 0 && (
+            <p className="child-session-note">{isRunning ? t("preview.reading") : t("chat.emptySession")}</p>
+          )}
+          {groups.map((group, index) => group.type === "user"
+            ? <UserTurn key={group.id} text={group.message.text} images={group.message.images} />
+            : (
+              <AssistantTurn
+                key={group.id}
+                messages={group.messages}
+                running={isRunning && index === groups.length - 1}
+                canAutoCollapse={false}
+              />
+            ))}
+          {info.report?.trim() && (!readable || phase === "error" || groups.length === 0) && (
+            <section className="child-session-section">
+              <h4>{t("delegate.detailReport")}</h4>
+              <div className="child-session-report markdown"><Markdown>{info.report}</Markdown></div>
+            </section>
+          )}
+          {activity.length > 0 && (
+            <section className="child-session-section">
+              <h4>{t("delegate.detailActivity")}</h4>
+              <ul className="delegate-activity">
+                {activity.map((entry, index) => (
+                  <li key={`${entry.at}-${index}`} className={`delegate-activity-item kind-${entry.kind}${entry.isError ? " is-error" : ""}`}>
+                    <time>{new Date(entry.at).toLocaleTimeString()}</time>
+                    <span>{entry.text}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
       </div>
     </div>
   );

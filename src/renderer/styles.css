@@ -7976,11 +7976,17 @@ kbd {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  padding: 10px 12px 24px;
+  overflow: auto;
+}
+/*
+ * 滚动容器里的内容层：跟随滚动（useFollowScroll）依赖内容层的尺寸变化——容器自身高度
+ * 由 flex 固定，内容变高时它不会 resize，所以视口与内容层必须是两个元素。
+ */
+.child-session-flow {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 10px 12px 24px;
-  overflow: auto;
 }
 .child-session-live-step {
   margin: 0;
@@ -7993,7 +7999,7 @@ kbd {
 }
 .child-session-live-step > svg { flex: none; }
 /* 审批卡固定在滚动区顶部：转录再长、滚到哪里，待确认的请求都不能被滚出视野。 */
-.child-session-body > .approval {
+.child-session-flow > .approval {
   position: sticky;
   top: 0;
   z-index: 5;

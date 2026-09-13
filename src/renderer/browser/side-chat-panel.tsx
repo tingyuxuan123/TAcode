@@ -15,6 +15,7 @@ import { EffortPicker, ModelPicker } from "../composer-pickers";
 import { PromptToolbar } from "../prompt-toolbar";
 import { useI18n } from "../i18n";
 import { modelOptionKey } from "../../shared/model-selection";
+import { useFollowScroll } from "../use-follow-scroll";
 
 /** 主进程已无该 runtime（被 stop / worker 退出）时的报错特征：回到「已结束」态而不是裸错误。 */
 const NO_SESSION_PATTERN = /no active agent session|agent session closed|session not found/i;
@@ -59,6 +60,12 @@ export function SideChatPanel({ workspace, provider, model, modelKey, models, ef
   const [chatEffort, setChatEffort] = useState(effort);
   const [chatPermission, setChatPermission] = useState<PermissionMode>(permission);
   const [stats, setStats] = useState<AgentSessionStats>();
+
+  /**
+   * 侧边聊天是流式直播：回合不断追加，视图必须跟着最新走（与主转录、子代理面板同一套语义）。
+   * 用户往上滚时停止跟随，滚回底部附近自动恢复；标签切回时容器尺寸变化会重新贴底。
+   */
+  const follow = useFollowScroll(`side-chat:${sourceSession ?? "session"}:${ordinal}`);
 
   useEffect(() => {
     const offEvent = window.harness.sideChat.onEvent((event) => {
@@ -223,19 +230,22 @@ export function SideChatPanel({ workspace, provider, model, modelKey, models, ef
 
   return (
     <div className="side-chat-panel">
-      <div className="side-chat-body">
+      <div className="side-chat-body" ref={follow.viewportRef}>
         {groups.length === 0 && !running && !starting && <div className="side-chat-empty"><MessageCirclePlus size={24} strokeWidth={1.5} /><p>{t("panel.sideChatEmpty")}</p><p className="side-chat-empty-note">{t("panel.sideChatEphemeral")}</p></div>}
-        {groups.map((group) => group.type === "user"
-          ? <UserTurn key={group.id} text={group.message.text} images={group.message.images} />
-          : <AssistantTurn key={group.id} messages={group.messages} running={running} canAutoCollapse={false} />)}
-        {ended && (
-          <div className="side-chat-ended" role="status">
-            <span>{t("panel.sideChatEnded")}</span>
-            {onRecreate && <button type="button" className="side-chat-recreate" onClick={onRecreate}>{t("panel.sideChatRecreate")}</button>}
-          </div>
-        )}
-        {error && <p className="side-chat-error">{error}</p>}
-        {(running || starting) && <p className="side-chat-status"><LoaderCircle size={13} className="progress-spinner" />{starting ? t("panel.sideChatStarting") : t("flow.running")}</p>}
+        {/* contentRef 必须挂在内层：滚动容器高度由 flex 固定，内容变高时它自己不会 resize。 */}
+        <div className="side-chat-flow" ref={follow.contentRef}>
+          {groups.map((group) => group.type === "user"
+            ? <UserTurn key={group.id} text={group.message.text} images={group.message.images} />
+            : <AssistantTurn key={group.id} messages={group.messages} running={running} canAutoCollapse={false} />)}
+          {ended && (
+            <div className="side-chat-ended" role="status">
+              <span>{t("panel.sideChatEnded")}</span>
+              {onRecreate && <button type="button" className="side-chat-recreate" onClick={onRecreate}>{t("panel.sideChatRecreate")}</button>}
+            </div>
+          )}
+          {error && <p className="side-chat-error">{error}</p>}
+          {(running || starting) && <p className="side-chat-status"><LoaderCircle size={13} className="progress-spinner" />{starting ? t("panel.sideChatStarting") : t("flow.running")}</p>}
+        </div>
       </div>
       <form className="side-chat-composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
         {attachments.length > 0 && (
