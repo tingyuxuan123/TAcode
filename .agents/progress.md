@@ -943,3 +943,53 @@
 - 验证：`pnpm test --reporter=dot` 87 文件 / 799 用例通过；`pnpm typecheck` 通过；`git diff --check` 通过。真实 worker 用本地 mock 网关验证了父提示规则、子提示规则、父对话隔离及无递归委派工具；未调用线上模型评估耗时或成本。
 - 跨层检查：两条路径使用同一提示生成器，新增共享模块无循环依赖；报告首行是语义约定，不改变运行时状态字段、IPC 或持久化结构。
 - 生效：使用更新后的构建完整重启 TACode，再启动新 Agent 会话。CLI fallback 的续跑仍只重放原任务与后续指令，需要主代理在后续指令中附上已采纳事实；子代理没有独立消息工具，阻塞通过提前结束并回报处理。
+
+## 2026-09-12：首条消息生成短标题
+
+- [x] 顶部标题最多占 320px，窄窗口继续收缩并省略，悬停查看完整标题；未命名会话使用最多 32 字符的首条消息兜底。
+- [x] 桌面主会话首条消息在后台调用当前模型生成摘要标题，不阻塞回复；复用当前凭据、最多 6000 字符输入、15 秒超时、失败不重试。手动命名、会话切换和关闭会取消待完成的命名。
+- [x] 沿用 Pi 的 session_info_changed 同步内存、持久化和界面；子代理与旁聊不发起命名请求。
+- [x] `pnpm test --reporter=dot` 90 文件 / 811 用例通过；`pnpm typecheck` 和 `git diff --check` 通过。标题专项 Electron 冒烟在 1440px / 900px 下通过；完整工作台冒烟在浏览器标签增减阶段超时，未声称整套通过。
+- 构建与最终交付随下方用户补充的子代理生命周期修复一起完成。
+
+## 2026-09-12：子代理状态、停止联动与卡住问题
+
+- [x] 核对用户截图对应的本机会话和日志：code-reviewer 在 15:03:44 UTC 已被协调器判为 completed 并保存 3584 字符报告；面板仍使用启动快照。test-runner 最后一条命令没有工具结果；子代理的交互请求当前被主进程丢弃，面板还会在消息数连续约 6 秒不变后停止刷新。
+- [x] 将协调器状态与待确认请求直接同步到界面，重载时读取真实快照，避免依赖主会话工具消息更新。
+- [x] 停止/关闭主会话时停止所属子代理及其命令，覆盖启动中的竞态，避免停止通知重新唤醒父会话。停止请求共享进程清理；每次启动有独立 runtimeId 与取消信号，迟到结果不会污染续跑。
+- [x] 子会话面板与侧栏菜单增加独立停止入口，面板显示交互确认；运行中持续刷新，终态再取最后一次转录，并同步侧栏与委派卡片。
+- [x] 补充协调器、父会话清理、渲染状态与后台通知回归测试；全量测试 95 文件 / 848 用例通过，`pnpm typecheck`、`pnpm build`、`git diff --check` 通过。测试用例字段修正后对应 4 项测试重新通过。
+- 界面实测：用户要求提供提示词自行检验真实子代理行为；交付包含真实委派、长命令观察与手动停止步骤的提示词。本轮未运行新的子代理 Electron 冒烟，不将单测结果当作界面验收。
+
+## 2026-09-13：上下文用量在长轮次生成中实时更新
+
+- [x] 参考 `~/Downloads/PI-Desktop-main` 的 ContextUsageInspector / context-usage / latest-turn-context。确认原问题来自 renderer 只在 `agent_settled` 刷新统计，以及未知上下文占用错误回退到会话累计 tokens。
+- [x] 新增 `src/main/context-stats.ts`：跟踪当前模型消息、本轮模型用量、生成耗时与工具上下文。使用 Pi 的估算方法计入流式正文和思考；provider 已报告的 prompt / cache 优先；响应结束后以真实用量校准。会话累计账单仍由 Pi 提供，工具/子代理的用量不会重复计入父模型本轮统计。
+- [x] `agent-host.ts` 按约 500ms 合并流式更新，消息/工具/整轮边界及时发送 `desktop_session_stats`；同一时间只保留一个后台统计请求，跨消息边界的旧推送丢弃，stop/退出清理定时器。快照保留已有统计，App 同时恢复回放里的统计；旁聊沿用同一宿主和既有事件订阅。
+- [x] `ui.tsx` / `styles.css` / `shared/i18n.ts` 将按钮和弹窗标题改为剩余容量，依次展示已用/窗口、本轮合计、生成速度、模型/缓存用量、工具上下文、会话累计。保留压缩入口及生成中禁用；估算标记“约 / ≈”，模型尚未报告的本轮用量显示等待；压缩后未知占用显示“—”，不再回退到累计账单或任意 128k 窗口。
+- [x] 新增 18 项回归测试（`main/context-stats.test.ts`、`main/agent-context-stats.test.ts`、`renderer/context-stats.test.ts`）。真实 RPC + 本地 SSE 网关保持首条响应和后续工具轮次未结束，验证用量已更新；结束后当前占用 12,600 与累计/本轮 22,800 正确区分。覆盖思考、缓存、停止、节流、快照回放、压缩后未知与模型窗口边界。
+- 验证：`pnpm test --reporter=dot` 93 文件 / 829 用例通过；`pnpm typecheck`、`pnpm build`、`git diff --check` 通过。浏览器用实际 ContextStats 组件 + 可控样例检查纸色/深色、中英文本、579px 窗口边界、生成中增长/压缩禁用、未知用量和 Esc 关闭；未调用线上模型，未跑整套 `pnpm test:browser`。
+- 跨层检查：Pi RPC → 每个 AgentHost → 带 runtime/session/seq 的既有 IPC → 主聊天/旁聊 → ContextStats；新增共享字段均为可选，不改会话文件。新 helper 无 renderer → Node 导入或循环依赖。
+- 限制与生效：模型未返回用量时上下文是估算；重新启动 worker 恢复历史后不编造历史生成速度。需完整退出并重启 TACode 使用新的主进程。仓库无 `.agents/features.json`，未新建清单；工作区另有并行的子代理修改，保持各自改动，未执行提交或发布。
+
+## 2026-09-13：放开文件读取的工作区边界（读取通道）
+
+- [x] 根因核实：会话绑定 ui 设计稿目录时，`read_file`/`search_files` 的 `Workspace.resolve` 词法 + realpath 双重校验拒绝兄弟目录 TAcode 的全部路径；`list_files` 只做 glob 校验且 fast-glob 会穿透显式写出的符号链接段列出文件名，同一路径「列得出、读不了」，三个子代理把轮次烧在路径试探上。
+- [x] `Workspace` 新增 `resolveForRead`：读取不设工作区边界（绝对路径、`../` 相对路径、出界符号链接均放行，null byte 仍拒）；写工具（write_file / edit_file / apply_patch / checkpoint）继续走原 `resolve`，写入边界不变。`read_file`/`search_files`/`list_files` 切到只读解析，`list_files` 支持绝对与 `../` 模式（fast-glob 原生支持），删除不再有调用方的 `assertSafeGlob`。
+- [x] `readonly-commands` 从 shared 移到 runtime/tools（唯一使用方在 runtime），切段改用 quote-aware 的 `splitCommandSegments`：`rg "a|b" src | head` 不再被引号内竖线误拒；换行仍是命令分隔符，危险旗标/危险词/重定向判定不变。
+- [x] code-reviewer 补 `exec_command` + `execPolicy: readonly`（与 explorer 同款），会话工作区不在目标代码目录时也有读取通道；远程委派经 `TACODE_EXEC_POLICY` 自动生效。
+- [x] 回归：workspace `resolveForRead` 4 例、files 读写边界 5 例、readonly-commands 引号切分 3 例、code-reviewer 角色断言 1 例。
+- 验证：`pnpm test` 95 文件 / 861 用例通过，`pnpm typecheck`、`git diff --check` 通过。设计结论：读取外泄的闸门是网络默认关闭而非读路径校验；写通道保持词法 + realpath 全量校验。
+
+## 2026-09-13：参考 Proma，在右侧配置 Skills 与 MCP
+
+- [x] 分析 `/Users/yfdl/Downloads/Proma-main` 的 `AgentSkillsView`、`SkillCard` / `SkillDetailView`、`McpCard` / `McpDetailView`、`McpServerForm` 与 `adapters/pi-mcp-tools`。采用它的分组卡片、启停、文件编辑、连接模板与测试流程，使用 TACode 的纸墨样式和现有右侧标签机制。
+- [x] 左侧增加 Skills / MCP 入口，右侧 `+` 可分别添加单实例标签；支持关闭、重新展开抽屉、项目/全局切换。列表与编辑器按项目隔离；返回、换文件和关闭标签时保护未保存内容。
+- [x] Skills 实现搜索、分组、新建、整目录导入、启停、回收站移除、`SKILL.md` 与附属文本编辑、Markdown 预览和填入调用命令。由 Pi 继续负责实际加载，停用将目录移到同级 `skills-inactive`。写入校验路径、符号链接、同名冲突和外部编辑，保留整目录资源。
+- [x] MCP 增加官方 SDK 客户端，支持 stdio / Streamable HTTP / SSE、参数、环境变量、请求头、cwd、超时、JSON 导入和六种常用连接模板；实际握手发现工具，映射到 Pi 工具集并沿用 MCP 审批。项目 `.tacode/mcp.json` 覆盖全局 `~/.tacode/mcp.json` 的同名项，停用也参与覆盖；损坏 JSON 不被空配置覆盖，并串行化原子写入。
+- [x] 侧边栏保存后通知现有主会话和旁聊：空闲时重载，运行时在下次 prompt 前重载。计划模式不开放 MCP，关闭/重载时回收连接；调用失败不自动重试有副作用的工具。真实测试发现并修复 SDK 关闭竞态和 SSE 请求头重复附加；桌面测试修复 Chromium `pattern` 的连字符转义。
+- [x] 完成 renderer → preload → IPC → 文件 → Agent 的跨层检查，DTO 和校验共用，renderer 不导入 Node 模块；README 中英文说明已同步。技能开关会影响共享同一目录的其他应用；Pi 已启动运行时保留信任状态，首次信任之前已启动的会话需完整重启 TACode，确认框和文档明确说明此限制。
+- 验证：`pnpm test --reporter=dot` **100 文件 / 881 用例通过**；`pnpm typecheck`、`pnpm build`、`git diff --check` 通过。新增真实 RPC + 本地模型/MCP 测试验证会话重载、工具执行及结果回传、停用和计划模式；stdio/HTTP/SSE 协议验证通过。
+- 桌面验证：`pnpm test:capabilities` 通过，使用临时项目和本地 MCP 服务，覆盖入口/标签、技能创建编辑启停导入、未保存保护、MCP 测试与工具列表/保存/启停/导入/移除、项目与全局隔离、抽屉重新展开和无横向溢出。已查看实际截图，输出位于 `/Users/yfdl/.codex/visualizations/2026/09/12/01a09663-88a8-7000-86d0-1dd11a93b583/skills-mcp/`。
+- 整套 `pnpm test:browser` **未全部通过**：浏览器原生操作、工作台单标签栏/链接/分离还原、标题栏和抽屉宽度通过；工作台测试仍在会话重命名的原生回车步骤超时（输入值已变为「文档更新」，回调未完成，复跑一致）。已更新旧脚本的 `+` 菜单选择、WorkbenchPanels 参数和项目会话计数；未修改会话重命名产品逻辑，也未将该失败记为通过。
+- 生效：使用最新构建完整退出并重启 TACode，再点击左侧 Skills / MCP。未提交或发布，保留工作区其他任务的改动；仓库无 `.agents/features.json`，未新建清单。

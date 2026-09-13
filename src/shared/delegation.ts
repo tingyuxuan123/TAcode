@@ -1,4 +1,4 @@
-import type { PermissionMode } from "./types.js";
+import type { ExtensionUiRequest, PermissionMode } from "./types.js";
 
 export const DELEGATION_BRIDGE_REQUEST = "tacode:delegation:request" as const;
 export const DELEGATION_BRIDGE_RESPONSE = "tacode:delegation:response" as const;
@@ -158,6 +158,8 @@ export interface DelegationRecordSnapshot {
   report?: string;
   resultSummary?: string;
   live?: string;
+  /** 当前子 worker 等待的交互请求；只保存在运行时，不写入会话索引。 */
+  uiRequest?: ExtensionUiRequest;
   usage?: DelegationUsage;
   /** 有界活动缓冲（最近若干条），供失败态展示判定与运行轨迹。 */
   recent?: DelegationActivity[];
@@ -286,7 +288,7 @@ export function assertDelegationTransition(
   if (isDelegationTerminal(previous)) {
     throw new Error(`Cannot transition terminal delegation ${previous} to ${next}.`);
   }
-  if (previous === "pending" && next !== "running" && next !== "cancelled" && next !== "failed") {
+  if (previous === "pending" && next !== "running" && next !== "cancelled" && next !== "interrupted" && next !== "failed") {
     throw new Error(`Invalid delegation transition: ${previous} -> ${next}.`);
   }
   if (previous === "running" && next === "pending") {

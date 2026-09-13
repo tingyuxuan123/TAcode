@@ -65,4 +65,38 @@ describe("Workspace", () => {
     await expect(ws.resolve("nested/new.txt")).rejects.toThrow();
     await expect(ws.resolve("nested/new.txt", true)).resolves.toBe(join(root, "nested/new.txt"));
   });
+
+  describe("resolveForRead（读取不设工作区边界）", () => {
+    it("接受工作区外的绝对路径", async () => {
+      const root = await makeRoot();
+      const outside = await makeRoot();
+      const external = join(outside, "code.ts");
+      await writeFile(external, "export const answer = 42;\n");
+      const ws = new Workspace(root);
+      expect(ws.resolveForRead(external)).toBe(external);
+    });
+
+    it("接受 ../ 相对路径与工作区内的符号链接目标", async () => {
+      const root = await makeRoot();
+      const outside = await makeRoot();
+      await writeFile(join(outside, "note.txt"), "hello");
+      await symlink(join(outside, "note.txt"), join(root, "link.txt"));
+      const ws = new Workspace(root);
+      await ws.initialize();
+      expect(ws.resolveForRead("../")).toBe(join(root, ".."));
+      expect(ws.resolveForRead("link.txt")).toBe(join(root, "link.txt"));
+    });
+
+    it("相对路径仍以工作区根为基准", async () => {
+      const root = await makeRoot();
+      await writeFile(join(root, "a.txt"), "x");
+      const ws = new Workspace(root);
+      expect(ws.resolveForRead("a.txt")).toBe(join(root, "a.txt"));
+    });
+
+    it("仍然拒绝 null byte", () => {
+      const ws = new Workspace("/tmp");
+      expect(() => ws.resolveForRead("a\0b")).toThrow(/null byte/);
+    });
+  });
 });

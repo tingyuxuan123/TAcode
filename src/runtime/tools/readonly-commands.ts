@@ -6,7 +6,11 @@
  *
  * 这里刻意保守：只放行「读」类命令与只读 git 子命令；管道/`&&`/`;` 允许，但**每一段**的
  * 命令都必须命中白名单；重定向、命令替换、解释器（node/python/sh）、打包/删除类工具一律拒绝。
+ * 切段用 quote-aware 的 `splitCommandSegments`：`rg "a|b" src | head` 里引号内的
+ * `|` 是搜索模式的一部分，裸正则切段会把它误当管道而拒绝整条命令。
  */
+
+import { commandBaseName, splitCommandSegments } from "./command-lint.js";
 
 /** 只读命令（第一段 token 必须命中；`git` 另见只读子命令表）。 */
 export const READONLY_COMMANDS: readonly string[] = [
@@ -90,19 +94,20 @@ export function checkReadOnlyCommand(command: string): ReadonlyCommandVerdict {
   for (const { pattern, reason } of FORBIDDEN_PATTERNS) {
     if (pattern.test(trimmed)) return { ok: false, reason };
   }
-  // 按管道/链式分隔符切段，每一段都必须命中白名单。
+  // 按行与管道/链式分隔符切段（quote-aware：引号内的 `|` `;` `&&` 属于参数，不切），
+  // 每一段都必须命中白名单。
   const segments = trimmed
-    .split(/\|\||&&|[|;\n]/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+    .split(/\n/)
+    .flatMap((line) => splitCommandSegments(line))
+    .filter((segment) => segment.words.length > 0);
   if (segments.length === 0) return { ok: false, reason: "Empty command." };
   for (const segment of segments) {
-    const words = segment.split(/\s+/).filter(Boolean);
-    const binary = words[0] ?? "";
+    const words = segment.words.map((word) => word.text);
+    const binary = commandBaseName(words[0] ?? "");
     const forbidden = FORBIDDEN_WORDS.find((word) => words.includes(word));
     if (forbidden) return { ok: false, reason: `${forbidden} can modify the workspace` };
     if (!READONLY_COMMANDS.includes(binary)) {
-      return { ok: false, reason: `${binary || segment} is not in the read-only allowlist` };
+      return { ok: false, reason: `${binary || segment.raw} is not in the read-only allowlist` };
     }
     if (binary === "git") {
       const sub = words.find((word, index) => index > 0 && !word.startsWith("-")) ?? "";

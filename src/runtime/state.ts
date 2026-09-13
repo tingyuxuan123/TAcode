@@ -333,7 +333,7 @@ export class TacodeStateStore {
     const nextGoal = updates.delegationGoal ?? current.delegation_goal;
     const nextReport = updates.delegationReport ?? current.delegation_report;
     const nextError = updates.delegationError ?? current.delegation_error;
-    const nextCompletedAt = updates.delegationCompletedAt
+    const nextCompletedAt = nextStatus === "pending" || nextStatus === "running" ? null : updates.delegationCompletedAt
       ? Date.parse(updates.delegationCompletedAt)
       : current.delegation_completed_at;
     const nextPreview = updates.preview ?? current.preview;

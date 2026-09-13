@@ -23,7 +23,7 @@ import {
   type DelegationStartPayload,
   type DelegationStatus,
 } from "../shared/delegation.js";
-import type { AgentSnapshot, PermissionMode } from "../shared/types.js";
+import type { AgentEvent, AgentSnapshot, ExtensionUiRequest, PermissionMode } from "../shared/types.js";
 import { getTacodeSessionsDir, partitionSessionFile } from "../runtime/home.js";
 import { loadEnabledSubagents } from "../runtime/subagents.js";
 import {
@@ -43,6 +43,7 @@ export interface DelegationHost {
   isRunning(): boolean;
   start(options: AgentHostStartOptions): Promise<AgentSnapshot>;
   request<T>(type: string, data?: Record<string, unknown>): Promise<T>;
+  respondToUi(id: string, response: Record<string, unknown>): Promise<void>;
   stop(): Promise<void>;
   /** 等待 worker 空闲（完成契约见 shared/delegation.ts）；prompt 的响应是“接收即返回”，不能作为完成依据。 */
   waitForIdle(options?: { startGraceMs?: number }): Promise<void>;
@@ -73,6 +74,10 @@ interface DelegationEntry {
   completion: Promise<void>;
   resolveCompletion: () => void;
   stopRequested: boolean;
+  /** 每次续跑使用新的取消信号，旧任务的迟到结果不能影响新一轮。 */
+  abort: AbortController;
+  starting?: Promise<void>;
+  stopping?: Promise<void>;
   /** 有界活动缓冲：启动/判定/终态证据，随快照下发供失败态展示。 */
   recent: DelegationActivity[];
   /** no_report 已自动重试过一次（只重试一次，不无限循环）。 */
@@ -110,6 +115,9 @@ export class DelegationCoordinator {
   /** 已通过上限检查、但尚未建表的同步占位（parentSessionPath → 计数）。 */
   private readonly reservations = new Map<string, number>();
   private readonly requestCache = new Map<string, DelegationBridgeResponse>();
+  private readonly pausedParents = new Set<string>();
+  private readonly parentEpochs = new Map<string, number>();
+  private readonly hostStops = new WeakMap<DelegationHost, Promise<void>>();
   private readonly state: TacodeStateStore;
   private readonly ownsState: boolean;
 
@@ -181,8 +189,8 @@ export class DelegationCoordinator {
     return result;
   }
 
-  list(parentSessionPath: string, payload: { includeCompleted?: boolean } = {}): DelegationRecordSnapshot[] {
-    const records = this.entriesForParent(parentSessionPath);
+  list(parentSessionPath?: string, payload: { includeCompleted?: boolean } = {}): DelegationRecordSnapshot[] {
+    const records = parentSessionPath ? this.entriesForParent(parentSessionPath) : [...this.entries.values()];
     return records
       .filter((entry) => payload.includeCompleted !== false || !isDelegationTerminal(entry.record.status))
       .map((entry) => this.snapshot(entry));
@@ -196,6 +204,9 @@ export class DelegationCoordinator {
   }
 
   async start(parentSessionPath: string, payload: DelegationStartPayload): Promise<DelegationRecordSnapshot> {
+    parentSessionPath = path.resolve(parentSessionPath);
+    this.assertParentActive(parentSessionPath);
+    const epoch = this.parentEpochs.get(parentSessionPath) ?? 0;
     const normalized = this.validateStartPayload(payload);
     if (this.isDelegatedSession(parentSessionPath)) {
       throw new Error("Delegated sessions cannot create further delegations.");
@@ -211,7 +222,7 @@ export class DelegationCoordinator {
     }
     this.reservations.set(parentSessionPath, reserved + 1);
     try {
-      return await this.startReserved(parentSessionPath, normalized);
+      return await this.startReserved(parentSessionPath, normalized, epoch);
     } finally {
       const left = (this.reservations.get(parentSessionPath) ?? 1) - 1;
       if (left > 0) this.reservations.set(parentSessionPath, left);
@@ -222,8 +233,11 @@ export class DelegationCoordinator {
   private async startReserved(
     parentSessionPath: string,
     normalized: ReturnType<DelegationCoordinator["validateStartPayload"]>,
+    epoch: number,
   ): Promise<DelegationRecordSnapshot> {
     const definitions = await loadEnabledSubagents();
+    this.assertParentActive(parentSessionPath);
+    if ((this.parentEpochs.get(parentSessionPath) ?? 0) !== epoch) throw new Error("Parent session stopped while starting the subagent.");
     const definition = definitions.find((item) => item.name === normalized.role);
     // 模型看不到子代理目录，报错必须附可用清单 + 最接近的名字，否则它会继续猜角色名。
     if (!definition) throw new Error(unknownSubagentMessage(normalized.role, definitions));
@@ -329,20 +343,96 @@ export class DelegationCoordinator {
     const entries = this.entriesForParent(parentSessionPath).filter(
       (entry) => !payload.delegationIds?.length || payload.delegationIds.includes(entry.record.delegationId),
     );
-    await Promise.all(entries.map(async (entry) => {
-      if (isDelegationTerminal(entry.record.status)) return;
-      entry.stopRequested = true;
-      // 先等 worker 真正停止，再落终态：不允许“状态 cancelled + 进程仍在跑”并存。
-      await entry.host?.stop().catch(() => undefined);
-      this.pushActivity(entry, { at: Date.now(), kind: "notice", text: "Stopped by the parent agent.", isError: true });
-      this.log("info", "delegation stopped", {
-        delegationId: entry.record.delegationId,
-        status: entry.record.status,
-        childSessionPath: entry.record.childSessionPath,
-      });
-      this.settle(entry, "cancelled", "", "Stopped by the parent agent.");
-    }));
+    await Promise.all(entries.map((entry) => this.stopEntry(entry, "cancelled", "Stopped by the user or parent session.")));
     return entries.map((entry) => this.snapshot(entry));
+  }
+
+  private stopEntry(entry: DelegationEntry, status: "cancelled" | "interrupted", reason: string): Promise<void> {
+    if (entry.stopping) return entry.stopping;
+    if (isDelegationTerminal(entry.record.status)) return Promise.resolve();
+    entry.stopRequested = true;
+    entry.abort.abort();
+    const host = entry.host;
+    const starting = entry.starting;
+    // 停止可从父会话、单个面板和关窗同时进入，所有调用共享同一次进程回收。
+    entry.stopping = (async () => {
+      if (host) await this.stopHost(host);
+      // start 可能正在等待 worker 的首个快照；清理它迟到的进程后才发布终态。
+      await starting?.catch(() => undefined);
+      if (host?.isRunning()) await this.stopHost(host);
+      this.pushActivity(entry, { at: Date.now(), kind: "notice", text: reason });
+      this.settle(entry, status, "", reason);
+    })().finally(() => { entry.stopping = undefined; });
+    return entry.stopping;
+  }
+
+  /** 用户停止/关闭父会话后，连启动中的任务也不能继续产生新的子 worker。 */
+  async stopParent(parentSessionPath: string): Promise<DelegationRecordSnapshot[]> {
+    const parent = path.resolve(parentSessionPath);
+    this.pausedParents.add(parent);
+    this.parentEpochs.set(parent, (this.parentEpochs.get(parent) ?? 0) + 1);
+    return this.stop(parent);
+  }
+
+  resumeParent(parentSessionPath: string): void {
+    this.pausedParents.delete(path.resolve(parentSessionPath));
+  }
+
+  async stopById(delegationId: string): Promise<DelegationRecordSnapshot> {
+    const entry = this.entries.get(delegationId);
+    if (!entry) throw new Error("Delegation not found.");
+    const [record] = await this.stop(entry.record.parentSessionPath, { delegationIds: [delegationId] });
+    return record;
+  }
+
+  /** 交互请求直接交给桌面面板，不能被隐藏的子 worker 静默吞掉。 */
+  handleWorkerEvent(delegationId: string, event: AgentEvent): void {
+    const entry = this.entries.get(delegationId);
+    if (!entry || entry.abort.signal.aborted || isDelegationTerminal(entry.record.status)) return;
+    if (event.__runtimeId && event.__runtimeId !== entry.host?.runtimeId) return;
+    if (event.type === "extension_ui_request" && typeof event.id === "string"
+      && ["select", "confirm", "input", "editor"].includes(String(event.method))) {
+      entry.record.uiRequest = event as ExtensionUiRequest;
+      this.pushActivity(entry, { at: Date.now(), kind: "notice", text: "Waiting for user input in the subagent panel." });
+      this.publish(entry);
+    } else if (event.type === "agent_settled" && entry.record.uiRequest) {
+      delete entry.record.uiRequest;
+      this.publish(entry);
+    }
+  }
+
+  async respondToUi(delegationId: string, requestId: string, response: Record<string, unknown>): Promise<void> {
+    const entry = this.entries.get(delegationId);
+    if (!entry?.host?.isRunning() || isDelegationTerminal(entry.record.status)
+      || entry.record.uiRequest?.id !== requestId) throw new Error("The subagent request is no longer active.");
+    await entry.host.respondToUi(requestId, response);
+    if (entry.record.uiRequest?.id === requestId) {
+      delete entry.record.uiRequest;
+      this.publish(entry);
+    }
+  }
+
+  private assertParentActive(parentSessionPath: string): void {
+    if (this.pausedParents.has(path.resolve(parentSessionPath))) throw new Error("The parent session is stopped.");
+  }
+
+  private stopHost(host: DelegationHost): Promise<void> {
+    const pending = this.hostStops.get(host);
+    if (pending) return pending;
+    const stopping = host.stop().finally(() => this.hostStops.delete(host));
+    this.hostStops.set(host, stopping);
+    return stopping;
+  }
+
+  private async startHost(entry: DelegationEntry, host: DelegationHost, options: AgentHostStartOptions, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return;
+    const starting = (async () => {
+      try { await host.start(options); }
+      finally { if (signal.aborted) await this.stopHost(host); }
+    })();
+    entry.starting = starting;
+    try { await starting; }
+    finally { if (entry.starting === starting) entry.starting = undefined; }
   }
 
   async continue(parentSessionPath: string, payload: DelegationContinuePayload): Promise<DelegationRecordSnapshot> {
@@ -353,64 +443,78 @@ export class DelegationCoordinator {
       (candidate) => candidate.record.delegationId === payload.delegationId,
     );
     if (!entry) throw new Error("Delegation not found for this parent session.");
+    await entry.stopping;
     if (!isDelegationTerminal(entry.record.status)) {
       throw new Error("Delegation is still running.");
     }
+    this.assertParentActive(parentSessionPath);
     const startedAt = Date.now();
-    const definition = entry.definition ?? (await loadEnabledSubagents()).find((item) => item.name === entry.record.role);
-    if (!definition) throw new Error(`Subagent definition is no longer available: ${entry.record.role}`);
-    entry.definition = definition;
-    // worker 不在（应用重启/已被回收/真失败后停止）时原位重启，而不是死代码。
-    if (!entry.host || !entry.host.isRunning()) {
-      const host = this.createDelegationHost(entry.record.delegationId);
-      entry.host = host;
-      const startPayload: DelegationStartPayload = {
-        role: definition.name,
-        title: entry.record.title,
-        task: entry.record.task,
-        cwd: entry.record.cwd ?? path.dirname(entry.record.parentSessionPath),
-        provider: entry.record.provider ?? "deepseek",
-        ...(entry.record.model ? { model: entry.record.model } : {}),
-        permission: entry.record.permission,
-        sandbox: "workspace-write",
-        network: false,
-      };
-      const startOptions = await this.options.buildStartOptions(
-        startPayload,
-        definition,
-        entry.record.childSessionPath!,
-      );
-      this.pushActivity(entry, { at: Date.now(), kind: "notice", text: "Restarting worker for follow-up." });
-      try {
-        await host.start(startOptions);
-      } catch (error) {
-        this.settle(
-          entry,
-          entry.stopRequested ? "cancelled" : "failed",
-          "",
-          this.describeFailure("worker_exit", error, entry, startedAt),
-        );
-        return this.snapshot(entry);
-      }
-    }
+    entry.abort.abort();
+    entry.abort = new AbortController();
+    const signal = entry.abort.signal;
     entry.stopRequested = false;
+    entry.noReportRetried = false;
     this.resetCompletion(entry);
     entry.record.status = "pending";
-    entry.record.error = undefined;
+    entry.record.startedAt = startedAt;
+    entry.record.completedAt = undefined;
+    entry.record.error = "";
     entry.record.report = "";
-    this.transition(entry, "running");
-    entry.record.task = `${entry.record.task}\n\nFollow-up: ${payload.message.trim()}`;
+    entry.record.resultSummary = "";
     this.persist(entry);
     this.publish(entry);
-    void this.runPrompt(entry, payload.message.trim());
+    let host = entry.host;
+    try {
+      const definition = entry.definition ?? (await loadEnabledSubagents()).find((item) => item.name === entry.record.role);
+      if (signal.aborted) return this.snapshot(entry);
+      if (!definition) throw new Error(`Subagent definition is no longer available: ${entry.record.role}`);
+      entry.definition = definition;
+      // worker 不在时原位重启；异步准备期间仍可从面板或父会话停止。
+      if (!host || !host.isRunning()) {
+        host = this.createDelegationHost(entry.record.delegationId);
+        entry.host = host;
+        const startPayload: DelegationStartPayload = {
+          role: definition.name,
+          title: entry.record.title,
+          task: entry.record.task,
+          cwd: entry.record.cwd ?? path.dirname(entry.record.parentSessionPath),
+          provider: entry.record.provider ?? "deepseek",
+          ...(entry.record.model ? { model: entry.record.model } : {}),
+          permission: entry.record.permission,
+          sandbox: "workspace-write",
+          network: false,
+        };
+        const startOptions = await this.options.buildStartOptions(startPayload, definition, entry.record.childSessionPath!);
+        if (signal.aborted) return this.snapshot(entry);
+        this.pushActivity(entry, { at: Date.now(), kind: "notice", text: "Restarting worker for follow-up." });
+        await this.startHost(entry, host, startOptions, signal);
+        if (signal.aborted) return this.snapshot(entry);
+      }
+      this.transition(entry, "running");
+      entry.record.task = `${entry.record.task}\n\nFollow-up: ${payload.message.trim()}`;
+      this.persist(entry);
+      this.publish(entry);
+      void this.runPrompt(entry, host, payload.message.trim(), signal);
+    } catch (error) {
+      if (!signal.aborted) {
+        if (host) await this.stopHost(host).catch(() => undefined);
+        if (!signal.aborted) this.settle(entry, "failed", "", this.describeFailure("worker_exit", error, entry, startedAt));
+      }
+    }
     return this.snapshot(entry);
   }
 
   async stopAll(): Promise<void> {
+    for (const parent of new Set([...this.entriesByParent.keys(), ...this.reservations.keys()])) {
+      this.pausedParents.add(parent);
+      this.parentEpochs.set(parent, (this.parentEpochs.get(parent) ?? 0) + 1);
+    }
     await Promise.all(
       [...this.entries.values()].map(async (entry) => {
-        if (!isDelegationTerminal(entry.record.status)) this.settle(entry, "interrupted", "", "Application stopped.");
-        await entry.host?.stop().catch(() => undefined);
+        if (isDelegationTerminal(entry.record.status)) {
+          if (entry.host) await this.stopHost(entry.host).catch(() => undefined);
+        }
+        else await this.stopEntry(entry, "interrupted", "Application stopped.");
       }),
     );
   }
@@ -421,6 +525,8 @@ export class DelegationCoordinator {
     definition: SubagentDefinition,
   ): Promise<void> {
     const startedAt = Date.now();
+    const signal = entry.abort.signal;
+    let host: DelegationHost | undefined;
     try {
       this.transition(entry, "running");
       this.pushActivity(entry, { at: startedAt, kind: "notice", text: `Launching worker (${definition.name}).` });
@@ -435,23 +541,22 @@ export class DelegationCoordinator {
         tools: definition.tools.join(", "),
         execPolicy: definition.execPolicy ?? "full",
       });
-      const host = this.createDelegationHost(entry.record.delegationId);
+      host = this.createDelegationHost(entry.record.delegationId);
       entry.host = host;
       const startOptions = await this.options.buildStartOptions(
         payload,
         definition,
         entry.record.childSessionPath!,
       );
-      await host.start(startOptions);
-      await this.runPrompt(entry, composeChildTask(definition, entry.record.task, payload.cwd));
+      if (signal.aborted) return;
+      await this.startHost(entry, host, startOptions, signal);
+      if (signal.aborted) return;
+      await this.runPrompt(entry, host, composeChildTask(definition, entry.record.task, payload.cwd), signal);
     } catch (error) {
-      if (entry.stopRequested) {
-        await entry.host?.stop().catch(() => undefined);
-        this.settle(entry, "cancelled", "", "Stopped by the parent agent.");
-        return;
-      }
+      if (signal.aborted) return;
       const kind = "worker_exit";
-      await entry.host?.stop().catch(() => undefined);
+      if (host) await this.stopHost(host).catch(() => undefined);
+      if (signal.aborted) return;
       this.settle(
         entry,
         "failed",
@@ -466,7 +571,8 @@ export class DelegationCoordinator {
    * prompt 的响应是“接收即返回”，必须先等子代理空闲，再提取最后一条 assistant 文本。
    * 失败原因分类：worker_exit / no_report / timeout / cancelled，绝不共用一句文案。
    */
-  private async runPrompt(entry: DelegationEntry, message: string): Promise<void> {
+  private async runPrompt(entry: DelegationEntry, host: DelegationHost, message: string, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return;
     const startedAt = Date.now();
     const timeoutMs = this.options.completionTimeoutMs ?? DEFAULT_COMPLETION_TIMEOUT_MS;
     // 轮数预算：角色定义里的 maxTurns（缺省 MAX_SUBAGENT_MAX_TURNS）。
@@ -475,7 +581,7 @@ export class DelegationCoordinator {
     let limit = delegationTurnLimit(entry.definition ?? {});
     let baselineTurns = 0;
     try {
-      baselineTurns = await this.assistantTurns(entry);
+      baselineTurns = await this.assistantTurns(host);
     } catch {
       // 读不到基准就不启用本轮上限（而不是当作 0 误判）：宁可等兜底超时，也不误杀健康运行。
       this.log("warn", "delegation turn baseline unavailable; turn limit skipped for this run", {
@@ -483,8 +589,15 @@ export class DelegationCoordinator {
       });
       limit = Number.POSITIVE_INFINITY;
     }
+    if (signal.aborted) return;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let limitTimer: ReturnType<typeof setInterval> | undefined;
+    const collection = new AbortController();
+    let onAbort = () => {};
+    const cancelled = new Promise<"cancelled">((resolve) => {
+      onAbort = () => { collection.abort(); resolve("cancelled"); };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
     const timeout = new Promise<"timeout">((resolve) => {
       timeoutTimer = setTimeout(() => resolve("timeout"), timeoutMs);
       timeoutTimer.unref?.();
@@ -493,7 +606,7 @@ export class DelegationCoordinator {
     // 「子代理没停」的情况，避免只能等 30 分钟兜底超时。
     const turnLimit = new Promise<"turn_limit">((resolve) => {
       limitTimer = setInterval(() => {
-        void this.assistantTurns(entry)
+        void this.assistantTurns(host)
           .then((turns) => {
             if (turns - baselineTurns >= limit) resolve("turn_limit");
           })
@@ -503,12 +616,15 @@ export class DelegationCoordinator {
     });
     try {
       const outcome = await Promise.race([
-        this.collectReport(entry, message, startedAt, { baselineTurns, limit }).then(() => "done" as const),
+        this.collectReport(entry, host, message, startedAt, { baselineTurns, limit }, collection.signal).then(() => "done" as const),
         turnLimit,
         timeout,
+        cancelled,
       ]);
       clearTimeout(timeoutTimer);
       clearInterval(limitTimer);
+      if (signal.aborted) return;
+      collection.abort();
       if (outcome === "turn_limit") {
         const detail = `The delegated worker exceeded its turn limit (${limit} turns) and was stopped; the report below is what it had produced.`;
         this.pushActivity(entry, { at: Date.now(), kind: "notice", text: detail });
@@ -519,9 +635,10 @@ export class DelegationCoordinator {
           limit,
         });
         // 收口而非失败：保留已产出的报告，状态落 truncated（渲染层按完成态展示）。
-        const report = await this.bestEffortReport(entry);
-        await entry.host?.stop().catch(() => undefined);
-        this.settle(entry, "truncated", report);
+        const report = await this.bestEffortReport(host);
+        if (signal.aborted) return;
+        await this.stopHost(host).catch(() => undefined);
+        if (!signal.aborted) this.settle(entry, "truncated", report);
         return;
       }
       if (outcome === "timeout") {
@@ -533,18 +650,19 @@ export class DelegationCoordinator {
           timeoutMs,
         });
         // 超时必须显式停止子代理：不留“状态 timeout + 进程仍在跑”的并存终局。
-        await entry.host?.stop().catch(() => undefined);
-        this.settle(entry, "failed", "", detail);
+        await this.stopHost(host).catch(() => undefined);
+        if (!signal.aborted) this.settle(entry, "failed", "", detail);
       }
     } catch (error) {
       clearTimeout(timeoutTimer);
       clearInterval(limitTimer);
-      const host = entry.host;
+      collection.abort();
+      if (signal.aborted) return;
       const exit = host?.describeExit?.();
       const workerGone = Boolean(exit) || (host !== undefined && !host.isRunning());
       if (entry.stopRequested) {
-        await host?.stop().catch(() => undefined);
-        this.settle(entry, "cancelled", "", "Stopped by the parent agent.");
+        await this.stopHost(host).catch(() => undefined);
+        if (!signal.aborted) this.settle(entry, "cancelled", "", "Stopped by the parent agent.");
         return;
       }
       const detail = this.describeFailure(workerGone ? "worker_exit" : "worker_error", error, entry, startedAt);
@@ -556,24 +674,33 @@ export class DelegationCoordinator {
         detail,
       });
       // 真失败也要停掉子代理，避免“状态 failed + 进程 running”并存。
-      await host?.stop().catch(() => undefined);
-      this.settle(entry, "failed", "", detail);
+      await this.stopHost(host).catch(() => undefined);
+      if (!signal.aborted) this.settle(entry, "failed", "", detail);
+    } finally {
+      clearTimeout(timeoutTimer);
+      clearInterval(limitTimer);
+      signal.removeEventListener("abort", onAbort);
+      collection.abort();
     }
   }
 
   /** 等待空闲并收集最终报告；失败（RPC 错误/worker 消亡）时抛出，由 runPrompt 分类。 */
   private async collectReport(
     entry: DelegationEntry,
+    host: DelegationHost,
     message: string,
     startedAt: number,
     run: { baselineTurns: number; limit: number },
+    signal: AbortSignal,
   ): Promise<void> {
-    const host = entry.host;
-    if (!host) throw new Error("Delegated worker host is missing.");
+    if (signal.aborted) return;
     await host.request("prompt", { message });
+    if (signal.aborted) return;
     this.pushActivity(entry, { at: Date.now(), kind: "notice", text: "Prompt accepted; waiting for the worker to settle." });
     await host.waitForIdle();
+    if (signal.aborted) return;
     const result = await host.request<{ messages?: unknown[] }>("get_messages");
+    if (signal.aborted) return;
     const messages = Array.isArray(result?.messages) ? result.messages : [];
     let evidence = describeAssistantEvidence(messages);
     let report = extractAssistantReport(messages);
@@ -620,12 +747,16 @@ export class DelegationCoordinator {
         });
         try {
           await host.request("prompt", { message: DELEGATION_REPORT_NUDGE });
+          if (signal.aborted) return;
           await host.waitForIdle();
+          if (signal.aborted) return;
           const retry = await host.request<{ messages?: unknown[] }>("get_messages");
+          if (signal.aborted) return;
           const retryMessages = Array.isArray(retry?.messages) ? retry.messages : [];
           evidence = describeAssistantEvidence(retryMessages);
           report = extractAssistantReport(retryMessages);
         } catch (error) {
+          if (signal.aborted) return;
           this.log("warn", "delegation no_report retry failed", {
             delegationId: entry.record.delegationId,
             childSessionPath: entry.record.childSessionPath,
@@ -648,15 +779,15 @@ export class DelegationCoordinator {
         }
       }
       if (entry.stopRequested) {
-        await host.stop().catch(() => undefined);
-        this.settle(entry, "cancelled", "", "Stopped by the parent agent.");
+        await this.stopHost(host).catch(() => undefined);
+        if (!signal.aborted) this.settle(entry, "cancelled", "", "Stopped by the parent agent.");
         return;
       }
       const detail = this.describeFailure("no_report", undefined, entry, startedAt, evidence);
       this.pushActivity(entry, { at: Date.now(), kind: "notice", text: detail, isError: true });
       // 空闲后仍无 assistant 文本：停掉 worker 再落终态。
-      await host.stop().catch(() => undefined);
-      this.settle(entry, "failed", "", detail);
+      await this.stopHost(host).catch(() => undefined);
+      if (!signal.aborted) this.settle(entry, "failed", "", detail);
       return;
     }
     this.pushActivity(entry, { at: Date.now(), kind: "report", text: boundedDelegationText(report, MAX_ACTIVITY_TEXT_CHARS) });
@@ -735,6 +866,7 @@ export class DelegationCoordinator {
       }),
       resolveCompletion: () => resolveCompletion(),
       stopRequested: false,
+      abort: new AbortController(),
       recent: [],
     };
     this.entries.set(record.delegationId, entry);
@@ -766,7 +898,7 @@ export class DelegationCoordinator {
    * （`agent-manager.ts`），所以诊断只能靠日志字段，不靠运行时查表。
    */
   private createDelegationHost(delegationId: string): DelegationHost {
-    const runtimeId = `delegation-runtime-${delegationId}`;
+    const runtimeId = `delegation-runtime-${delegationId}-${randomUUID()}`;
     const host = this.options.createHost(runtimeId, delegationId);
     if (!host.runtimeId) {
       host.runtimeId = runtimeId;
@@ -776,18 +908,17 @@ export class DelegationCoordinator {
   }
 
   /** 子会话累计的 assistant 轮次（读不到或 worker 已停时返回 0，交给兜底超时处理）。 */
-  private async assistantTurns(entry: DelegationEntry): Promise<number> {
-    const host = entry.host;
-    if (!host || !host.isRunning()) return 0;
+  private async assistantTurns(host: DelegationHost): Promise<number> {
+    if (!host.isRunning()) return 0;
     const result = await host.request<{ messages?: unknown[] }>("get_messages");
     const messages = Array.isArray(result?.messages) ? result.messages : [];
     return describeAssistantEvidence(messages).turns;
   }
 
   /** 收口用：尽力取出子会话当前的报告文本（失败返回空串，不影响落终态）。 */
-  private async bestEffortReport(entry: DelegationEntry): Promise<string> {
+  private async bestEffortReport(host: DelegationHost): Promise<string> {
     try {
-      const result = await entry.host?.request<{ messages?: unknown[] }>("get_messages");
+      const result = await host.request<{ messages?: unknown[] }>("get_messages");
       const messages = Array.isArray(result?.messages) ? result.messages : [];
       return extractAssistantReport(messages);
     } catch {
@@ -797,7 +928,11 @@ export class DelegationCoordinator {
 
   private settle(entry: DelegationEntry, status: DelegationStatus, report: string, error?: string): void {
     if (isDelegationTerminal(entry.record.status)) return;
-    this.transition(entry, status);
+    entry.abort.abort();
+    delete entry.record.uiRequest;
+    delete entry.record.live;
+    assertDelegationTransition(entry.record.status, status);
+    entry.record.status = status;
     entry.record.report = boundedDelegationText(report);
     entry.record.resultSummary = boundedDelegationText(report, 240);
     if (error) entry.record.error = boundedDelegationText(error, 4_000);
@@ -955,7 +1090,9 @@ export class DelegationCoordinator {
         ...(thread.model ? { model: thread.model } : {}),
         status,
         startedAt: Date.parse(thread.createdAt),
-        ...(thread.delegationCompletedAt ? { completedAt: Date.parse(thread.delegationCompletedAt) } : {}),
+        ...(thread.delegationCompletedAt
+          ? { completedAt: Date.parse(thread.delegationCompletedAt) }
+          : isDelegationTerminal(status) ? { completedAt: Date.parse(thread.updatedAt) } : {}),
         ...(thread.delegationReport ? { report: thread.delegationReport } : {}),
         ...(thread.delegationError ? { error: thread.delegationError } : {}),
         ...(thread.preview ? { resultSummary: thread.preview } : {}),

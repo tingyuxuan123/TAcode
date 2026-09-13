@@ -18,6 +18,12 @@ export async function verifyWorkbenchHeader(win: BrowserWindow, formerTabHeight:
     win.webContents.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, ...point });
     win.webContents.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, ...point });
   };
+  const pickPanel = async (label: string) => {
+    await wait(async () => await evaluate("!!document.querySelector('.panel-add-menu')"));
+    const index = await evaluate(`Array.from(document.querySelectorAll('.panel-add-item')).findIndex(el => el.children[1]?.textContent === ${JSON.stringify(label)})`);
+    assert(index >= 0, `panel menu must contain ${label}`);
+    await click(`.panel-add-item:nth-child(${index + 1})`);
+  };
   await wait(async () => await evaluate("!!document.querySelector('.inspect-header-tabs .inspect-tab') && !!document.querySelector('webview')?.getWebContentsId()"));
   const initial = await evaluate(`(() => {
     const rect = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
@@ -69,11 +75,11 @@ export async function verifyWorkbenchHeader(win: BrowserWindow, formerTabHeight:
   await click('.inspect-tab:first-child .inspect-tab-close');
   await wait(async () => (await evaluate("document.querySelectorAll('.inspect-tab').length")) === 1);
   await click('.inspect-tab-add');
-  await wait(async () => await evaluate("!!document.querySelector('.panel-add-menu')"));
-  await click('.panel-add-item:first-child');
+  await pickPanel("审查");
   await wait(async () => (await evaluate("document.querySelectorAll('.inspect-tab').length")) === 2);
   await click('.inspect-tab:first-child');
   await click('.inspect-tab-add');
+  await pickPanel("新建标签页");
   await wait(async () => (await evaluate("document.querySelectorAll('.inspect-tab').length")) === 3);
   await click('.inspect-tab.active .inspect-tab-close');
   await wait(async () => (await evaluate("document.querySelectorAll('.inspect-tab').length")) === 2);

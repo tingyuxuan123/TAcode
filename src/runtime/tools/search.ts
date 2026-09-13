@@ -507,16 +507,3 @@ export async function searchWorkspace(
     notes,
   };
 }
-
-/** 工具层需要的 glob 越界校验（`list_files` 与内置搜索共用）。 */
-export function assertSafeGlob(pattern: string): void {
-  const normalized = pattern.replaceAll("\\", "/");
-  if (
-    path.isAbsolute(pattern) ||
-    normalized === ".." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../")
-  ) {
-    throw new Error(`Glob escapes workspace: ${pattern}`);
-  }
-}

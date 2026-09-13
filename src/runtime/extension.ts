@@ -28,6 +28,7 @@ import { loadEnabledSubagents } from "./subagents.js";
 import { tacodeEnv } from "./env.js";
 import { createTurnLimiter, parseTurnLimit } from "./turn-limit.js";
 import { registerSessionTitle } from "./session-title.js";
+import { registerMcpTools } from "./mcp-extension.js";
 import type { PermissionMode, TacodeRuntimeOptions } from "./options.js";
 import { registerAskUserTool, ASK_USER_TOOL } from "./tools/ask-user.js";
 import { capturePatchCheckpoint, type Checkpoint } from "./tools/checkpoint.js";
@@ -183,6 +184,14 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
         },
       );
       registerAskUserTool(pi);
+      registerMcpTools(pi, options, () => permission);
+      pi.registerCommand("reload-capabilities", {
+        description: "Reload Skills and MCP configuration",
+        handler: async (_args, ctx) => {
+          await ctx.waitForIdle();
+          await ctx.reload();
+        },
+      });
 
       // 本地 fallback 仍保留给没有主进程 bridge 的 runtime 测试/CLI 场景。
       const commandToolOptions: CommandToolOptions = {

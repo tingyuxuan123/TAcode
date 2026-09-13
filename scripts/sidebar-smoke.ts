@@ -41,7 +41,7 @@ export async function verifySidebar(win: BrowserWindow): Promise<Buffer> {
   const collapsed = await wait((state) => state.width === 56 && state.available === initial.available + 196);
   assert.equal(collapsed.stored, "true");
   assert.equal(collapsed.projectsVisible, true);
-  assert(await evaluate("document.querySelectorAll('.project-row').length===2 && document.querySelectorAll('.session-row').length===4"));
+  assert(await evaluate("document.querySelectorAll('.project-row').length===2 && document.querySelectorAll('.project .session-row').length===4"));
   assert(await evaluate("Array.from(document.querySelectorAll('.project-row, .session-row')).every(el=>el.getBoundingClientRect().width>=28&&el.title&&el.getAttribute('aria-label')&&getComputedStyle(el.querySelector('.sidebar-short-label')).display!=='none')"));
   assert.equal(collapsed.guest, initial.guest);
   assert(await evaluate("Array.from(document.querySelectorAll('.sidebar-primary button, .sidebar-toggle, .sidebar .account')).every(el=>el.getBoundingClientRect().width>=28&&!!el.getAttribute('aria-label'))"));

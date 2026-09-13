@@ -7,15 +7,16 @@
  * messages，所以天然满足 Proma 那条「父会话必须在前台」的闸门。
  */
 
-import { delegateProgress, sessionTools, type ChatMessage, type DelegateTaskStatus } from "../conversation";
+import { delegateProgress, sessionTools, type ChatMessage } from "../conversation";
 import { delegationPanelKey, type ChildSessionPanelInfo } from "./panel-state";
+import type { DelegationRecordSnapshot, DelegationStatus } from "../../shared/delegation";
 
 /** 从当前会话里抽出的委派摘要（只保留面板需要的字段）。 */
 export interface DelegationSummary {
   id?: string;
   role: string;
   task: string;
-  status: DelegateTaskStatus;
+  status: DelegationStatus;
   /** 有子会话文件才可能自动开面板（进程内委派没有文件）。 */
   childSessionPath?: string;
   live?: string;
@@ -24,6 +25,35 @@ export interface DelegationSummary {
   totalTokens?: number;
   startedAt?: number;
   completedAt?: number;
+  report?: string;
+  error?: string;
+  uiRequest?: ChildSessionPanelInfo["uiRequest"];
+  mayAutoOpen?: boolean;
+}
+
+/** 运行时快照覆盖父工具的启动快照；后台会话只更新已有标签，不抢焦点。 */
+export function mergeDelegationSummaries(
+  summaries: DelegationSummary[],
+  records: ReadonlyMap<string, DelegationRecordSnapshot>,
+  parentSessionPath: string | undefined,
+  openKeys: ReadonlySet<string>,
+): DelegationSummary[] {
+  const merged = new Map(summaries.map((item) => [delegationPanelKey(item.id, item.childSessionPath), item]));
+  for (const record of records.values()) {
+    const key = record.delegationId;
+    const current = merged.get(key);
+    const belongsToCurrent = record.parentSessionPath === parentSessionPath;
+    if (!current && !belongsToCurrent && !openKeys.has(key)) continue;
+    merged.set(key, {
+      ...current,
+      id: key, role: record.role, task: record.task, status: record.status,
+      childSessionPath: record.childSessionPath,
+      startedAt: record.startedAt, completedAt: record.completedAt,
+      live: record.live, report: record.report, error: record.error, uiRequest: record.uiRequest,
+      mayAutoOpen: belongsToCurrent,
+    });
+  }
+  return [...merged.values()];
 }
 
 export interface DelegationTabRequest {
@@ -80,17 +110,24 @@ export function planDelegationTabs(input: {
       task: item.task,
       sessionPath: item.childSessionPath,
       status: item.status,
-      ...(item.live ? { live: item.live } : {}),
+      live: item.live,
+      report: item.report,
+      error: item.error,
+      uiRequest: item.uiRequest,
       ...(item.toolCalls !== undefined ? { toolCalls: item.toolCalls } : {}),
       ...(item.turns !== undefined ? { turns: item.turns } : {}),
       ...(item.totalTokens !== undefined ? { totalTokens: item.totalTokens } : {}),
       ...(item.startedAt !== undefined ? { startedAt: item.startedAt } : {}),
-      ...(item.completedAt !== undefined ? { completedAt: item.completedAt } : {}),
+      completedAt: item.completedAt,
     };
     if (!input.autoOpenedKeys.has(key)) {
       autoOpened.push(key);
+      if (input.openKeys.has(key)) {
+        requests.push({ key, info, activate: false });
+        continue;
+      }
       // 历史委派（重开会话时见到的已完成条目）不自动弹标签，避免一次开一堆。
-      if (item.status === "pending" || item.status === "running") {
+      if (item.mayAutoOpen !== false && (item.status === "pending" || item.status === "running")) {
         requests.push({ key, info, activate: true });
       }
       continue;

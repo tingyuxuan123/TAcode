@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { memo, useEffect, useMemo, useState } from "react";
+import { CircleAlert, LoaderCircle, Square } from "lucide-react";
 import {
   delegateStatusLabel,
   groupConversation,
@@ -8,18 +8,19 @@ import {
   type DelegateTaskStatus,
 } from "../conversation";
 import { useI18n } from "../i18n";
-import { AssistantTurn, Markdown, UserTurn } from "../ui";
+import { ApprovalCard, AssistantTurn, Markdown, UserTurn } from "../ui";
 import type { ChildSessionPanelInfo } from "./panel-state";
 
 /** 运行中标签的刷新间隔：子会话 JSONL 边跑边写，面板按此频率跟随。 */
 const POLL_MS = 2_000;
-/** 连续多少次轮询消息条数不变就认为已收口，停止轮询。 */
-const IDLE_POLLS = 3;
-/** `delegateStatusLabel` 认识的四个状态；其余（interrupted/cancelled…）原样显示。 */
+/** 常规任务状态复用委派卡片的文案，其余终态在面板单独翻译。 */
 const TASK_STATUSES = new Set<string>(["pending", "running", "completed", "failed"]);
 
-function statusText(status: string | undefined): string {
+function statusText(status: string | undefined, t: ReturnType<typeof useI18n>["t"]): string {
   if (!status) return "";
+  if (status === "cancelled") return t("subagent.stopped");
+  if (status === "interrupted") return t("subagent.interrupted");
+  if (status === "truncated") return t("subagent.limitReached");
   return TASK_STATUSES.has(status) ? delegateStatusLabel(status as DelegateTaskStatus) : status;
 }
 
@@ -45,9 +46,11 @@ const INJECTED_PROMPT = /^\s*(You are the .{0,80}subagent inside TACode|You are 
 export const ChildSessionPanel = memo(function ChildSessionPanel({
   info,
   isActive,
+  delegationId,
 }: {
   info: ChildSessionPanelInfo;
   isActive: boolean;
+  delegationId?: string;
 }) {
   const { t } = useI18n();
   const sessionPath = info.sessionPath ?? "";
@@ -56,19 +59,25 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
   const [phase, setPhase] = useState<"loading" | "ready" | "error">(readable ? "loading" : "ready");
   const [error, setError] = useState("");
   const [truncated, setTruncated] = useState(false);
-  const lastCount = useRef(-1);
-  const idlePolls = useRef(0);
+  const [stopping, setStopping] = useState(false);
+  const [controlError, setControlError] = useState("");
+  const isRunning = info.status === "running" || info.status === "pending";
 
   useEffect(() => {
-    if (!readable) return;
-    let gone = false;
     setMessages([]);
-    setPhase("loading");
+    setPhase(readable ? "loading" : "ready");
     setError("");
     setTruncated(false);
-    lastCount.current = -1;
-    idlePolls.current = 0;
+    setControlError("");
+  }, [readable, sessionPath]);
+
+  useEffect(() => {
+    if (!readable || !isActive) return;
+    let gone = false;
+    let loading = false;
     const load = (): void => {
+      if (gone || loading) return;
+      loading = true;
       // 桥接缺失/同步抛错都不该炸掉整个界面：统一转成 rejected promise 走下面的错误分支。
       void Promise.resolve()
         .then(() => window.harness.sessions.read(sessionPath))
@@ -77,27 +86,31 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
           setMessages(normalizeMessages(transcript.messages));
           setTruncated(transcript.truncated);
           setPhase("ready");
-          const count = transcript.messages.length;
-          idlePolls.current = count === lastCount.current ? idlePolls.current + 1 : 0;
-          lastCount.current = count;
         })
         .catch((cause: unknown) => {
           if (gone) return;
           setError(cause instanceof Error ? cause.message : String(cause));
           setPhase("error");
-        });
+        }).finally(() => { loading = false; });
     };
     load();
-    // 仅在标签可见、且内容还在增长时轮询；收口后停止，避免后台标签常年打 IPC。
-    const timer = window.setInterval(() => {
-      if (!isActive || idlePolls.current >= IDLE_POLLS) return;
-      load();
-    }, POLL_MS);
+    // 长工具调用期间消息数可能很久不变，只有协调器的终态才算结束。
+    // 终态变化会重新运行 effect，读取最后一次转录后停止轮询。
+    const timer = isRunning ? window.setInterval(load, POLL_MS) : undefined;
     return () => {
       gone = true;
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearInterval(timer);
     };
-  }, [readable, sessionPath, isActive]);
+  }, [readable, sessionPath, isActive, isRunning, info.completedAt]);
+
+  const stop = async () => {
+    if (!delegationId || stopping) return;
+    setStopping(true);
+    setControlError("");
+    try { await window.harness.delegations.stop(delegationId); }
+    catch (cause) { setControlError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setStopping(false); }
+  };
 
   const groups = useMemo(() => {
     const visible = messages.filter((message, index) =>
@@ -107,7 +120,7 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
   }, [messages]);
   const activity = info.activity ?? [];
   const meta = [
-    statusText(info.status),
+    info.uiRequest ? t("subagent.awaitingInput") : statusText(info.status, t),
     formatElapsed(info.startedAt, info.completedAt),
     info.toolCalls ? t("delegate.steps", { n: info.toolCalls }) : "",
     info.totalTokens ? `${info.totalTokens.toLocaleString()} tokens` : "",
@@ -119,13 +132,30 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
         <span className="child-session-role">{info.role}</span>
         {meta.length > 0 && <span className="child-session-meta">{meta.join(" · ")}</span>}
         <span className="child-session-live" aria-hidden="true">
-          {info.status === "running" || info.status === "pending"
+          {isRunning && !info.uiRequest
             ? <LoaderCircle size={12} className="progress-spinner" />
             : info.status === "failed" ? <CircleAlert size={12} className="progress-err" /> : null}
         </span>
+        {isRunning && delegationId && window.harness.delegations && (
+          <button type="button" className="ghost child-session-stop" data-subagent-stop disabled={stopping} onClick={() => void stop()}>
+            <Square size={11} fill="currentColor" aria-hidden="true" />
+            {stopping ? t("subagent.stopping") : t("subagent.stop")}
+          </button>
+        )}
       </header>
       <div className="child-session-body">
-        {info.live?.trim() && (
+        {controlError && <p className="child-session-note is-error" role="alert">{controlError}</p>}
+        {info.status === "failed" && info.error && <p className="child-session-note is-error" role="alert">{info.error}</p>}
+        {info.uiRequest && delegationId && (
+          <ApprovalCard
+            key={info.uiRequest.id}
+            request={info.uiRequest}
+            onDone={() => setControlError("")}
+            onError={setControlError}
+            onRespond={(response) => window.harness.delegations.respondToUi(delegationId, info.uiRequest!.id, response)}
+          />
+        )}
+        {info.live?.trim() && isRunning && !info.uiRequest && (
           <p className="child-session-live-step">
             <LoaderCircle size={12} className="progress-spinner" aria-hidden="true" />
             <span>{info.live}</span>
@@ -137,17 +167,17 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
         {readable && phase === "loading" && <p className="child-session-note">{t("preview.reading")}</p>}
         {readable && phase === "error" && <p className="child-session-note is-error">{error}</p>}
         {readable && phase === "ready" && groups.length === 0 && <p className="child-session-note">{t("chat.emptySession")}</p>}
-        {groups.map((group) => group.type === "user"
+        {groups.map((group, index) => group.type === "user"
           ? <UserTurn key={group.id} text={group.message.text} images={group.message.images} />
           : (
             <AssistantTurn
               key={group.id}
               messages={group.messages}
-              running={false}
+              running={isRunning && index === groups.length - 1}
               canAutoCollapse={false}
             />
           ))}
-        {info.report?.trim() && (
+        {info.report?.trim() && (!readable || phase === "error" || groups.length === 0) && (
           <section className="child-session-section">
             <h4>{t("delegate.detailReport")}</h4>
             <div className="child-session-report markdown"><Markdown>{info.report}</Markdown></div>

@@ -91,6 +91,19 @@ describe("顶部网页标签状态", () => {
 });
 
 describe("工作台功能面板", () => {
+  it("Skills 和 MCP 各占一个可关闭标签，切换会话保持可用", () => {
+    let state = panelReducer(initialPanelState, { type: "open-skills" });
+    state = panelReducer(state, { type: "open-mcp" });
+    state = panelReducer(state, { type: "open-skills" });
+    expect(state.tabs.map((tab) => tab.id)).toEqual(["review", "skills", "mcp"]);
+    expect(state.active).toBe("skills");
+    state = panelReducer(state, { type: "session-changed", sourceSession: "/project/other.jsonl" });
+    expect(visiblePanelTabs(state).map((tab) => tab.id)).toEqual(["review", "skills", "mcp"]);
+    state = panelReducer(state, { type: "close", id: "skills" });
+    expect(state.tabs.some((tab) => tab.type === "skills")).toBe(false);
+    state = panelReducer(state, { type: "open-skills" });
+    expect(state.active).toBe("skills");
+  });
   it("审查、文件、终端按功能类型单实例打开", () => {
     let state = panelReducer(initialPanelState, { type: "open-files" });
     state = panelReducer(state, { type: "open-files", path: "src/App.tsx" });

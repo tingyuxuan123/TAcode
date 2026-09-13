@@ -110,6 +110,10 @@ Sandboxing is defense in depth, not a replacement for reviewing commands in an u
 
 ## Agent Skills
 
+Click **Skills / MCP** in the left navigation to open both tabs in the right sidebar. You can also add either tab from the sidebar's **+** menu. Choose **Current project** or **Global** at the top of each library.
+
+The Skills tab provides searchable, grouped cards, enable/disable switches, creation and folder import. Open a card to edit `SKILL.md`, preview Markdown, edit supporting text files, or insert its slash command into the conversation. Import copies the whole skill directory and skips existing names; removing a skill sends its directory to the system trash.
+
 Skills are loaded by the Pi runtime (TACode does not ship a separate loader). Standard locations:
 
 | Scope | Path |
@@ -122,6 +126,20 @@ Each skill is a directory with a `SKILL.md` file. Frontmatter must include `name
 - Invoke with `/skill:name`; type `/` in the composer to see loaded skills
 - List paths and loaded skills under **Settings → Agent Skills**
 - Project skills require trusting the workspace; `@` mentions only scan project `.agents/skills` and `.pi/skills`
+
+New and imported skills go into `.agents/skills` for the project or `~/.tacode/skills` globally. Disabling moves the whole directory to the sibling `skills-inactive` directory; enabling moves it back. This also changes availability in other apps that use the same shared skill directory.
+
+## MCP servers
+
+The **MCP** tab manages local stdio, Streamable HTTP, and SSE servers. Add a server, choose a common connection template, or import JSON containing `mcpServers` or `servers`. Configure command arguments, environment variables, request headers, working directory, and timeout in the editor. Arguments accept one item per line or a JSON string array; environment variables and headers support `${ENV_VAR}` references.
+
+**Test connection** performs a real handshake and lists available tools without calling them. Saving an enabled server makes its tools available to Agent sessions through the existing permission checks. Plan mode excludes MCP tools. The status shown in the library is the last test result, not a persistent connection indicator. Templates need their relevant local runtime or credentials configured.
+
+Project configuration is stored in `.tacode/mcp.json`; global configuration is in `~/.tacode/mcp.json`. Project settings take effect after the workspace is trusted and override global servers with the same name, including explicit disablement. Changes made in either sidebar tab reload idle sessions automatically; running sessions use the updated configuration on their next turn.
+
+Pi retains the trust decision for an existing runtime. If you first trust a project after starting its session, fully quit and relaunch TACode to load that project's skills; subsequent skill edits and switches reload normally.
+
+Run `pnpm test:capabilities` for the Electron sidebar smoke test. It uses temporary projects and a local MCP fixture to verify editing, imports, switching, persistence, and connection discovery.
 
 ## Use TACode
 

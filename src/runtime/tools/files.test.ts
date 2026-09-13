@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { clipForModel, createFileTools } from "./files";
 import { Workspace } from "./workspace";
 
@@ -156,6 +156,98 @@ describe("search_files 工具", () => {
     )) as { content: Array<{ text?: string }> };
 
     expect(result.content[0]?.text ?? "").toContain("(no matches)");
+  });
+});
+
+describe("读取不设工作区边界", () => {
+  it("read_file 接受工作区外的绝对路径与 ../ 相对路径", async () => {
+    const { root, ws } = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), "tacode-external-"));
+    roots.push(outside);
+    await writeFile(join(outside, "code.ts"), "export const answer = 42;\n");
+
+    const byAbsolute = await readFile(ws, { path: join(outside, "code.ts") });
+    expect(byAbsolute.details.text).toContain("answer = 42");
+    const byRelative = await readFile(ws, { path: join(relative(root, outside), "code.ts") });
+    expect(byRelative.details.text).toContain("answer = 42");
+  });
+
+  it("read_file 跟随指向工作区外的符号链接", async () => {
+    const { root, ws } = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), "tacode-external-"));
+    roots.push(outside);
+    await writeFile(join(outside, "code.ts"), "export const marker = 1;\n");
+    await symlink(join(outside, "code.ts"), join(root, "link.ts"));
+
+    const { text } = await readFile(ws, { path: "link.ts" });
+    expect(text).toContain("marker = 1");
+  });
+
+  it("list_files 接受绝对与 ../ 模式，列出工作区外文件", async () => {
+    const { root, ws } = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), "tacode-external-"));
+    roots.push(outside);
+    await mkdir(join(outside, "deep"), { recursive: true });
+    await writeFile(join(outside, "deep", "code.ts"), "x\n");
+    const tool = createFileTools(ws).find((item) => item.name === "list_files");
+    if (!tool) throw new Error("list_files tool is missing");
+    const run = async (pattern: string): Promise<string> => {
+      const result = (await tool.execute(
+        "call-1",
+        { pattern },
+        undefined,
+        undefined as never,
+        {} as never,
+      )) as { content: Array<{ text?: string }> };
+      return result.content[0]?.text ?? "";
+    };
+    expect(await run(join(outside, "**"))).toContain("deep/code.ts");
+    expect(await run(join(relative(root, outside), "**"))).toContain("deep/code.ts");
+  });
+
+  it("search_files 在工作区外的目录里搜索", async () => {
+    const { ws } = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), "tacode-external-"));
+    roots.push(outside);
+    await writeFile(join(outside, "code.ts"), "const needleOutside = 1;\n");
+    const tool = createFileTools(ws, { search: { probeRipgrep: () => ({}) } }).find(
+      (item) => item.name === "search_files",
+    );
+    if (!tool) throw new Error("search_files tool is missing");
+
+    const result = (await tool.execute(
+      "call-1",
+      { query: "needleOutside", path: outside },
+      undefined,
+      undefined as never,
+      {} as never,
+    )) as { content: Array<{ text?: string }> };
+    expect(result.content[0]?.text ?? "").toContain("needleOutside");
+  });
+
+  it("写入工具仍然拒绝工作区外路径与出界符号链接", async () => {
+    const { root, ws } = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), "tacode-external-"));
+    roots.push(outside);
+    const write = createFileTools(ws).find((item) => item.name === "write_file");
+    if (!write) throw new Error("write_file tool is missing");
+    await expect(
+      write.execute(
+        "call-1",
+        { path: join(outside, "x.txt"), content: "no" },
+        undefined,
+        undefined as never,
+        {} as never,
+      ),
+    ).rejects.toThrow(/escapes workspace/);
+
+    await writeFile(join(outside, "link-target.txt"), "x\n");
+    await symlink(join(outside, "link-target.txt"), join(root, "link.ts"));
+    const edit = createFileTools(ws).find((item) => item.name === "edit_file");
+    if (!edit) throw new Error("edit_file tool is missing");
+    await expect(
+      edit.execute("call-1", { path: "link.ts", old_text: "x", new_text: "y" }, undefined, undefined as never, {} as never),
+    ).rejects.toThrow(/outside workspace/);
   });
 });
 

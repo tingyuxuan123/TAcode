@@ -167,7 +167,9 @@ function Fixture() {
       },
     }],
   };
-  const content = <WorkbenchPanels panels={panels} inspect={<div>审查测试内容</div>} onError={(message) => { throw new Error(message); }} />;
+  const content = <WorkbenchPanels panels={panels} review={<div>审查测试内容</div>} files={<div>项目文件</div>}
+    sideChatProps={{ model: "fixture", modelKey: "fixture", models: [], effort: "off", effortLevels: ["off"], permission: "auto" }}
+    onError={(message) => { throw new Error(message); }} />;
   const actions = useMemo(() => ({ openChildSession: panels.openChildSession }), [panels.openChildSession]);
   return <PanelActionsProvider actions={actions}><div className={withChat ? `app ${window.harness.platform === "darwin" ? "darwin" : ""}` : undefined} style={{ display: "flex", width: "100%", height: "100vh" }}>
     {withChat ? <>

@@ -104,8 +104,8 @@ export interface SubagentDefinition {
   /** 轮次硬上限；省略表示默认上限。 */
   maxTurns?: number;
   /**
-   * 命令执行策略：`readonly` 表示这个子代理只能跑只读命令（见 `shared/readonly-commands.ts`）。
-   * 让 explorer 这类只读角色能跑 `wc -l` / `git log`，同时挡住一切写盘与间接执行。
+   * 命令执行策略：`readonly` 表示这个子代理只能跑只读命令（见 `runtime/tools/readonly-commands.ts`）。
+   * 让 explorer / code-reviewer 这类只读角色能跑 `wc -l` / `git log`，同时挡住一切写盘与间接执行。
    */
   execPolicy?: SubagentExecPolicy;
   /** Markdown body，作为子代理 system prompt。 */

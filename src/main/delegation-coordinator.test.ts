@@ -48,6 +48,7 @@ function recordingSink(): { sink: DiagnosticSink; entries: LogEntry[] } {
 }
 
 interface FakeHostOptions {
+  beforeStart?: () => Promise<void>;
   reportText?: string;
   reportDelayMs?: number;
   /** prompt 请求本身抛错（模拟 worker 启动即失败）。 */
@@ -70,6 +71,7 @@ class FakeHost implements DelegationHost {
   running = true;
   messages: unknown[] = [];
   calls: string[] = [];
+  uiResponses: Array<{ id: string; response: Record<string, unknown> }> = [];
   /** stop() 完成的时间戳；断言“先停完再落终态”。 */
   stoppedAt?: number;
   exitInfo?: { code?: number; signal?: string; stderrExcerpt: string };
@@ -82,6 +84,7 @@ class FakeHost implements DelegationHost {
   private readonly assistantTurns: number;
   private readonly neverSettle: boolean;
   private readonly reportTextForPrompt?: (promptIndex: number) => string;
+  private readonly beforeStart?: () => Promise<void>;
   private promptCount = 0;
   private settled = false;
   private idleWaiters: Array<() => void> = [];
@@ -96,6 +99,7 @@ class FakeHost implements DelegationHost {
     this.assistantTurns = options.assistantTurns ?? 1;
     this.neverSettle = options.neverSettle === true;
     this.reportTextForPrompt = options.reportTextForPrompt;
+    this.beforeStart = options.beforeStart;
   }
 
   isRunning(): boolean {
@@ -103,6 +107,9 @@ class FakeHost implements DelegationHost {
   }
 
   async start(options: AgentHostStartOptions): Promise<AgentSnapshot> {
+    this.calls.push("start");
+    if (this.beforeStart) await this.beforeStart();
+    this.running = true;
     this.sessionKey = options.sessionPath;
     this.requestedSessionPath = options.sessionPath;
     this.startOptions = options;
@@ -145,6 +152,10 @@ class FakeHost implements DelegationHost {
 
   describeExit(): { code?: number; signal?: string; stderrExcerpt: string } | undefined {
     return this.exitInfo;
+  }
+
+  async respondToUi(id: string, response: Record<string, unknown>): Promise<void> {
+    this.uiResponses.push({ id, response });
   }
 
   async stop(): Promise<void> {
@@ -200,9 +211,11 @@ interface Fixture {
   logs: LogEntry[];
   hosts: FakeHost[];
   parent: FakeHost;
+  events: DelegationRecordSnapshot[];
 }
 
 interface FixtureOptions {
+  beforeBuild?: (hostIndex: number) => Promise<void>;
   completionTimeoutMs?: number;
   hostOptions?: (index: number) => FakeHostOptions;
   /** 外部注入的 state store（对账/水合测试用），默认新建内存库。 */
@@ -214,6 +227,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   const { sink, entries } = recordingSink();
   const parent = new FakeHost("parent-runtime", "/tmp/parent.jsonl");
   const hosts: FakeHost[] = [];
+  const events: DelegationRecordSnapshot[] = [];
   const coordinator = new DelegationCoordinator({
     stateStore: state,
     log: sink,
@@ -224,7 +238,9 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
       return host;
     },
     findParentHost: () => parent,
-    buildStartOptions: async (payload, definition, sessionPath) => ({
+    buildStartOptions: async (payload, definition, sessionPath) => {
+      if (options.beforeBuild) await options.beforeBuild(hosts.length - 1);
+      return {
       provider: "deepseek",
       permission: payload.permission ?? "auto",
       sandbox: "workspace-write",
@@ -234,10 +250,11 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
       sessionPath,
       activeTools: [...definition.tools],
       delegationDepth: 1,
-    }),
-    emitEvent: () => undefined,
+      };
+    },
+    emitEvent: (_parent, event) => events.push(event.event),
   });
-  return { coordinator, state, logs: entries, hosts, parent };
+  return { coordinator, state, logs: entries, hosts, parent, events };
 }
 
 const waitFor = async (predicate: () => boolean, timeoutMs = 8_000): Promise<void> => {
@@ -828,7 +845,7 @@ describe("delegation host diagnostics", () => {
     try {
       const record = await coordinator.start("/tmp/parent.jsonl", { ...startPayload, task: "Diagnose" });
       // 诊断字段不允许为空：否则日志与 describeFailure 里的 childRuntimeId 永远是空串。
-      expect(hosts[0]?.runtimeId).toBe(`delegation-runtime-${record.delegationId}`);
+      expect(hosts[0]?.runtimeId.startsWith(`delegation-runtime-${record.delegationId}-`)).toBe(true);
       expect(logs.some((entry) => entry.level === "warn" && entry.message === "delegation host created without runtimeId")).toBe(true);
     } finally {
       await coordinator.stopAll();
@@ -864,6 +881,119 @@ describe("delegation host diagnostics", () => {
       await coordinator.stopAll();
       state.close();
     }
+  });
+});
+
+function gate() {
+  let release!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolve, fail) => { release = resolve; reject = fail; });
+  return { promise, release, reject };
+}
+
+describe("delegation lifecycle controls", () => {
+  it("publishes the report and completion time in the first terminal snapshot", async () => {
+    const { coordinator, state, events } = await fixture();
+    try {
+      await coordinator.start("/tmp/parent.jsonl", startPayload);
+      await coordinator.wait("/tmp/parent.jsonl");
+      const completed = events.filter((record) => record.status === "completed");
+      expect(completed).toHaveLength(1);
+      expect(completed[0]).toMatchObject({ report: "Found src/main/index.ts:1", completedAt: expect.any(Number) });
+      expect(coordinator.list()).toHaveLength(1);
+    } finally { await coordinator.stopAll(); state.close(); }
+  });
+
+  it("ignores late startup failure after a stopped delegation has been continued", async () => {
+    const build = gate();
+    const { coordinator, state, hosts } = await fixture({
+      beforeBuild: (index) => index === 0 ? build.promise : Promise.resolve(),
+      hostOptions: () => ({ reportDelayMs: 120 }),
+    });
+    try {
+      const record = await coordinator.start("/tmp/parent.jsonl", startPayload);
+      await coordinator.stopById(record.delegationId);
+      await coordinator.continue("/tmp/parent.jsonl", { delegationId: record.delegationId, message: "Continue" });
+      build.reject(new Error("Old startup failed late"));
+      await waitFor(() => hosts[1]?.calls.includes("request:prompt"));
+      expect(hosts[0].calls).not.toContain("start");
+      expect(hosts[1].calls).not.toContain("stop");
+      expect(hosts[1].runtimeId).not.toBe(hosts[0].runtimeId);
+      const result = await coordinator.wait("/tmp/parent.jsonl");
+      expect(result.delegations[0].status).toBe("completed");
+    } finally { build.release(); await coordinator.stopAll(); state.close(); }
+  });
+
+  it("waits for a cancelled startup to be cleaned up before an immediate continuation", async () => {
+    const start = gate();
+    const { coordinator, state, hosts } = await fixture({
+      hostOptions: (index) => index === 0 ? { beforeStart: () => start.promise } : { reportDelayMs: 120 },
+    });
+    try {
+      const record = await coordinator.start("/tmp/parent.jsonl", startPayload);
+      await waitFor(() => hosts[0]?.calls.includes("start"));
+      const stopping = coordinator.stopById(record.delegationId);
+      const continued = coordinator.continue("/tmp/parent.jsonl", { delegationId: record.delegationId, message: "Continue" });
+      start.release();
+      await stopping;
+      expect((await continued).status).toBe("running");
+      expect(hosts[0].running).toBe(false);
+      expect(hosts[0].calls).not.toContain("request:prompt");
+      expect(state.get(record.delegationId)?.delegationCompletedAt).toBeUndefined();
+      expect((await coordinator.wait("/tmp/parent.jsonl")).delegations[0].status).toBe("completed");
+    } finally { start.release(); await coordinator.stopAll(); state.close(); }
+  });
+
+  it("stops only the parent's children and rejects starts until its next turn", async () => {
+    const { coordinator, state, hosts } = await fixture({ hostOptions: () => ({ neverSettle: true }) });
+    try {
+      const child = await coordinator.start("/tmp/parent.jsonl", startPayload);
+      await coordinator.start("/tmp/other.jsonl", startPayload);
+      await waitFor(() => hosts.every((host) => host.calls.includes("request:prompt")));
+      const [byParent, byPanel] = await Promise.all([
+        coordinator.stopParent("/tmp/parent.jsonl"), coordinator.stopById(child.delegationId),
+      ]);
+      expect(byParent[0].status).toBe("cancelled");
+      expect(byPanel.status).toBe("cancelled");
+      expect(hosts[0].calls.filter((call) => call === "stop")).toHaveLength(1);
+      expect(hosts[1].running).toBe(true);
+      await expect(coordinator.start("/tmp/parent.jsonl", startPayload)).rejects.toThrow("stopped");
+      coordinator.resumeParent("/tmp/parent.jsonl");
+      expect((await coordinator.start("/tmp/parent.jsonl", startPayload)).status).toBe("running");
+    } finally { await coordinator.stopAll(); state.close(); }
+  });
+
+  it("does not revive a reserved start when the parent stops and immediately resumes", async () => {
+    const { coordinator, state, hosts } = await fixture();
+    try {
+      const pending = coordinator.start("/tmp/parent.jsonl", startPayload);
+      const rejected = expect(pending).rejects.toThrow("stopped");
+      await coordinator.stopParent("/tmp/parent.jsonl");
+      coordinator.resumeParent("/tmp/parent.jsonl");
+      await rejected;
+      expect(hosts).toHaveLength(0);
+    } finally { await coordinator.stopAll(); state.close(); }
+  });
+
+  it("routes child approval responses to their own host and clears cancelled requests", async () => {
+    const { coordinator, state, hosts } = await fixture({ hostOptions: () => ({ neverSettle: true }) });
+    try {
+      const first = await coordinator.start("/tmp/parent.jsonl", startPayload);
+      const second = await coordinator.start("/tmp/parent.jsonl", startPayload);
+      await waitFor(() => hosts.every((host) => host.calls.includes("request:prompt")));
+      const request = { type: "extension_ui_request", id: "permission-1", method: "confirm", title: "允许运行命令？", message: "本地检查" };
+      coordinator.handleWorkerEvent(first.delegationId, { ...request, __runtimeId: hosts[0].runtimeId });
+      expect(coordinator.get("/tmp/parent.jsonl")[0].uiRequest?.id).toBe(request.id);
+      await expect(coordinator.respondToUi(second.delegationId, request.id, { confirmed: true })).rejects.toThrow("no longer active");
+      await coordinator.respondToUi(first.delegationId, request.id, { confirmed: true });
+      expect(hosts[0].uiResponses).toEqual([{ id: request.id, response: { confirmed: true } }]);
+      expect(hosts[1].uiResponses).toEqual([]);
+      expect(coordinator.get("/tmp/parent.jsonl")[0].uiRequest).toBeUndefined();
+      coordinator.handleWorkerEvent(first.delegationId, request);
+      expect((await coordinator.stopById(first.delegationId)).uiRequest).toBeUndefined();
+      coordinator.handleWorkerEvent(first.delegationId, request);
+      expect(coordinator.get("/tmp/parent.jsonl")[0].uiRequest).toBeUndefined();
+    } finally { await coordinator.stopAll(); state.close(); }
   });
 });
 

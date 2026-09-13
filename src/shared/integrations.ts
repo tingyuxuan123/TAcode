@@ -13,11 +13,19 @@ export type WebSearchConfig = {
 
 export interface McpServerRow {
   name: string;
-  kind: "stdio" | "http";
+  kind: "stdio" | "http" | "sse";
   command?: string;
   args?: string[];
   url?: string;
   disabled?: boolean;
+  description?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  cwd?: string;
+  /** 连接和单次请求超时，单位秒。 */
+  timeout?: number;
+  /** 保留手工配置里的扩展字段，表单保存不得丢弃。 */
+  extra?: Record<string, unknown>;
 }
 
 export interface WebSource {
@@ -62,16 +70,28 @@ export function mergeWebSearchConfig(previous: unknown, next: WebSearchConfig): 
 }
 
 export function parseMcpServers(raw: unknown): McpServerRow[] {
-  const servers = isRecord(raw) && isRecord(raw.mcpServers) ? raw.mcpServers : {};
+  const servers = isRecord(raw) && isRecord(raw.mcpServers) ? raw.mcpServers
+    : isRecord(raw) && isRecord(raw.servers) ? raw.servers : {};
   const rows: McpServerRow[] = [];
   for (const [name, config] of Object.entries(servers)) {
     if (!name.trim() || !isRecord(config)) continue;
+    const common = {
+      ...(config.disabled === true || config.enabled === false ? { disabled: true } : {}),
+      ...(typeof config.description === "string" ? { description: config.description } : {}),
+      ...(stringRecord(config.env) ? { env: stringRecord(config.env) } : {}),
+      ...(stringRecord(config.headers) ? { headers: stringRecord(config.headers) } : {}),
+      ...(typeof config.cwd === "string" ? { cwd: config.cwd } : {}),
+      ...(typeof config.timeout === "number" ? { timeout: config.timeout } : {}),
+    };
+    const known = new Set(["type", "command", "args", "url", "disabled", "enabled", "description", "env", "headers", "cwd", "timeout"]);
+    const extra = Object.fromEntries(Object.entries(config).filter(([key]) => !known.has(key)));
     if (typeof config.url === "string" && config.url.trim()) {
       rows.push({
         name,
-        kind: "http",
+        kind: config.type === "sse" ? "sse" : "http",
         url: config.url.trim(),
-        ...(config.disabled === true ? { disabled: true } : {}),
+        ...common,
+        ...(Object.keys(extra).length ? { extra } : {}),
       });
       continue;
     }
@@ -84,7 +104,8 @@ export function parseMcpServers(raw: unknown): McpServerRow[] {
         kind: "stdio",
         command: config.command.trim(),
         ...(args.length ? { args } : {}),
-        ...(config.disabled === true ? { disabled: true } : {}),
+        ...common,
+        ...(Object.keys(extra).length ? { extra } : {}),
       });
     }
   }
@@ -92,26 +113,42 @@ export function parseMcpServers(raw: unknown): McpServerRow[] {
 }
 
 export function serializeMcpServers(rows: McpServerRow[]): { mcpServers: Record<string, Record<string, unknown>> } {
-  const mcpServers: Record<string, Record<string, unknown>> = {};
+  const mcpServers: Record<string, Record<string, unknown>> = Object.create(null);
   for (const row of rows) {
     const name = row.name.trim();
     if (!name) continue;
-    if (row.kind === "http" && row.url?.trim()) {
+    const common = {
+      ...row.extra,
+      ...(row.disabled ? { disabled: true } : {}),
+      ...(row.description?.trim() ? { description: row.description.trim() } : {}),
+      ...(row.env && Object.keys(row.env).length ? { env: row.env } : {}),
+      ...(row.headers && Object.keys(row.headers).length ? { headers: row.headers } : {}),
+      ...(row.cwd?.trim() ? { cwd: row.cwd.trim() } : {}),
+      ...(row.timeout !== undefined ? { timeout: row.timeout } : {}),
+    };
+    if ((row.kind === "http" || row.kind === "sse") && row.url?.trim()) {
       mcpServers[name] = {
+        ...common,
         url: row.url.trim(),
-        ...(row.disabled ? { disabled: true } : {}),
+        ...(row.kind === "sse" ? { type: "sse" } : {}),
       };
       continue;
     }
     if (row.command?.trim()) {
       mcpServers[name] = {
+        ...common,
         command: row.command.trim(),
         ...(row.args?.length ? { args: row.args } : {}),
-        ...(row.disabled ? { disabled: true } : {}),
       };
     }
   }
   return { mcpServers };
+}
+
+function stringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+  return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 export function mcpServerFromLine(name: string, value: string): McpServerRow | undefined {

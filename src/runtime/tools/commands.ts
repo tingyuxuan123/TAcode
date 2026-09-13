@@ -17,7 +17,7 @@ import {
   type SessionAccessController,
 } from "./policy.js";
 import { commandBaseName, splitCommandSegments } from "./command-lint.js";
-import { READONLY_EXEC_HINT, checkReadOnlyCommand } from "../../shared/readonly-commands.js";
+import { READONLY_EXEC_HINT, checkReadOnlyCommand } from "./readonly-commands.js";
 import type { SandboxOptions } from "./sandbox.js";
 import { Workspace } from "./workspace.js";
 import type { PermissionMode } from "../options.js";
@@ -175,7 +175,7 @@ const writeStdinParameters = Type.Object({
 });
 
 export interface CommandToolOptions {
-  /** 只读策略：非空时 exec_command 只允许白名单内的只读命令（见 shared/readonly-commands）。 */
+  /** 只读策略：非空时 exec_command 只允许白名单内的只读命令（见 runtime/tools/readonly-commands）。 */
   readOnly?: boolean;
   registry: ManagedProcessRegistry;
   getPermission: () => PermissionMode;

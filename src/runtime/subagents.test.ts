@@ -108,8 +108,16 @@ describe("内置角色：只读命令策略", () => {
     expect(subagentCanMutate(explorer)).toBe(true);
   });
 
+  it("code-reviewer 与 explorer 同款：exec_command 走只读白名单", () => {
+    const reviewer = BUILTIN_SUBAGENTS.find((item) => item.name === "code-reviewer")!;
+    expect(reviewer.execPolicy).toBe("readonly");
+    expect(reviewer.tools).toContain("exec_command");
+    expect(subagentEditsFiles(reviewer)).toBe(false);
+    expect(subagentCanMutate(reviewer)).toBe(true);
+  });
+
   it("其余内置角色没有只读命令策略（test-runner 需要完整 exec）", () => {
-    for (const name of ["code-reviewer", "test-runner", "fixer"]) {
+    for (const name of ["test-runner", "fixer"]) {
       expect(BUILTIN_SUBAGENTS.find((item) => item.name === name)?.execPolicy).toBeUndefined();
     }
   });

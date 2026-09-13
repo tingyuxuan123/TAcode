@@ -1,7 +1,9 @@
 /**
  * 文件读写与搜索工具（沿用改名前的旧工具名，界面按这些名字识别工具活动）。
  *
- * 所有路径都经 `Workspace.resolve()` 校验；写入使用同目录临时文件 + rename。
+ * 写入路径经 `Workspace.resolve()` 校验（词法 + realpath，符号链接不得越界）；
+ * 读取路径走 `Workspace.resolveForRead()`，不设工作区边界（理由见 workspace.ts
+ * 头注释）。写入使用同目录临时文件 + rename。
  */
 
 import fs from "node:fs/promises";
@@ -12,7 +14,6 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_IGNORES,
   MAX_SEARCH_CONTEXT,
-  assertSafeGlob,
   searchWorkspace,
   type SearchDeps,
   type SearchOutcome,
@@ -83,14 +84,17 @@ function readFileTool(workspace: Workspace) {
     name: "read_file",
     label: "Read file",
     description:
-      "Read a UTF-8 text file inside the workspace. Returns numbered lines (the number is the real file line). The returned range is always contiguous; when it stops early, the tail note names the omitted lines.",
+      "Read a UTF-8 text file. Returns numbered lines (the number is the real file line). The returned range is always contiguous; when it stops early, the tail note names the omitted lines.",
     parameters: Type.Object({
-      path: Type.String({ description: "Workspace-relative file path" }),
+      path: Type.String({
+        description:
+          "File path: workspace-relative, absolute (may point outside the workspace), or ../ relative",
+      }),
       line_start: Type.Optional(Type.Integer({ minimum: 1, description: "First line, inclusive" })),
       line_end: Type.Optional(Type.Integer({ minimum: 1, description: "Last line, inclusive" })),
     }),
     async execute(_id, params) {
-      const absolute = await workspace.resolve(params.path);
+      const absolute = workspace.resolveForRead(params.path);
       const stat = await fs.stat(absolute);
       if (!stat.isFile()) throw new Error(`Not a file: ${params.path}`);
       if (stat.size > 5_000_000) {
@@ -138,15 +142,19 @@ function listFilesTool(workspace: Workspace) {
     name: "list_files",
     label: "List files",
     description:
-      "List files inside the workspace using a glob. Hidden files are included; common generated directories are excluded.",
+      "List files using a glob, relative to the workspace by default. Absolute and ../ patterns list directories outside the workspace. Hidden files are included; common generated directories are excluded.",
     parameters: Type.Object({
-      pattern: Type.Optional(Type.String({ description: "Glob pattern relative to workspace, default **/*" })),
+      pattern: Type.Optional(
+        Type.String({
+          description:
+            "Glob pattern relative to workspace (default **/*); absolute or ../ patterns list outside the workspace",
+        }),
+      ),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000 })),
     }),
     async execute(_id, params) {
       const limit = params.limit ?? 500;
       const pattern = params.pattern ?? "**/*";
-      assertSafeGlob(pattern);
       const matches = await fg(pattern, {
         cwd: workspace.root,
         onlyFiles: true,
@@ -177,7 +185,12 @@ function searchFilesTool(workspace: Workspace, deps: SearchDeps) {
       "`limit` caps the total number of matches across all files.",
     parameters: Type.Object({
       query: Type.String({ minLength: 1, description: "Literal text or regular expression" }),
-      path: Type.Optional(Type.String({ description: "File or directory to search, default ." })),
+      path: Type.Optional(
+        Type.String({
+          description:
+            "File or directory to search, default .; may be outside the workspace (absolute or ../ relative)",
+        }),
+      ),
       glob: Type.Optional(Type.String({ description: "Optional file glob, e.g. *.ts" })),
       literal: Type.Optional(Type.Boolean({ description: "Treat query as literal text" })),
       ignore_case: Type.Optional(Type.Boolean({ description: "Case-insensitive match" })),
@@ -193,7 +206,7 @@ function searchFilesTool(workspace: Workspace, deps: SearchDeps) {
       ),
     }),
     async execute(_id, params, signal) {
-      const searchPath = await workspace.resolve(params.path ?? ".");
+      const searchPath = workspace.resolveForRead(params.path ?? ".");
       const limit = params.limit ?? DEFAULT_SEARCH_LIMIT;
       const outcome = await searchWorkspace(
         {

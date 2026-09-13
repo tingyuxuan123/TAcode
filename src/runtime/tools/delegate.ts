@@ -615,6 +615,8 @@ export function registerRemoteDelegateTools(pi: ExtensionAPI, deps: RemoteDelega
   deps.client.onEvent((event) => {
     if (!backgroundDelegations.has(event.delegationId) || !isDelegationTerminal(event.status)) return;
     backgroundDelegations.delete(event.delegationId);
+    // 用户停止父会话/子代理时不排入新消息，否则取消动作反而会重新唤醒父代理。
+    if (event.status === "cancelled" || event.status === "interrupted") return;
     try {
       pi.sendUserMessage(
         `A delegated subagent finished. Its report:\n\n${remoteReportBlock([event])}`,

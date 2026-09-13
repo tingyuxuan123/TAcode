@@ -18,6 +18,31 @@ let startToken = 0;
 
 const api: DesktopApi = {
   platform: process.platform,
+  capabilities: {
+    trustProject: (cwd) => ipcRenderer.invoke("capabilities:trust-project", cwd),
+    onChanged: (listener) => subscribe("capabilities:changed", listener),
+  },
+  skills: {
+    list: (cwd) => ipcRenderer.invoke("skills:list", cwd),
+    read: (id, cwd) => ipcRenderer.invoke("skills:read", id, cwd),
+    create: (content, scope, cwd) => ipcRenderer.invoke("skills:create", content, scope, cwd),
+    save: (id, content, previousContent, cwd) => ipcRenderer.invoke("skills:save", id, content, previousContent, cwd),
+    setEnabled: (id, enabled, cwd) => ipcRenderer.invoke("skills:set-enabled", id, enabled, cwd),
+    remove: (id, cwd) => ipcRenderer.invoke("skills:remove", id, cwd),
+    import: (scope, cwd) => ipcRenderer.invoke("skills:import", scope, cwd),
+    reveal: (id, cwd) => ipcRenderer.invoke("skills:reveal", id, cwd),
+    readFile: (id, file, cwd) => ipcRenderer.invoke("skills:read-file", id, file, cwd),
+    saveFile: (id, file, content, previousContent, cwd) => ipcRenderer.invoke("skills:save-file", id, file, content, previousContent, cwd),
+  },
+  mcp: {
+    list: (scope, cwd) => ipcRenderer.invoke("mcp:list", scope, cwd),
+    save: (server, previousName, scope, cwd) => ipcRenderer.invoke("mcp:save", server, previousName, scope, cwd),
+    setEnabled: (name, enabled, scope, cwd) => ipcRenderer.invoke("mcp:set-enabled", name, enabled, scope, cwd),
+    remove: (name, scope, cwd) => ipcRenderer.invoke("mcp:remove", name, scope, cwd),
+    import: (json, scope, cwd) => ipcRenderer.invoke("mcp:import", json, scope, cwd),
+    test: (server, cwd) => ipcRenderer.invoke("mcp:test", server, cwd),
+    reveal: (scope, cwd) => ipcRenderer.invoke("mcp:reveal", scope, cwd),
+  },
   app: {
     /** 运行中的主进程是不是旧构建（本地重建后需要完全重启）。 */
     buildStatus: () => ipcRenderer.invoke("app:build-status"),
@@ -67,6 +92,12 @@ const api: DesktopApi = {
     remove: (id) => ipcRenderer.invoke("sessions:remove", id),
     pin: (id, pinned) => ipcRenderer.invoke("sessions:pin", id, pinned),
     rename: (id, title) => ipcRenderer.invoke("sessions:rename", id, title),
+  },
+  delegations: {
+    list: (parentSessionPath) => ipcRenderer.invoke("delegations:list", parentSessionPath),
+    stop: (delegationId) => ipcRenderer.invoke("delegations:stop", delegationId),
+    respondToUi: (delegationId, requestId, response) => ipcRenderer.invoke("delegations:ui-response", delegationId, requestId, response),
+    onEvent: (listener) => subscribe("delegations:event", listener),
   },
   terminal: {
     start: (cwd) => ipcRenderer.invoke("terminal:start", cwd),

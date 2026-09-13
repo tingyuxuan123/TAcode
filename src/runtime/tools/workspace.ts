@@ -1,8 +1,14 @@
 /**
  * 工作区路径解析与越界防护。
  *
- * 所有文件工具（read_file / write_file / edit_file / apply_patch）都必须经过
+ * 写入类路径（write_file / edit_file / apply_patch / checkpoint）必须经过
  * `resolve()`：既做词法校验，也用 `realpath` 校验符号链接不会指向工作区之外。
+ *
+ * 读取类路径（read_file / search_files / list_files）走 `resolveForRead()`，
+ * 不设工作区边界：exec_command 在沙箱里本就允许读取宿主任意文件，只锁文件工具
+ * 拦不住任何东西，却会让绑定到子目录会话里的子代理在路径试探上空转
+ * （list_files / exec 放行、read_file 拒绝的组合曾把轮次烧在换路径重试上）。
+ * 读取外泄的真实闸门是网络默认关闭，而不是读路径校验。
  */
 
 import fs from "node:fs/promises";
@@ -40,6 +46,15 @@ export class Workspace {
     return candidate;
   }
 
+  /**
+   * 只读解析：接受任意绝对路径与含 `..` 的相对路径，符号链接按文件系统原样跟随。
+   * 不做 realpath 校验——读取没有越界写风险，边界防护只对写入通道有意义。
+   */
+  resolveForRead(userPath: string): string {
+    if (userPath.includes("\0")) throw new Error("Path contains a null byte");
+    return path.resolve(this.root, userPath);
+  }
+
   relative(absolutePath: string): string {
     return path.relative(this.root, absolutePath) || ".";
   }
@@ -51,7 +66,7 @@ export class Workspace {
         [
           `Path escapes workspace: ${candidate}`,
           `workspace root: ${this.root}`,
-          'File tools only accept paths inside the workspace. Use a workspace-relative path (e.g. "src/app.ts"); to work on another directory, open that directory as the project.',
+          'Write tools only accept paths inside the workspace. Use a workspace-relative path (e.g. "src/app.ts"); to write to another directory, open that directory as the project.',
         ].join("\n"),
       );
     }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { latestContextStats } from "./context-stats";
 import type {
   AgentSessionStats,
   AgentSnapshot,
@@ -74,6 +75,8 @@ import { WorkbenchPanels } from "./browser/workbench-panels";
 import { useBrowserPanels } from "./browser/use-browser-panels";
 import { FilesPanel } from "./browser/files-panel";
 import { useDelegationTabs } from "./browser/use-delegation-tabs";
+import { useDelegationState } from "./use-delegation-state";
+import { reconcileDelegationMessages, reconcileDelegationSessions } from "./delegation-state";
 import { useSidebarLayout } from "./sidebar-layout";
 import { branchAutoExpanded, groupDelegatedSessions } from "./session-tree";
 import { ProgressOverlay } from "./progress-overlay";
@@ -141,6 +144,7 @@ export function SessionRow({
   onToggleBranch,
   onOpen,
   onOpenInMain,
+  onStop,
   onPin,
   onRename,
   onRemove,
@@ -155,6 +159,7 @@ export function SessionRow({
   onOpen(): void;
   /** 委派子会话专用：在中间主会话区打开（默认改为在右侧面板开只读标签）。 */
   onOpenInMain?(): void;
+  onStop?(): Promise<void>;
   onPin(): void;
   onRename(title: string): void;
   onRemove(): void;
@@ -162,6 +167,7 @@ export function SessionRow({
   const { t } = useI18n();
   const [menu, setMenu] = useState<{ x: number; y: number }>();
   const [editing, setEditing] = useState(false);
+  const [stopping, setStopping] = useState(false);
 
   useEffect(() => {
     if (!menu) return;
@@ -179,7 +185,7 @@ export function SessionRow({
   const openMenu = (x: number, y: number) => {
     setMenu({
       x: Math.max(8, Math.min(x, window.innerWidth - 190)),
-      y: Math.max(8, Math.min(y, window.innerHeight - 154)),
+      y: Math.max(8, Math.min(y, window.innerHeight - (onStop ? 220 : 184))),
     });
   };
   const action = (callback: () => void) => {
@@ -277,6 +283,15 @@ export function SessionRow({
             <button type="button" role="menuitem" onClick={() => action(onOpenInMain)}>
               <Icon path="M4 6h16v12H4zM9 10l3 3 3-3" size={16} />
               <span>{t("nav.openDelegatedInMain")}</span>
+            </button>
+          )}
+          {delegationRunning && onStop && (
+            <button type="button" role="menuitem" disabled={stopping} onClick={() => action(() => {
+              setStopping(true);
+              void onStop().finally(() => setStopping(false));
+            })}>
+              <Icon path="M6 6h12v12H6z" size={16} />
+              <span>{stopping ? t("subagent.stopping") : t("subagent.stop")}</span>
             </button>
           )}
           <button type="button" role="menuitem" onClick={() => action(() => setEditing(true))}>
@@ -434,7 +449,9 @@ function activeChatProvider(accounts: ProviderStatus[]) {
 export function App() {
   const { t, locale } = useI18n();
   const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionRows, setSessions] = useState<SessionSummary[]>([]);
+  const delegationRecords = useDelegationState();
+  const sessions = useMemo(() => reconcileDelegationSessions(sessionRows, delegationRecords), [sessionRows, delegationRecords]);
   // Phase 1：保留"运行中/未落盘"会话的展示标题。底层在首条 assistant 落盘前不写
   // JSONL，主进程 `sessions:list` 会合成一条占位（标题为 cwd 兜底）；这里用首次消息
   // 标题覆写，使新会话在切走/刷新后仍显示用户真正输入的标题，而非 cwd 名。
@@ -472,6 +489,7 @@ export function App() {
   const [thinkingLevels, setThinkingLevels] = useState<string[]>(["low", "medium", "high", "max"]);
   const [permission, setPermission] = useState<PermissionMode>("auto");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const displayMessages = useMemo(() => reconcileDelegationMessages(messages, delegationRecords), [messages, delegationRecords]);
   const [stats, setStats] = useState<AgentSessionStats>();
   const [promptFill, setPromptFill] = useState({ text: "", token: 0 });
   const fillPrompt = useCallback((text: string) => {
@@ -524,8 +542,17 @@ export function App() {
     [browserPanels.openChildSession],
   );
   const sidebarLayout = useSidebarLayout();
+  const [inspectFocusToken, setInspectFocusToken] = useState(0);
+  const openCapabilities = useCallback(() => {
+    browserPanels.openPanel("mcp");
+    browserPanels.openPanel("skills");
+    setInspectFocusToken((value) => value + 1);
+  }, [browserPanels.openPanel]);
   // 父代理创建子代理时自动开右侧标签（对齐 Proma 的 delegation 面板），并实时刷新状态。
-  useDelegationTabs(messages, browserPanels);
+  useDelegationTabs(displayMessages, browserPanels, delegationRecords, activeSession);
+  useEffect(() => {
+    if (delegationRecords.size) void window.harness.sessions.list().then(setSessionList).catch(() => undefined);
+  }, [delegationRecords, setSessionList]);
 
   // 主进程是旧构建（本地重建过但没完全重启）时提示一次：否则会出现「worker 已是新代码、
   // 主进程还是旧定义」这类很难自查的现象。
@@ -636,10 +663,10 @@ export function App() {
 
   const groupCache = useRef<ReturnType<typeof groupConversation>>([]);
   const groups = useMemo(() => {
-    const next = groupConversation(messages, groupCache.current);
+    const next = groupConversation(displayMessages, groupCache.current);
     groupCache.current = next;
     return next;
-  }, [messages]);
+  }, [displayMessages]);
   const follow = useFollowScroll(`${workspace ?? ""}:${transcriptKey}`, !loading);
   const setScroller = useCallback((node: HTMLDivElement | null) => {
     scroller.current = node;
@@ -647,7 +674,7 @@ export function App() {
   }, [follow.viewportRef]);
   const recoverableStreaks = useMemo(() => recoverableFailStreaks(groups), [groups]);
   const anchors = useMemo(() => turnAnchors(groups), [groups]);
-  const tools = useMemo(() => sessionTools(messages), [messages]);
+  const tools = useMemo(() => sessionTools(displayMessages), [displayMessages]);
   const workingFiles = useMemo(() => collectWorkingFiles(tools, mentionedFiles(messages)), [messages, tools]);
   const chatTodos = useMemo(() => collectTodos(messages, tools), [messages, tools]);
   const todos = chatTodos.length ? chatTodos : featureTodos;
@@ -681,7 +708,10 @@ export function App() {
   }, [sessions, workspaces]);
 
   const refreshAgentSkills = useCallback(async () => {
-    const loadDisk = () => window.harness.app.listSkills().catch(() => [] as AgentSkillCommand[]);
+    const loadDisk = () => window.harness.skills.list(workspace).then((snapshot) => snapshot.skills
+      .filter((skill) => skill.enabled && !skill.warning && (skill.scope === "user" || snapshot.projectTrusted))
+      .map((skill) => ({ name: skill.name, description: skill.description, path: skill.path })))
+      .catch(() => [] as AgentSkillCommand[]);
     if (!agentCwd.current) {
       setAgentSkills(await loadDisk());
       return;
@@ -704,7 +734,11 @@ export function App() {
     } catch {
       setAgentSkills(await loadDisk());
     }
-  }, []);
+  }, [workspace]);
+
+  useEffect(() => window.harness.capabilities.onChanged((cwd) => {
+    if (!cwd || cwd === workspace) void refreshAgentSkills();
+  }), [workspace, refreshAgentSkills]);
 
   const refresh = useCallback(async () => {
     const [recent, status, threads] = await Promise.all([
@@ -830,7 +864,7 @@ export function App() {
         replay.reduce((current, event) => applyAgentEvent(current, event), input);
       if (seedMessage) {
         setMessages(withReplay([...normalizeMessages(snapshot.messages), seedMessage]));
-        setStats(snapshot.stats);
+        setStats(latestContextStats(replay, snapshot.stats));
         setAgentSkills(snapshot.skills ?? []);
         setRunning(true);
       } else {
@@ -838,7 +872,7 @@ export function App() {
         const hadRunning = Boolean(raw.at(-1)?.tools.some((tool) => tool.status === "running"));
         const next = withReplay(resume ? finalizeInterruptedTurn(raw) : raw);
         setMessages(next);
-        setStats(snapshot.stats);
+        setStats(latestContextStats(replay, snapshot.stats));
         // Phase 3b：切回正在后台运行的会话时，以运行集合为准（比 isStreaming 启发式准）。
         const inBackgroundSet = file
           ? runningSessionIdsRef.current.has(file)
@@ -866,6 +900,7 @@ export function App() {
             setMessages((current) =>
               fresh.reduce((next, event) => applyAgentEvent(next, event), current),
             );
+            setStats((current) => latestContextStats(fresh, current));
             eventSeqRef.current.set(
               file,
               fresh.reduce(
@@ -962,6 +997,12 @@ export function App() {
       ...(session.delegationReport ? { report: session.delegationReport } : {}),
     });
   }, [browserPanels]);
+
+  const stopDelegatedSession = useCallback(async (session: SessionSummary) => {
+    if (!session.sourceDelegationId) return;
+    try { await window.harness.delegations.stop(session.sourceDelegationId); }
+    catch (error) { setToast(agentErrorToast(error)); }
+  }, [agentErrorToast]);
 
   const openSession = useCallback((session: SessionSummary) => {
     // Allow re-open when the row is highlighted but the transcript failed to load.
@@ -1499,22 +1540,20 @@ export function App() {
         }
         if (Array.isArray(event.thinkingLevels)) void syncAgentThinking();
         if (Array.isArray(event.skills)) setAgentSkills(event.skills as AgentSkillCommand[]);
-        if (event.stats && typeof event.stats === "object") setStats(event.stats as AgentSessionStats);
+      }
+      if ((event.type === "desktop_session_stats" || event.type === "desktop_snapshot_meta") && event.stats && typeof event.stats === "object") {
+        const nextStats = event.stats as AgentSessionStats;
+        setStats(nextStats);
+        if (typeof nextStats.sessionFile === "string") {
+          sessionRef.current = nextStats.sessionFile;
+          setActiveSession(nextStats.sessionFile);
+        }
       }
       if (event.type === "agent_settled") {
         setRunning(false);
         setStopping(false);
         setUiRequest(undefined);
         markSessionRunning(eventSession ?? sessionRef.current, false);
-        const seq = startSeq.current;
-        const epoch = runEpoch.current;
-        void window.harness.agent.command<AgentSessionStats>("get_session_stats").then((nextStats) => {
-          if (!live.current || seq !== startSeq.current || epoch !== runEpoch.current) return;
-          setStats(nextStats);
-          if (typeof nextStats?.sessionFile !== "string") return;
-          sessionRef.current = nextStats.sessionFile;
-          setActiveSession(nextStats.sessionFile);
-        }).catch(() => undefined);
         void window.harness.sessions.list().then(setSessionList);
       }
       if (event.type === "queue_update") {
@@ -1854,6 +1893,7 @@ export function App() {
         onToggle={sidebarLayout.toggle}
         onNew={() => void newThread()}
         onOpen={() => void openFolder()}
+        onCapabilities={openCapabilities}
         account={(
           <AccountMenu
             model={model}
@@ -1927,6 +1967,7 @@ export function App() {
                           branchExpanded={expanded}
                           onToggleBranch={() => setRailOpen((current) => ({ ...current, [session.id]: !expanded }))}
                           onOpen={() => openSession(session)}
+                          onStop={session.sourceDelegationId ? () => stopDelegatedSession(session) : undefined}
                           onPin={() => void pinSession(session)}
                           onRename={(title) => void renameSession(session, title)}
                           onRemove={() => void removeSession(session)}
@@ -1941,6 +1982,7 @@ export function App() {
                                 running={runningSessionIds.has(child.path)}
                                 onOpen={() => openDelegatedSession(child)}
                                 onOpenInMain={() => openSession(child)}
+                                onStop={() => stopDelegatedSession(child)}
                                 onPin={() => void pinSession(child)}
                                 onRename={(title) => void renameSession(child, title)}
                                 onRemove={() => void removeSession(child)}
@@ -1961,6 +2003,8 @@ export function App() {
       <PanelActionsProvider actions={panelActions}>
       <Chat
         onSidebarAutoCollapse={sidebarLayout.collapseAutomatically}
+        inspectFocusToken={inspectFocusToken}
+        inspectMinWidth={browserPanels.active === "skills" || browserPanels.active === "mcp" ? 440 : 0}
         home={home}
         title={activeTitle || (workspace ? baseName(workspace) : undefined)}
         crumb={!home && workspace && activeTitle && baseName(workspace) !== activeTitle && (
@@ -1980,8 +2024,8 @@ export function App() {
           // 滚动锚点，避免随后按旧锚点补偿把这次跳转拉回（见 use-follow-scroll 的 reanchor）。
           messageList.current?.scrollToAnchor(id, { onSettled: follow.reanchor });
         }} />}
-        inspect={workspace ? (
-          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace}
+        inspect={workspace || browserPanels.tabs.some((tab) => tab.type === "skills" || tab.type === "mcp") ? (
+          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace} onUsePrompt={fillPrompt}
             sideChatProps={{
               workspace,
               provider: connected,
@@ -2118,6 +2162,7 @@ export function App() {
       {loginOpen && (
         <Login
           agentSkills={agentSkills}
+          onManageCapabilities={() => { setLoginOpen(false); openCapabilities(); }}
           onRefreshSkills={() => void refreshAgentSkills()}
           onClose={() => {
             setLoginOpen(false);

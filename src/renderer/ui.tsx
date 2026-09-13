@@ -1,6 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { Bot, Check, Download, Info, MessageCirclePlus, PanelLeftClose, PanelLeftOpen, Target, X } from "lucide-react";
+import { contextCapacity, generationSpeed } from "./context-stats";
+import { Bot, Check, Download, Info, MessageCirclePlus, PanelLeftClose, PanelLeftOpen, Blocks, Target, X } from "lucide-react";
 import { Streamdown, defaultRehypePlugins, defaultRemarkPlugins, type Components } from "streamdown";
 import type { AgentSessionStats, ExtensionUiRequest, PermissionMode } from "../shared/types";
 import { workspacePreviewUrl } from "../shared/preview";
@@ -216,6 +217,7 @@ export function SidebarNav({
   onToggle,
   onNew,
   onOpen,
+  onCapabilities,
   account,
   children,
 }: {
@@ -223,6 +225,7 @@ export function SidebarNav({
   onToggle(): void;
   onNew(): void;
   onOpen(): void;
+  onCapabilities?(): void;
   account: ReactNode;
   children: ReactNode;
 }) {
@@ -254,6 +257,10 @@ export function SidebarNav({
           <Icon path="M3 7h6l2 2h10v10H3z" />
           <span className="nav-label">{t("nav.projects")}</span>
         </button>
+        {onCapabilities && <button type="button" className="nav-btn" onClick={onCapabilities} title={t("nav.capabilities")} aria-label={t("nav.capabilities")}>
+          <Blocks size={17} strokeWidth={1.75} />
+          <span className="nav-label">{t("nav.capabilities")}</span>
+        </button>}
       </div>
       <div className="thread-list">{children}</div>
       <footer className="sidebar-footer">{account}</footer>
@@ -270,6 +277,8 @@ export function Chat({
   title,
   crumb,
   onSidebarAutoCollapse,
+  inspectFocusToken,
+  inspectMinWidth = 0,
 }: {
   children: ReactNode;
   composer?: ReactNode;
@@ -279,9 +288,12 @@ export function Chat({
   title?: string;
   crumb?: ReactNode;
   onSidebarAutoCollapse?(): void;
+  inspectFocusToken?: number;
+  inspectMinWidth?: number;
 }) {
   const { t } = useI18n();
   const [drawer, setDrawer] = useState(true);
+  useEffect(() => { if (inspectFocusToken) setDrawer(true); }, [inspectFocusToken]);
   const [panelHeaderHost, setPanelHeaderHost] = useState<HTMLDivElement | null>(null);
   useEffect(() => window.harness.browser.onAgentPresentation((event) => {
     if (event.action !== "close") setDrawer(true);
@@ -289,7 +301,7 @@ export function Chat({
   const [preferredInspectWidth, setPreferredInspectWidth] = useState(readInspectWidth);
   const [chatBodyWidth, setChatBodyWidth] = useState<number>();
   const chatBodyRef = useRef<HTMLDivElement>(null);
-  const inspectWidth = clampInspectWidth(preferredInspectWidth, chatBodyWidth);
+  const inspectWidth = clampInspectWidth(Math.max(preferredInspectWidth, inspectMinWidth), chatBodyWidth);
   const widthRef = useRef(inspectWidth);
   widthRef.current = inspectWidth;
 
@@ -425,17 +437,26 @@ export function ContextStats({
   onCompact?(): void;
 }) {
   const { t } = useI18n();
-  const popover = usePickerPopover(!up, 286, 430);
+  const popover = usePickerPopover(!up, 380, 370);
   const { open, setOpen } = popover;
-
-  const percent = stats?.contextUsage?.percent !== null && stats?.contextUsage?.percent !== undefined
-    ? Math.round(stats.contextUsage.percent * 10) / 10
-    : undefined;
-  const contextTokens = stats?.contextUsage?.tokens ?? (stats?.tokens?.total ? stats.tokens.total : undefined);
-  const contextWindow = stats?.contextUsage?.contextWindow ?? 128_000;
-  const rate = cacheHitRate(stats?.tokens);
+  const capacity = contextCapacity(stats);
+  const { usedPercent, remainingPercent, estimated } = capacity;
+  const turn = stats?.turnUsage;
+  const tokens = turn?.tokens;
+  const rate = cacheHitRate(tokens);
+  const speed = generationSpeed(stats);
+  const amount = (value: number | undefined, approximate = false) => value === undefined
+    ? "—"
+    : approximate ? t("context.approximate", { n: formatCompactNumber(value) }) : formatCompactNumber(value);
+  const percent = (value: number | undefined) => value === undefined ? "—" : `${estimated ? "≈" : ""}${value}%`;
+  const remainingLabel = capacity.remaining !== undefined
+    ? t("context.remaining", { n: amount(capacity.remaining, estimated) })
+    : t("context.title");
+  const accessibleLabel = capacity.remaining !== undefined
+    ? `${remainingLabel} · ${percent(remainingPercent)}`
+    : t("context.monitor");
   const canCompact = Boolean(onCompact) && !running && !busy;
-  const showCompact = Boolean(onCompact) && percent !== undefined;
+  const showCompact = Boolean(onCompact) && Boolean(stats?.totalMessages);
 
   return (
     <div className={`context-stats-wrap${open ? " open" : ""}${up ? " up" : ""}`}>
@@ -445,145 +466,89 @@ export function ContextStats({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-controls={open ? popover.id : undefined}
-        className={`stats-toggle${open ? " on" : ""}${
-          percent !== undefined && percent >= 90 ? " hot" : percent !== undefined && percent >= 80 ? " warm" : ""
-        }`}
-        aria-label={t("context.monitor")}
-        title={t("context.monitor")}
+        className={`stats-toggle${open ? " on" : ""}${usedPercent !== undefined && usedPercent >= 90 ? " hot" : usedPercent !== undefined && usedPercent >= 75 ? " warm" : ""}`}
+        aria-label={accessibleLabel}
+        title={accessibleLabel}
         onClick={() => setOpen((was) => !was)}
       >
         <svg width="16" height="16" viewBox="0 0 16 16" className="stats-dial" aria-hidden="true">
           <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="1.34" />
-          {percent !== undefined && (
-            <circle
-              cx="8"
-              cy="8"
-              r="6.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.34"
-              strokeDasharray={40.84}
-              strokeDashoffset={40.84 - (Math.min(100, Math.max(0, percent)) / 100) * 40.84}
-              strokeLinecap="round"
-              transform="rotate(-90 8 8)"
-            />
+          {remainingPercent !== undefined && (
+            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.34"
+              strokeDasharray={40.84} strokeDashoffset={40.84 * (1 - Math.min(100, remainingPercent) / 100)}
+              strokeLinecap="round" transform="rotate(-90 8 8)" />
           )}
         </svg>
-        <span className="toolbar-label">{percent !== undefined ? `${percent}%` : t("context.label")}</span>
+        <span className="toolbar-label">{remainingPercent !== undefined ? percent(remainingPercent) : t("context.label")}</span>
       </button>
 
       {open && popover.placement && createPortal(
-        <div ref={popover.panel} id={popover.id} data-picker-popover={popover.id} data-toolbar-owner={popover.toolbarOwner} className="context-popover picker-panel" role="dialog" aria-label={t("context.title")} style={popover.placement}>
+        <div ref={popover.panel} id={popover.id} data-picker-popover={popover.id} data-toolbar-owner={popover.toolbarOwner}
+          className="context-popover picker-panel" role="dialog" aria-label={t("context.title")} style={popover.placement}>
           <div className="context-popover-head">
-            <span className="context-popover-title">{t("context.title")}</span>
-            {rate !== undefined && (
-              <span className="context-badge-hit">
-                <i /> {t("context.cacheRate", { rate: rate.toFixed(0) })}
-              </span>
-            )}
+            <strong>{remainingLabel}</strong>
+            <strong>{percent(remainingPercent)}</strong>
+          </div>
+          <div className="context-window-row">
+            <span>{t("context.capacity")}</span>
+            <strong>{amount(capacity.used, estimated)} / {amount(capacity.window)} tokens</strong>
+            <span>{usedPercent !== undefined ? t("context.usedPercent", { n: percent(usedPercent) }) : "—"}</span>
           </div>
 
-          <div className="context-section context-capacity">
-            <div className="context-ring-wrap">
-              <svg width="48" height="48" viewBox="0 0 48 48" className="context-ring-svg" aria-hidden="true">
-                <circle cx="24" cy="24" r="20" fill="none" stroke="var(--line)" strokeWidth="3" />
-                {percent !== undefined && (
-                  <circle
-                    cx="24"
-                    cy="24"
-                    r="20"
-                    fill="none"
-                    stroke={percent >= 90 ? "var(--red)" : percent >= 80 ? "var(--accent)" : "var(--green)"}
-                    strokeWidth="3"
-                    strokeDasharray={125.66}
-                    strokeDashoffset={125.66 - (Math.min(100, Math.max(0, percent)) / 100) * 125.66}
-                    strokeLinecap="round"
-                    transform="rotate(-90 24 24)"
-                  />
-                )}
-              </svg>
-              <div className="context-ring-label">
-                <strong>{percent !== undefined ? `${percent}%` : "—"}</strong>
-                <small>{percent !== undefined ? t("context.used") : t("context.untracked")}</small>
-              </div>
+          <div className="context-metrics">
+            <div className="context-metric-row" title={t("context.reportedUsage")}>
+              <span>{t("context.turnTotal")}</span>
+              <strong>{amount(tokens?.total)}</strong>
             </div>
-            <div className="context-capacity-info">
-              <span className="context-label">{t("context.capacity")}</span>
-              <span className="context-ratio">
-                {contextTokens !== undefined ? formatCompactNumber(contextTokens) : "—"} / {formatCompactNumber(contextWindow)}
-              </span>
-              <small className={`context-hint ${percent && percent >= 80 ? "warn" : ""}`}>
-                {percent === undefined
-                  ? t("context.waitFirst")
-                  : percent >= 90
-                    ? t("context.critical")
-                    : percent >= 75
-                      ? t("context.high")
-                      : t("context.ok")}
-              </small>
-            </div>
-            {showCompact && (
-              <button
-                type="button"
-                className="context-compact-btn"
-                disabled={!canCompact}
-                title={running ? t("toast.waitBeforeCompact") : undefined}
-                onClick={() => {
-                  if (!canCompact) return;
-                  onCompact?.();
-                }}
-              >
-                {busy ? t("context.compacting") : t("context.compact")}
-              </button>
-            )}
-          </div>
-
-          <div className="context-section">
-            <div className="context-section-head">
-              <span>{t("context.tokenTotal")}</span>
-              {stats?.tokens?.total ? (
-                <span className="context-token-sum">{t("context.tokenSum", { n: formatCompactNumber(stats.tokens.total) })}</span>
-              ) : null}
-            </div>
-            <div className="context-stat-row">
-              <span>{t("context.input")} <b>{stats?.tokens?.input !== undefined ? formatCompactNumber(stats.tokens.input) : "—"}</b></span>
-              <span>{t("context.output")} <b>{stats?.tokens?.output !== undefined ? formatCompactNumber(stats.tokens.output) : "—"}</b></span>
+            <div className="context-metric-row">
+              <span>{t("context.speed")}</span>
+              <strong>{speed !== undefined ? `${amount(speed, turn?.outputEstimated)} tokens/s` : "—"}</strong>
             </div>
           </div>
 
-          <div className="context-section">
-            <div className="context-section-head">
-              <span>{t("context.cacheTitle")}</span>
-              <strong className="context-rate-text">{rate !== undefined ? `${rate.toFixed(1)}%` : "—"}</strong>
+          <div className="context-summary-row">
+            <span>{t("context.modelUsage")}</span>
+            <div className="context-summary-values">
+              {tokens ? <>
+                <span>{t("context.input")} {amount(tokens.input)}</span>
+                <span>{t("context.output")} {amount(tokens.output)}</span>
+                <span>{t("context.cacheHit")} {amount(tokens.cacheRead)}</span>
+                {tokens.cacheWrite > 0 && <span>{t("context.cacheWrite")} {amount(tokens.cacheWrite)}</span>}
+                {rate !== undefined && <span>{t("context.cacheRate", { rate: rate.toFixed(0) })}</span>}
+              </> : <span className="context-muted">{t("context.waitUsage")}</span>}
             </div>
-            <div className="context-bar-track">
-              <div
-                className="context-bar-fill"
-                style={{ width: `${Math.min(100, Math.max(0, rate ?? 0))}%` }}
-              />
+          </div>
+          <div className="context-summary-row">
+            <span>{t("context.tools")}</span>
+            <div className="context-summary-values">
+              {turn?.tools.calls
+                ? t("context.toolSummary", { kinds: turn.tools.kinds, calls: turn.tools.calls, n: amount(turn.tools.tokens) })
+                : t("context.noTools")}
             </div>
-            <div className="context-cache-meta">
-              <span>{t("context.cacheHit")} <b>{stats?.tokens?.cacheRead ? formatCompactNumber(stats.tokens.cacheRead) : "0"}</b></span>
-              {Boolean(stats?.tokens?.cacheWrite) ? (
-                <span>{t("context.cacheWrite")} <b>{formatCompactNumber(stats!.tokens.cacheWrite)}</b></span>
-              ) : (
-                <span>{t("context.cacheMiss")} <b>{stats?.tokens?.input !== undefined ? formatCompactNumber(stats.tokens.input) : "—"}</b></span>
-              )}
-            </div>
+          </div>
+          <div className="context-metric-row context-session-total">
+            <span>{t("context.sessionTotal")}</span>
+            <span>{amount(stats?.tokens.total)} tokens</span>
           </div>
 
           <div className="context-popover-foot">
-            <div className="context-foot-item context-foot-item-model">
-              <span className="context-foot-label">{t("common.model")}</span>
+            <div className="context-foot-row">
               <code className="context-model-tag">{model || t("context.defaultModel")}</code>
+              {reasoningLevelsAvailable(effortLevels ?? []) && effort && <span>{t(effortLabelKey(effort))}</span>}
             </div>
-            {reasoningLevelsAvailable(effortLevels ?? []) && effort && (
-              <div className="context-foot-row">
-                <div className="context-foot-item">
-                  <span className="context-foot-label">{t("composer.effort")}</span>
-                  <span className="context-effort-val">{t(effortLabelKey(effort))}</span>
-                </div>
-              </div>
+            {(estimated || usedPercent === undefined || usedPercent >= 75) && (
+              <small className={`context-hint${usedPercent !== undefined && usedPercent >= 75 ? " warn" : ""}`}>
+                {usedPercent === undefined ? t("context.waitFirst")
+                  : usedPercent >= 90 ? t("context.critical")
+                  : usedPercent >= 75 ? t("context.high") : t("context.liveEstimate")}
+              </small>
+            )}
+            {showCompact && (
+              <button type="button" className="context-compact-btn" disabled={!canCompact}
+                title={running ? t("toast.waitBeforeCompact") : undefined}
+                onClick={() => { if (canCompact) onCompact?.(); }}>
+                {busy ? t("context.compacting") : t("context.compact")}
+              </button>
             )}
           </div>
         </div>, document.body,
@@ -1565,7 +1530,7 @@ function fileGlyph(path: string) {
   return /\.(tsx?|jsx?|mjs|cjs|css|json|ya?ml)$/i.test(path) ? "M8 8l-4 4 4 4M16 8l4 4-4 4" : "M6 3h9l5 5v13H6z";
 }
 
-export type PanelTab = { id: string; label: string; title?: string };
+export type PanelTab = { id: string; label: string; title?: string; icon?: ReactNode };
 
 export type PanelAddItem = { type: string; label: string; icon: ReactNode; hint?: string };
 
@@ -1662,6 +1627,7 @@ export function PanelTabs({
             title={tab.title || tab.label}
             onClick={() => onSelect(tab.id)}
           >
+            {tab.icon}
             <span className="inspect-tab-label">{tab.label}</span>
             {onCloseTab && (
               <span
@@ -3535,11 +3501,13 @@ function settingsNav(t: ReturnType<typeof useI18n>["t"]): Array<{ label: string;
 export function Login({
   agentSkills = [],
   onRefreshSkills,
+  onManageCapabilities,
   onClose,
   onSaved,
 }: {
   agentSkills?: AgentSkillCommand[];
   onRefreshSkills?: () => void;
+  onManageCapabilities?: () => void;
   onClose(): void;
   onSaved(): Promise<void>;
 }) {
@@ -3764,6 +3732,7 @@ export function Login({
 
             {pane === "skills" && (
               <>
+                {onManageCapabilities && <button type="button" className="ghost" onClick={onManageCapabilities}><Blocks size={15} />{t("nav.capabilities")}</button>}
                 <p className="settings-hint">{t("settings.skillsUse")}</p>
 
                 <div className="skills-section">

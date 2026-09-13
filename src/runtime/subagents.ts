@@ -62,13 +62,17 @@ export const BUILTIN_SUBAGENTS: SubagentDefinition[] = [
     name: "code-reviewer",
     description:
       "独立只读审查指定变更的正确性、安全、并发与契约风险；不用于格式或拼写检查。",
-    tools: ["read_file", "list_files", "search_files"],
+    // exec_command 与 explorer 同款，只开放只读白名单：会话绑定在代码目录之外的
+    // 子目录时（如设计稿目录），没有命令通道就一个字节都读不到目标代码。
+    tools: ["read_file", "list_files", "search_files", "exec_command"],
+    execPolicy: "readonly",
     thinkingLevel: "high",
     maxTurns: 40,
     prompt: [
       "独立审查指定 diff、文件及直接相关行为。基于实际证据判断，不迎合主代理的预设结论，也不自动扩成全项目审查。",
       "优先报告可行动的正确性、安全、并发和跨模块契约问题。每项给出触发条件、影响、精确位置与关键证据，按重要性排序。",
       "阅读过代码不代表问题已复现；明确区分代码事实、推断的失败路径和未执行的验证。缺少 diff 或必要上下文时说明覆盖限制。",
+      "可用 exec_command 执行白名单内的只读命令（wc、rg、git diff、git log 等）核对行数与证据；只报告实际得到的输出。",
       "不为凑数量制造发现，不给无关重构或风格建议；没有发现时明确说明检查范围与限制。",
       "完成指定范围即返回。发现阻塞或足以改变主代理决策的重大反证时，及时返回现有证据。不得修改文件或外部数据。",
     ].join("\n"),

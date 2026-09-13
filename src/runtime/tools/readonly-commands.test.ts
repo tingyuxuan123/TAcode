@@ -57,6 +57,33 @@ describe("checkReadOnlyCommand", () => {
     }
   });
 
+  it("引号内的 | ; && 是参数的一部分，不切断命令", () => {
+    // 回归：旧实现用裸正则切段，`rg "a|b" src | head` 里引号内的 | 被当成管道，
+    // 整条命令被拒，子代理只能改写成 -e 多模式绕行。
+    for (const command of [
+      'rg -n "a|b" src | head -5',
+      "rg -n 'a;b' src",
+      'rg "x && y" src',
+      "rg -e a -e b src",
+    ]) {
+      const verdict = checkReadOnlyCommand(command);
+      expect(verdict.ok, `${command} → ${verdict.reason}`).toBe(true);
+    }
+  });
+
+  it("换行仍是命令分隔符，第二行的危险命令照样被拒", () => {
+    expect(checkReadOnlyCommand("cat a.txt\nrm -rf src").ok).toBe(false);
+    expect(checkReadOnlyCommand("cat a.txt\nnode -e x").ok).toBe(false);
+    expect(checkReadOnlyCommand("wc -l a.txt\nwc -l b.txt").ok).toBe(true);
+  });
+
+  it("危险旗标在 quote-aware 切分下仍然被拒", () => {
+    for (const command of ['find . -name "*.ts" -delete', "git -c core.pager=cat log", "sort -o x a.txt"]) {
+      const verdict = checkReadOnlyCommand(command);
+      expect(verdict.ok, `${command} 不该被放行`).toBe(false);
+    }
+  });
+
   it("拒绝信息里带上可用清单，避免模型反复重试", () => {
     expect(READONLY_EXEC_HINT).toContain("wc");
     expect(READONLY_EXEC_HINT).toContain("git");

@@ -307,3 +307,32 @@ describe("AgentManager error handling", () => {
     expect(manager.active).toBeUndefined();
   });
 });
+
+describe("parent delegation cleanup", () => {
+  it.each(["abort", "close", "new_session", "shutdown"])("cleans up child workers on %s", async (action) => {
+    const host = new FakeHost({});
+    const stopDelegations = vi.fn(async () => {});
+    const manager = new AgentManager({ createHost: () => asHost(host), stopDelegations });
+    const started = await manager.start(options("/parent.jsonl"));
+    if (action === "close") await manager.stop(started.runtimeId);
+    else if (action === "shutdown") await manager.stopAll();
+    else await manager.command(started.runtimeId, action);
+    expect(stopDelegations).toHaveBeenCalledExactlyOnceWith("/parent.jsonl");
+  });
+
+  it("closes the parent and its children while a long command is still pending", async () => {
+    const host = new FakeHost({});
+    const stopDelegations = vi.fn(async () => {});
+    const manager = new AgentManager({ createHost: () => asHost(host), stopDelegations });
+    const started = await manager.start(options("/parent.jsonl"));
+    host.blockNextRequest("compact");
+    const pending = manager.command(started.runtimeId, "compact");
+    await new Promise((resolve) => setImmediate(resolve));
+    await manager.stop(started.runtimeId);
+    expect(host.stops).toBe(1);
+    expect(stopDelegations).toHaveBeenCalledExactlyOnceWith("/parent.jsonl");
+    expect(manager.findRuntime(started.runtimeId)).toBeUndefined();
+    host.releaseRequest();
+    await pending;
+  });
+});

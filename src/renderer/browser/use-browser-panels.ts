@@ -18,6 +18,8 @@ export function useBrowserPanels() {
     if (type === "review") dispatch({ type: "open-review" });
     else if (type === "files") dispatch({ type: "open-files" });
     else if (type === "terminal") dispatch({ type: "open-terminal" });
+    else if (type === "skills") dispatch({ type: "open-skills" });
+    else if (type === "mcp") dispatch({ type: "open-mcp" });
     else if (type === "side-chat") dispatch({ type: "open-side-chat" });
     else if (type === "browser") openBrowser();
   }, [openBrowser]);

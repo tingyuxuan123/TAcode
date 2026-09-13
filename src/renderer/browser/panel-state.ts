@@ -12,6 +12,7 @@ export type BrowserPanelTab = {
 export type ReviewPanelTab = { id: "review"; type: "review" };
 export type FilesPanelTab = { id: "files"; type: "files"; selectedPath?: string };
 export type TerminalPanelTab = { id: "terminal"; type: "terminal" };
+export type CapabilityPanelTab = { id: "skills"; type: "skills" } | { id: "mcp"; type: "mcp" };
 /**
  * 侧边聊天（对齐 Codex 的 side chat）：声明式临时会话，可同主会话并开多个，
  * `ordinal` 是「侧边聊天 1/2/3」的编号（关闭后补最小空位，不重排已开的）；
@@ -22,6 +23,7 @@ export type WorkbenchPanelTab =
   | ReviewPanelTab
   | FilesPanelTab
   | TerminalPanelTab
+  | CapabilityPanelTab
   | SideChatPanelTab
   | BrowserPanelTab
   | ChildSessionPanelTab
@@ -60,6 +62,8 @@ export interface ChildSessionPanelInfo {
   task?: string;
   /** 运行中的当前步骤（对齐卡片上的 live 预览），表头实时显示执行进度。 */
   live?: string;
+  uiRequest?: import("../../shared/types").ExtensionUiRequest;
+  error?: string;
   /** 没有子会话转录（进程内委派）时的回退内容：最终报告 + 活动流。 */
   report?: string;
   activity?: Array<{ at: number; kind: string; text: string; isError?: boolean }>;
@@ -115,6 +119,8 @@ export type PanelAction =
   | { type: "open-review" }
   | { type: "open-files"; path?: string }
   | { type: "open-terminal" }
+  | { type: "open-skills" }
+  | { type: "open-mcp" }
   | { type: "open-side-chat"; sourceSession?: string; draft?: string; activate?: boolean }
   | { type: "focus-side-chat" }
   | { type: "session-changed"; sourceSession?: string }
@@ -202,6 +208,10 @@ function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
     }
     case "open-terminal":
       return { tabs: state.tabs.some((tab) => tab.type === "terminal") ? state.tabs : [...state.tabs, { id: "terminal", type: "terminal" }], active: "terminal", session: state.session, sessionActive: state.sessionActive };
+    case "open-skills":
+      return { ...state, tabs: state.tabs.some((tab) => tab.type === "skills") ? state.tabs : [...state.tabs, { id: "skills", type: "skills" }], active: "skills" };
+    case "open-mcp":
+      return { ...state, tabs: state.tabs.some((tab) => tab.type === "mcp") ? state.tabs : [...state.tabs, { id: "mcp", type: "mcp" }], active: "mcp" };
     case "open-side-chat": {
       // 侧边聊天是多实例（Codex 模式）：每次 open 都新建编号标签，按 id 而非类型去重；
       // 来源未显式给出时锚定当前主会话，保证可见性跟随会话切换。

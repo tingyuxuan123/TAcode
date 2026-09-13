@@ -28,6 +28,8 @@ export function sessionFileOf(snapshot: AgentSnapshot): string | undefined {
 export interface AgentManagerOptions {
   /** 构造一个新的 RPC 宿主；manager 会立即写入 runtimeId。 */
   createHost(runtimeId: string): AgentHost;
+  /** 主会话停止时回收由桌面协调器独立托管的子代理。 */
+  stopDelegations?(sessionPath: string): Promise<unknown>;
 }
 
 /**
@@ -56,7 +58,7 @@ export type AgentHostStartOptions = AgentStartOptions & {
  * 会话级 Agent 生命周期管理。
  *
  * 每个 RPC worker 对应一个稳定的 `runtimeId`，命令按句柄路由，不再依赖
- * “当前活动会话”这一易变全局量。同一 runtime 的 start/stop/command 串行执行，
+ * “当前活动会话”这一易变全局量。同一 runtime 的普通命令串行执行，停止走带外通道，
  * 切换会话只改变活动句柄，不会让旧请求改写新会话的状态。
  */
 export class AgentManager {
@@ -141,10 +143,9 @@ export class AgentManager {
   stop(runtimeId?: string): Promise<void> {
     const host = this.activeHost(runtimeId);
     if (!host) return Promise.resolve();
-    return this.enqueue(host.runtimeId, async () => {
-      this.removeHost(host);
-      await host.stop();
-    });
+    // 关闭不能排在尚未返回的命令后面；Host.stop 会拒绝那些未完成请求。
+    this.removeHost(host);
+    return Promise.all([this.stopDelegations(host), host.stop()]).then(() => undefined);
   }
 
   command<T>(
@@ -159,8 +160,11 @@ export class AgentManager {
       return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
     }
     // 停止类命令绕开队列：用户的「停止」不能被队列里的长请求拖住（见 OUT_OF_BAND_COMMANDS）。
-    if (OUT_OF_BAND_COMMANDS.has(type)) return host.request<T>(type, data);
+    if (OUT_OF_BAND_COMMANDS.has(type)) {
+      return Promise.all([this.stopDelegations(host), host.request<T>(type, data)]).then(([, result]) => result);
+    }
     return this.enqueue(host.runtimeId, async () => {
+      if (type === "new_session") await this.stopDelegations(host);
       const result = await host.request<T>(type, data);
       if (
         type === "new_session" ||
@@ -196,7 +200,12 @@ export class AgentManager {
     this.runtimes.clear();
     this.index.clear();
     this.activeRuntimeId = undefined;
-    await Promise.all(hosts.map((host) => host.stop().catch(() => undefined)));
+    await Promise.all(hosts.map((host) => Promise.all([this.stopDelegations(host), host.stop()]).catch(() => undefined)));
+  }
+
+  private async stopDelegations(host: AgentHost): Promise<void> {
+    const sessionPath = host.sessionKey ?? host.requestedSessionPath;
+    if (sessionPath) await this.options.stopDelegations?.(sessionPath);
   }
 
   private createHost(): AgentHost {

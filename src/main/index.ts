@@ -62,6 +62,7 @@ import { LocalLogger } from "./local-logger";
 import { readSessionTranscript } from "./session-transcript";
 import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
+import { registerCapabilitiesIpc } from "./capabilities-ipc";
 import { TerminalManager } from "./terminal-manager";
 import { apiBaseUrl, listModels } from "../shared/openai-models";
 import { fallbackSessionTitle as firstMessageTitle } from "../shared/session-title";
@@ -198,7 +199,13 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
   const delegated = Boolean(channel && channel !== "main" && !sideChat);
   const host = new AgentHost(
     (event) => {
-      if (delegated) return;
+      if (delegated) {
+        delegationCoordinator?.handleWorkerEvent(channel, event);
+        return;
+      }
+      if (!sideChat && event.type === "agent_start" && event.__sessionId) {
+        delegationCoordinator?.resumeParent(event.__sessionId);
+      }
       if (!sideChat && event.type === "session_info_changed" && typeof event.name === "string") {
         touchLoadedSession(event.__sessionId, { title: event.name });
       }
@@ -206,6 +213,9 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
     },
     (message, sessionKey, errorRuntimeId) => {
       if (delegated) return;
+      if (!sideChat && sessionKey && !host.isRunning()) {
+        void delegationCoordinator?.stopParent(sessionKey).catch(() => undefined);
+      }
       mainWindow?.webContents.send(sideChat ? "side-chat:error" : "agent:error", {
         message,
         __sessionId: sessionKey,
@@ -230,6 +240,7 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
  * 切换会话不再杀其它会话的 host，后台会话继续运行；命令按 runtimeId 路由。 */
 const agentManager = new AgentManager({
   createHost: (runtimeId) => createAgentHost(runtimeId),
+  stopDelegations: async (sessionPath) => delegationCoordinator?.stopParent(sessionPath),
 });
 const sideChatManager = new AgentManager({
   createHost: (runtimeId) => createAgentHost(runtimeId, "side-chat"),
@@ -564,6 +575,20 @@ function installMenu(): void {
 import { registerProviderIpcHandlers, desktopProviderStatus, resolveDesktopProvider, resolveDesktopServiceId } from "./providers";
 
 function registerIpc(): void {
+  registerCapabilitiesIpc({
+    resolveWorkspace: (cwd) => resolveInWorkspace(".", cwd),
+    resolveProjectFile: (file, cwd) => resolveInWorkspace(file, cwd),
+    changed: (cwd) => {
+      for (const manager of [agentManager, sideChatManager]) {
+        for (const runtime of manager.list()) {
+          const host = manager.findRuntime(runtime.runtimeId);
+          host?.invalidateCapabilities();
+          if (host && !runtime.running) void host.refreshCapabilities().catch(() => undefined);
+        }
+      }
+      for (const window of BrowserWindow.getAllWindows()) window.webContents.send("capabilities:changed", cwd);
+    },
+  });
   ipcMain.handle("app:version", () => app.getVersion());
   ipcMain.handle("app:check-update", () => checkForUpdates(true));
   ipcMain.handle("app:get-locale", () => appLocale);
@@ -1013,6 +1038,22 @@ function registerIpc(): void {
   ipcMain.handle("sessions:read", async (_event, rawPath: unknown) =>
     // 只读转录（含子代理子会话）：不启动 worker、不切换活动会话。
     readSessionTranscript(getTacodeSessionsDir(), rawPath));
+  ipcMain.handle("delegations:list", (_event, rawParent?: unknown) => {
+    const parent = rawParent === undefined ? undefined : requireString(rawParent, "parentSessionPath", { maxLength: 4_096 });
+    return delegationCoordinator?.list(parent) ?? [];
+  });
+  ipcMain.handle("delegations:stop", (_event, rawId: unknown) => {
+    if (!delegationCoordinator) throw new Error("Delegation coordinator is not ready.");
+    return delegationCoordinator.stopById(requireString(rawId, "delegationId", { maxLength: 256 }));
+  });
+  ipcMain.handle("delegations:ui-response", (_event, rawId: unknown, rawRequestId: unknown, rawResponse: unknown) => {
+    if (!delegationCoordinator) throw new Error("Delegation coordinator is not ready.");
+    return delegationCoordinator.respondToUi(
+      requireString(rawId, "delegationId", { maxLength: 256 }),
+      requireString(rawRequestId, "requestId", { maxLength: 256 }),
+      assertPayloadLimit(requireRecord(rawResponse, "应答内容"), IPC_LIMITS.uiResponseBytes, "应答内容"),
+    );
+  });
   ipcMain.handle("sessions:remove", async (_event, rawId: unknown) => {
     const id = requireString(rawId, "会话 id", { maxLength: 256 });
     const store = new TacodeStateStore();
@@ -1040,14 +1081,16 @@ function registerIpc(): void {
           sessionIdFromPath(path) === id ||
           info.cwd === id
         ) {
+          targets.add(path);
           loadedSessions.delete(path);
           deletedSessionPaths.add(path);
         }
       }
       // 同步清理该会话对应的 host（停止并移出注册表），避免删除后残留后台进程。
       for (const path of targets) {
+        await delegationCoordinator?.stopParent(path);
         const host = agentManager.findBySession(path);
-        if (host) void agentManager.stop(host.runtimeId);
+        if (host) await agentManager.stop(host.runtimeId);
       }
       persistLoadedSessions();
       await store.archive(id);
@@ -2211,6 +2254,8 @@ app.whenReady().then(async () => {
     },
     emitEvent: (parentSessionPath, event) => {
       agentManager.findBySession(parentSessionPath)?.sendDelegationEvent(event);
+      // 直接广播给界面：后台 delegate 工具返回后已取消订阅，不能靠父会话消息更新面板。
+      mainWindow?.webContents.send("delegations:event", event.event);
     },
     log: diagnostics,
   });

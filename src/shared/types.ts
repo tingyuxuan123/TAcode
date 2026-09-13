@@ -154,6 +154,16 @@ export interface AgentSessionStats {
     tokens: number | null;
     contextWindow: number;
     percent: number | null;
+    /** Includes content that has not yet received provider usage. */
+    estimated?: boolean;
+  };
+  /** Parent model usage for the current user turn, separate from session billing. */
+  turnUsage?: {
+    tokens?: AgentSessionStats["tokens"];
+    outputTokens: number;
+    outputEstimated: boolean;
+    responseDurationMs?: number;
+    tools: { kinds: number; calls: number; tokens: number };
   };
 }
 
@@ -217,6 +227,9 @@ export type ExtensionUiRequest = {
 
 export interface DesktopApi {
   platform: NodeJS.Platform;
+  capabilities: import("./capabilities").CapabilitiesApi;
+  skills: import("./capabilities").SkillsApi;
+  mcp: import("./capabilities").McpApi;
   app: {
     version(): Promise<string>;
     /** 运行中的主进程是不是旧构建（本地重建后需要完全重启）。 */
@@ -280,6 +293,13 @@ export interface DesktopApi {
     remove(id: string): Promise<void>;
     pin(id: string, pinned: boolean): Promise<void>;
     rename(id: string, title: string): Promise<void>;
+  };
+  /** 子代理执行实例，与 subagents 的角色定义管理分开。 */
+  delegations: {
+    list(parentSessionPath?: string): Promise<import("./delegation").DelegationRecordSnapshot[]>;
+    stop(delegationId: string): Promise<import("./delegation").DelegationRecordSnapshot>;
+    respondToUi(delegationId: string, requestId: string, response: Record<string, unknown>): Promise<void>;
+    onEvent(listener: (event: import("./delegation").DelegationRecordSnapshot) => void): () => void;
   };
   terminal: {
     start(cwd: string): Promise<TerminalInfo>;

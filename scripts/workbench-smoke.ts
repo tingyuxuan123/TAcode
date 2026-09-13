@@ -140,6 +140,8 @@ async function smoke() {
 
     stage = "manual plus and Agent close share the top-level lifecycle";
     await host("document.querySelector('.inspect-tab-add').click()");
+    await wait(async () => host("!!document.querySelector('.panel-add-menu')"));
+    await host("Array.from(document.querySelectorAll('.panel-add-item')).find(el => el.textContent === '新建标签页').click()");
     await wait(async () => (await tabs()).length === 4);
     const manual = (await tabs()).find((tab) => tab.url === "about:blank")!;
     await run("browser_close_tab", { tabId: manual.tabId });

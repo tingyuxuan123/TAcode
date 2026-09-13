@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { getTacodeRpcEntryPath } from "../runtime/index";
 import type { AgentEvent, AgentSessionStats, AgentSnapshot, AgentStartOptions } from "../shared/types";
+import { ContextStatsTracker } from "./context-stats";
 import { parseSkillCommands } from "../shared/skills";
 import { killProcessTree } from "./process-tree";
 import { drainUtf8Lines } from "./rpc-lines";
@@ -41,6 +42,8 @@ const LONG_RUNNING_REQUESTS = new Set([
 ]);
 /** 刚应答的 prompt 可能还没把 agent_start 事件发出来，等待空闲时给它一个有界宽限窗口。 */
 const PROMPT_START_GRACE_MS = 1_500;
+const STATS_REFRESH_MS = 500;
+const STATS_EVENTS = new Set(["agent_start", "message_start", "message_update", "message_end", "tool_execution_end", "auto_compaction_end", "agent_settled"]);
 
 export class AgentHost {
   private child?: ChildProcessWithoutNullStreams;
@@ -68,6 +71,29 @@ export class AgentHost {
   private settledWaiters: Array<() => void> = [];
   /** 最近一次 worker 退出信息（退出码/信号 + 脱敏 stderr 摘要），委派失败分类用。 */
   private exitInfo?: { code?: number; signal?: string; stderrExcerpt: string };
+  private contextStats = new ContextStatsTracker();
+  private latestStats?: AgentSessionStats;
+  private statsTimer?: NodeJS.Timeout;
+  private statsPending = false;
+  private statsDirty = false;
+  private statsRevision = 0;
+  private capabilitiesRevision = 0;
+  private appliedCapabilitiesRevision = 0;
+  private capabilitiesReload?: Promise<void>;
+
+  invalidateCapabilities(): void { this.capabilitiesRevision += 1; }
+
+  /** 空闲会话立即重载；生成中的会话在下一次 prompt 前重载，不中断本轮。 */
+  async refreshCapabilities(): Promise<void> {
+    if (!this.isRunning() || this.isInTurn() || this.capabilitiesRevision === this.appliedCapabilitiesRevision) return;
+    if (!this.capabilitiesReload) {
+      const revision = this.capabilitiesRevision;
+      this.capabilitiesReload = this.request("prompt", { message: "/reload-capabilities" })
+        .then(() => { this.appliedCapabilitiesRevision = revision; })
+        .finally(() => { this.capabilitiesReload = undefined; });
+    }
+    await this.capabilitiesReload;
+  }
 
   /** 壳层分配的稳定句柄；不随会话文件路径变化，命令按它路由。 */
   public runtimeId = "";
@@ -190,6 +216,7 @@ export class AgentHost {
       this.request<Record<string, unknown>>("get_state"),
       this.request<{ messages: unknown[] }>("get_messages"),
     ]);
+    this.contextStats.restore(messages.messages);
     // 快照应答按 stdout 顺序处理：此刻之前解析的事件都已反映在 messages 里，
     // 之后的事件才需要用 replay 补齐，避免 message_start 之类事件重复插入。
     this.snapshotSeq = this.seq;
@@ -200,6 +227,7 @@ export class AgentHost {
       models: [],
       thinkingLevels: [],
       skills: [],
+      ...(this.latestStats ? { stats: this.latestStats } : {}),
     };
   }
 
@@ -224,7 +252,7 @@ export class AgentHost {
         models: models.models,
         thinkingLevels: thinkingLevels.levels,
         skills: parseSkillCommands(commands.commands),
-        ...(stats ? { stats } : {}),
+        ...((this.latestStats ?? stats) ? { stats: this.latestStats ?? stats } : {}),
       }));
     } catch {
       // First paint already succeeded; meta is best-effort.
@@ -418,6 +446,9 @@ export class AgentHost {
   }
 
   async stop(): Promise<void> {
+    this.clearStatsRefresh();
+    this.contextStats = new ContextStatsTracker();
+    this.latestStats = undefined;
     this.cancelBrowserRequests();
     this.turnActive = false;
     // 停 host 也要放行等待者：否则「已退出的 worker 再 stop()」会走下面的早退分支，
@@ -451,6 +482,7 @@ export class AgentHost {
   }
 
   async request<T>(type: string, data: Record<string, unknown> = {}): Promise<T> {
+    if ((type === "prompt" || type === "get_commands") && data.message !== "/reload-capabilities") await this.refreshCapabilities();
     if (type === "abort" || type === "new_session") this.cancelBrowserRequests();
     if (type === "new_session") this.resetBrowser?.();
     const child = this.child;
@@ -471,7 +503,22 @@ export class AgentHost {
         );
       }, timeoutForRequest(type));
       this.pending.set(id, {
-        resolve: (value) => resolve(value as T),
+        resolve: (value) => {
+          if (this.child === child && type === "get_session_stats" && value && typeof value === "object") {
+            this.latestStats = this.contextStats.enrich(value as AgentSessionStats);
+            resolve(this.latestStats as T);
+          } else {
+            if (this.child === child && ["set_model", "compact", "new_session"].includes(type)) {
+              if (type === "new_session") {
+                this.contextStats = new ContextStatsTracker();
+                this.latestStats = undefined;
+              }
+              if (type === "compact") this.contextStats.handle({ type: "auto_compaction_end" });
+              this.scheduleStatsRefresh(true);
+            }
+            resolve(value as T);
+          }
+        },
         reject,
         timeout,
       });
@@ -530,7 +577,57 @@ export class AgentHost {
       else pending.resolve(data.data);
       return;
     }
-    if (typeof data.type === "string") this.emitEvent(this.tagged(data as AgentEvent));
+    if (typeof data.type === "string") {
+      this.contextStats.handle(data as AgentEvent);
+      this.emitEvent(this.tagged(data as AgentEvent));
+      if (STATS_EVENTS.has(data.type)) {
+        if (data.type !== "message_update") this.statsRevision += 1;
+        this.scheduleStatsRefresh(data.type !== "message_update");
+      }
+    }
+  }
+
+  /** One small RPC at a time, coalesced across stream chunks and shared by all renderers. */
+  private scheduleStatsRefresh(immediate = false): void {
+    if (!this.isRunning()) return;
+    this.statsDirty = true;
+    if (this.statsPending) return;
+    if (this.statsTimer) {
+      if (!immediate) return;
+      clearTimeout(this.statsTimer);
+    }
+    this.statsTimer = setTimeout(() => {
+      this.statsTimer = undefined;
+      void this.refreshStats();
+    }, immediate ? 0 : STATS_REFRESH_MS);
+    this.statsTimer.unref?.();
+  }
+
+  private async refreshStats(): Promise<void> {
+    const child = this.child;
+    const revision = this.statsRevision;
+    this.statsPending = true;
+    this.statsDirty = false;
+    try {
+      const stats = await this.request<AgentSessionStats>("get_session_stats");
+      if (this.child === child && revision === this.statsRevision) {
+        this.emitEvent(this.tagged({ type: "desktop_session_stats", stats }));
+      }
+    } catch {
+      // Usage must not interrupt a reply or surface an extra error when a worker exits.
+    } finally {
+      if (this.child === child) {
+        this.statsPending = false;
+        if (this.statsDirty) this.scheduleStatsRefresh(revision !== this.statsRevision);
+      }
+    }
+  }
+
+  private clearStatsRefresh(): void {
+    if (this.statsTimer) clearTimeout(this.statsTimer);
+    this.statsTimer = undefined;
+    this.statsPending = false;
+    this.statsDirty = false;
   }
 
   private cancelBrowserRequests(): void {
@@ -539,6 +636,7 @@ export class AgentHost {
   }
 
   private handleExit(error: Error): void {
+    this.clearStatsRefresh();
     this.cancelBrowserRequests();
     // 所有退出路径（exit / spawn error）都必须放行 waitForIdle 的等待者，
     // 否则委派完成判定会永久挂起。

@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { ChatMessage } from "../conversation";
 import type { useBrowserPanels } from "./use-browser-panels";
-import { collectDelegations, planDelegationTabs } from "./delegation-tabs";
+import { collectDelegations, mergeDelegationSummaries, planDelegationTabs } from "./delegation-tabs";
+import type { DelegationRecords } from "../delegation-state";
+
+const EMPTY_RECORDS: DelegationRecords = new Map();
 
 /**
  * 父代理**创建子代理**时自动在右侧面板开一个标签，并实时刷新它的状态。
@@ -18,20 +21,23 @@ import { collectDelegations, planDelegationTabs } from "./delegation-tabs";
 export function useDelegationTabs(
   messages: ChatMessage[],
   panels: Pick<ReturnType<typeof useBrowserPanels>, "tabs" | "openChildSession">,
+  records: DelegationRecords = EMPTY_RECORDS,
+  parentSessionPath?: string,
 ): void {
   const autoOpened = useRef(new Set<string>());
   const lastSignature = useRef("");
-  const delegations = useMemo(() => collectDelegations(messages), [messages]);
+  const summaries = useMemo(() => collectDelegations(messages), [messages]);
   const openKeys = useMemo(
     () => new Set(panels.tabs.filter((tab) => tab.type === "child-session").map((tab) => tab.key)),
     [panels.tabs],
   );
   const openChildSession = panels.openChildSession;
+  const delegations = useMemo(() => mergeDelegationSummaries(summaries, records, parentSessionPath, openKeys), [summaries, records, parentSessionPath, openKeys]);
 
   useEffect(() => {
     // 流式期间 messages 每帧都变，用签名挡掉无变化的重复派发；
     // 派发后 tabs 变化会再跑一次，这里直接短路（不会形成循环）。
-    const signature = JSON.stringify(delegations);
+    const signature = JSON.stringify([delegations, [...openKeys]]);
     if (signature === lastSignature.current) return;
     lastSignature.current = signature;
     const plan = planDelegationTabs({ delegations, openKeys, autoOpenedKeys: autoOpened.current });
