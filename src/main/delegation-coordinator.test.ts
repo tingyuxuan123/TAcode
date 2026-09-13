@@ -43,6 +43,29 @@ vi.mock("../runtime/subagents.js", () => ({
   loadEnabledSubagents: async () => mockSubagents.definitions,
 }));
 
+/**
+ * 一次性闸门：把「读子会话 JSONL」这一步挂住，用来确定性地把事件插进
+ * `retryWithParentModel` 的 await 窗口（否则那个窗口只有一次 fs 读，无法稳定复现）。
+ * 按**确切的子会话路径**匹配（在 start 拿到 snapshot 之后再 arm）：用文件名正则会把
+ * 同一窗口里别的 `delegation-*.jsonl` 读也吃掉，之后只能以超时收场。
+ */
+const fsGate = vi.hoisted(() => ({ target: undefined as string | undefined, release: undefined as undefined | (() => void) }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      const target = typeof args[0] === "string" ? args[0] : String(args[0]);
+      if (fsGate.target !== undefined && target === fsGate.target) {
+        fsGate.target = undefined;
+        await new Promise<void>((resolve) => { fsGate.release = resolve; });
+      }
+      return actual.readFile(...args);
+    },
+  };
+});
+
 type LogEntry = { level: string; scope: string; message: string; details?: unknown };
 
 function recordingSink(): { sink: DiagnosticSink; entries: LogEntry[] } {
@@ -70,6 +93,8 @@ interface FakeHostOptions {
   finalStopReason?: string;
   /** 按第几次 prompt（0 起）决定报告文本；用于验证 no_report 重试。 */
   reportTextForPrompt?: (promptIndex: number) => string;
+  /** stop() 的耗时：竞态用例要把「停 host 的 await 窗口」拉宽到能稳定插入事件。 */
+  stopDelayMs?: number;
 }
 
 /** 可编程的假 host：完整模拟 pi RPC worker 的“接收即返回 + 迟到报告”语义。 */
@@ -92,6 +117,7 @@ class FakeHost implements DelegationHost {
   private readonly promptError?: Error;
   private readonly assistantTurns: number;
   private readonly neverSettle: boolean;
+  private readonly stopDelayMs: number;
   private readonly finalStopReason?: string;
   private readonly reportTextForPrompt?: (promptIndex: number) => string;
   private readonly beforeStart?: () => Promise<void>;
@@ -108,6 +134,7 @@ class FakeHost implements DelegationHost {
     this.promptError = options.promptError;
     this.assistantTurns = options.assistantTurns ?? 1;
     this.neverSettle = options.neverSettle === true;
+    this.stopDelayMs = options.stopDelayMs ?? 20;
     this.finalStopReason = options.finalStopReason;
     this.reportTextForPrompt = options.reportTextForPrompt;
     this.beforeStart = options.beforeStart;
@@ -175,7 +202,7 @@ class FakeHost implements DelegationHost {
 
   async stop(): Promise<void> {
     this.calls.push("stop");
-    await new Promise((done) => setTimeout(done, 20));
+    await new Promise((done) => setTimeout(done, this.stopDelayMs));
     this.running = false;
     this.stoppedAt = Date.now();
     this.releaseIdleWaiters();
@@ -1213,5 +1240,131 @@ describe("effectivePermission", () => {
     expect(effectivePermission("full", "plan")).toBe("plan");
     expect(effectivePermission("auto", "inherit")).toBe("auto");
     expect(effectivePermission("full", undefined)).toBe("full");
+  });
+});
+
+/**
+ * 请求缓存与模型回退的竞态。两条都源自同一个根因：协调器里的 await 窗口比「父会话的代次」
+ * 活得久——await 之后必须重新确认「我还是不是当初那一代/那一轮」，否则迟到的收口会落在新的
+ * 任务上（缓存命中把旧委派当成新启动；settle 内部的 abort 掐掉新一轮的取消信号）。
+ */
+describe("delegation 请求缓存与模型回退的竞态", () => {
+  const pinnedPayload: DelegationStartPayload = {
+    ...startPayload,
+    provider: "kimi",
+    model: "kimi-k2",
+    fallbackProvider: "deepseek",
+    fallbackModel: "deepseek-chat",
+  };
+
+  /** 白盒入口：只为构造「迟到的回退」，不改变生产代码的可见性。 */
+  interface Internals {
+    entries: Map<string, {
+      record: DelegationRecordSnapshot;
+      abort: AbortController;
+      host?: FakeHost;
+    }>;
+  }
+  const internals = (coordinator: DelegationCoordinator): Internals =>
+    coordinator as unknown as Internals;
+
+  const startPinned = async (
+    requestId: string,
+    context: Awaited<ReturnType<typeof fixture>>,
+  ): Promise<DelegationRecordSnapshot> => {
+    const request = startRequest(requestId);
+    request.payload = pinnedPayload;
+    return await context.coordinator.handleRequest(request, context.parent) as DelegationRecordSnapshot;
+  };
+
+  /** 模拟「用户停止 → 父会话 continue 起了新一轮」：旧控制器作废、换新控制器、状态回 running。 */
+  const takeOverWithNewRun = (entry: { abort: AbortController; record: DelegationRecordSnapshot }): void => {
+    entry.abort.abort();
+    entry.abort = new AbortController();
+    entry.record.status = "running";
+  };
+
+  it("父会话换代后同一个 requestId 不再复用上一代的响应", async () => {
+    const { coordinator, hosts, parent, state } = await fixture();
+    try {
+      const first = await coordinator.handleRequest(startRequest("delegation-request-1"), parent) as { delegationId: string };
+      const replay = await coordinator.handleRequest(startRequest("delegation-request-1"), parent) as { delegationId: string };
+      // 同一代内重放仍然幂等（这是缓存存在的理由，不能被修掉）。
+      expect(replay.delegationId).toBe(first.delegationId);
+      expect(hosts).toHaveLength(1);
+
+      // 父 worker 重启：新一代进程里的 requestId 从 1 重算，必须真正执行而不是拿到上一代的结果。
+      await coordinator.stopParent("/tmp/parent.jsonl");
+      coordinator.resumeParent("/tmp/parent.jsonl");
+      const second = await coordinator.handleRequest(startRequest("delegation-request-1"), parent) as { delegationId: string };
+      expect(second.delegationId).not.toBe(first.delegationId);
+      expect(hosts).toHaveLength(2);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("回退期间被 continue 换代：迟到的回退不得判死新一轮", async () => {
+    mockSubagents.definitions[0] = { ...mockSubagents.definitions[0], model: { providerId: "kimi", modelId: "kimi-k2" } };
+    const context = await fixture({
+      hostOptions: () => ({
+        beforeStart: async () => { throw new Error("No credentials for provider kimi"); },
+        // 把「停 host 的 await」拉宽：换代判定必须发生在这个窗口里，别靠抢 20ms。
+        stopDelayMs: 600,
+      }),
+    });
+    const { coordinator, hosts, logs, state } = context;
+    try {
+      const snapshot = await startPinned("fallback-race-continue", context);
+      // 第 1 次 stop 来自 launch 的失败收口，第 2 次 stop 是回退自己发起的：此刻它在 await 里。
+      await waitFor(() => hosts[0].calls.filter((call) => call === "stop").length >= 2);
+      const entry = internals(coordinator).entries.get(snapshot.delegationId)!;
+      const staleSignal = entry.abort.signal;
+      takeOverWithNewRun(entry);
+      await waitFor(() => logs.some((item) => item.message === "delegation model fallback abandoned"));
+
+      expect(staleSignal.aborted).toBe(true);
+      expect(entry.record.status).toBe("running");
+      // 最关键的一条：新一轮的取消信号不能被旧一轮的 settle 掐掉。
+      expect(entry.abort.signal.aborted).toBe(false);
+      expect(hosts).toHaveLength(1);
+      // 记录必须仍然可操作：被放弃的回退不能把它卡在非终态。
+      expect((await coordinator.stopById(snapshot.delegationId)).status).toBe("cancelled");
+    } finally {
+      delete mockSubagents.definitions[0].model;
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("回退期间子会话文件读完前新一轮已接管：不得回拨状态，也不得另起子代理", async () => {
+    mockSubagents.definitions[0] = { ...mockSubagents.definitions[0], model: { providerId: "kimi", modelId: "kimi-k2" } };
+    const context = await fixture({
+      hostOptions: () => ({ beforeStart: async () => { throw new Error("No credentials for provider kimi"); } }),
+    });
+    const { coordinator, hosts, logs, state } = context;
+    try {
+      const snapshot = await startPinned("fallback-race-read", context);
+      // 拿到确切的子会话路径之后再放闸门：回退必然停在这一条记录的读上。
+      fsGate.target = snapshot.childSessionPath;
+      await waitFor(() => fsGate.target === undefined);
+      const entry = internals(coordinator).entries.get(snapshot.delegationId)!;
+      takeOverWithNewRun(entry);
+      fsGate.release?.();
+      await waitFor(() => logs.some((item) => item.message === "delegation model fallback abandoned"));
+
+      expect(entry.record.status).toBe("running");
+      expect(entry.abort.signal.aborted).toBe(false);
+      // 原实现会在这里把状态回拨成 pending 并另起一个 worker（记录被新一轮覆盖 + 僵尸进程）。
+      expect(hosts).toHaveLength(1);
+      expect((await coordinator.stopById(snapshot.delegationId)).status).toBe("cancelled");
+    } finally {
+      fsGate.release?.();
+      fsGate.target = undefined;
+      delete mockSubagents.definitions[0].model;
+      await coordinator.stopAll();
+      state.close();
+    }
   });
 });

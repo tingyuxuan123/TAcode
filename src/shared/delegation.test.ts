@@ -70,4 +70,15 @@ describe("delegation protocol", () => {
     expect(evidence.lastType).toBeUndefined();
     expect(describeAssistantEvidence(undefined)).toEqual({ count: 0, turns: 0, toolCalls: 0 });
   });
+
+  it("只允许显式声明的「原位重跑」把状态回拨到 pending", () => {
+    // continue 续跑（终态 → pending）与模型回退重跑（running → pending）是两条有意的例外。
+    expect(() => assertDelegationTransition("completed", "pending", { restart: true })).not.toThrow();
+    expect(() => assertDelegationTransition("running", "pending", { restart: true })).not.toThrow();
+    // 不声明 restart 时照旧拒绝：终态不可回拨，running → pending 非法。
+    expect(() => assertDelegationTransition("completed", "pending")).toThrow(/terminal/);
+    expect(() => assertDelegationTransition("running", "pending")).toThrow(/Invalid/);
+    // restart 只认 pending 一个目标，不能当成「什么迁移都放行」的后门。
+    expect(() => assertDelegationTransition("completed", "running", { restart: true })).toThrow(/restart/);
+  });
 });

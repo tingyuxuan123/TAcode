@@ -323,11 +323,21 @@ export function validateDelegationTimeout(value: unknown): number {
   return timeout;
 }
 
+/**
+ * 状态迁移校验。注意 `pending` 不是普通目标态：从终态或 `running` 回拨到 `pending`
+ * 只发生在「原位重跑」两条路径（`delegate_continue` 续跑、钉选模型不可达时的回退重跑），
+ * 它们是**必须显式声明**的例外——任何误判路径都不该悄悄把终态往回拨。
+ */
 export function assertDelegationTransition(
   previous: DelegationStatus,
   next: DelegationStatus,
+  options: { restart?: boolean } = {},
 ): void {
   if (previous === next) return;
+  if (options.restart) {
+    if (next !== "pending") throw new Error(`Invalid delegation restart: ${previous} -> ${next}.`);
+    return;
+  }
   if (isDelegationTerminal(previous)) {
     throw new Error(`Cannot transition terminal delegation ${previous} to ${next}.`);
   }

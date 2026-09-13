@@ -159,7 +159,12 @@ export class DelegationCoordinator {
     if (!this.isRequesterForSession(requester, parentSessionPath)) {
       throw new Error("Delegation request is not associated with the requesting session.");
     }
-    const cacheKey = `${parentSessionPath}:${request.requestId}`;
+    // 缓存键必须带父会话「代次」：requestId 由 worker 进程自己递增（runtime/delegation-bridge.ts），
+    // 父 worker 重启后新一代发出的首个 requestId 仍是 `delegation-request-1`；只按
+    // `session:requestId` 记账会把上一代的响应当成这一代的结果（父代理误判“启动成功”）。
+    // stopParent 递增 parentEpochs 正是靠这里生效。
+    const epoch = this.parentEpochs.get(parentSessionPath) ?? 0;
+    const cacheKey = `${parentSessionPath}:${epoch}:${request.requestId}`;
     const cached = this.requestCache.get(cacheKey);
     if (cached) {
       if (!cached.ok) throw new Error(cached.error ?? "Delegation request failed.");
@@ -195,7 +200,10 @@ export class DelegationCoordinator {
       default:
         throw new Error(`Unsupported delegation action: ${String(request.action)}`);
     }
-    this.cacheResponse(cacheKey, { type: "tacode:delegation:response", requestId: request.requestId, ok: true, result });
+    // 处理期间父会话可能已经换代（stopParent/stopAll）：迟到的响应属于上一代，写进去也不会再被读到。
+    if ((this.parentEpochs.get(parentSessionPath) ?? 0) === epoch) {
+      this.cacheResponse(cacheKey, { type: "tacode:delegation:response", requestId: request.requestId, ok: true, result });
+    }
     return result;
   }
 
@@ -387,6 +395,8 @@ export class DelegationCoordinator {
     const parent = path.resolve(parentSessionPath);
     this.pausedParents.add(parent);
     this.parentEpochs.set(parent, (this.parentEpochs.get(parent) ?? 0) + 1);
+    // 换代即作废旧响应：键里已含 epoch，这里只是不留垃圾（父会话反复停止/启动时不让缓存膨胀）。
+    this.invalidateRequestCache(parent);
     return this.stop(parent);
   }
 
@@ -471,14 +481,13 @@ export class DelegationCoordinator {
     entry.stopRequested = false;
     entry.noReportRetried = false;
     this.resetCompletion(entry);
-    entry.record.status = "pending";
     entry.record.startedAt = startedAt;
     entry.record.completedAt = undefined;
     entry.record.error = "";
     entry.record.report = "";
     entry.record.resultSummary = "";
-    this.persist(entry);
-    this.publish(entry);
+    // 终态 → pending 是「原位重跑」的显式例外（见 assertDelegationTransition）：不能再直接赋值绕过状态机。
+    this.transition(entry, "pending", { restart: true });
     let host = entry.host;
     try {
       const definition = entry.definition ?? (await loadEnabledSubagents()).find((item) => item.name === entry.record.role);
@@ -524,6 +533,7 @@ export class DelegationCoordinator {
     for (const parent of new Set([...this.entriesByParent.keys(), ...this.reservations.keys()])) {
       this.pausedParents.add(parent);
       this.parentEpochs.set(parent, (this.parentEpochs.get(parent) ?? 0) + 1);
+      this.invalidateRequestCache(parent);
     }
     await Promise.all(
       [...this.entries.values()].map(async (entry) => {
@@ -904,8 +914,8 @@ export class DelegationCoordinator {
     });
   }
 
-  private transition(entry: DelegationEntry, status: DelegationStatus): void {
-    assertDelegationTransition(entry.record.status, status);
+  private transition(entry: DelegationEntry, status: DelegationStatus, options: { restart?: boolean } = {}): void {
+    assertDelegationTransition(entry.record.status, status, options);
     entry.record.status = status;
     this.persist(entry);
     this.publish(entry);
@@ -948,11 +958,26 @@ export class DelegationCoordinator {
   }
 
   private settle(entry: DelegationEntry, status: DelegationStatus, report: string, error?: string): void {
+    // 终态不可覆盖：「停止」与「超时/轮数收口」同一刻到达时**先到者赢**。这不是漏洞而是有意的
+    // 取舍——把已经落库的 timeout 改写成 cancelled 会丢掉父代理判断「重试还是放弃」所需的证据。
     if (isDelegationTerminal(entry.record.status)) return;
     // 钉选模型可能调不通（凭据缺失/服务下线/模型 id 不存在）：先转模型回退重试，
     // 不在此处落终态——record 保持 running、completion 不 resolve，wait 继续等重跑结果。
     if (status === "failed" && !entry.stopRequested && this.canFallbackModel(entry)) {
-      void this.retryWithParentModel(entry, { report, error });
+      // 回退脱离本调用栈异步收口：必须自己吞掉异常，否则会变成 unhandledRejection；但也
+      // 不能把失败落在「已经换代的新一轮」上（判据与 retryWithParentModel 内部一致），
+      // 否则记录会永久停在非终态：占住一个并发位，且 delegate_wait 只能等它自己的超时。
+      const runSignal = entry.abort.signal;
+      void this.retryWithParentModel(entry, { report, error }).catch((failure) => {
+        const message = failure instanceof Error ? failure.message : String(failure);
+        this.log("error", "delegation model fallback crashed", {
+          delegationId: entry.record.delegationId,
+          error: message,
+        });
+        if (entry.abort.signal === runSignal && !entry.stopRequested && !isDelegationTerminal(entry.record.status)) {
+          this.settle(entry, "failed", report, error ?? message);
+        }
+      });
       return;
     }
     entry.abort.abort();
@@ -1001,24 +1026,47 @@ export class DelegationCoordinator {
     const parent = entry.parentModel!;
     const pinned = [entry.record.provider, entry.record.model].filter(Boolean).join("/");
     const signal = entry.abort.signal;
-    const settleFailed = () => this.settle(entry, "failed", failure.report, failure.error);
+    // 回退期间有 await（停 host、读子会话文件），这中间用户/父会话可能已经停止并 `continue`
+    // 起了新一轮——`continue` 会换掉 entry.abort 并回拨状态到 pending。所以每个 await 之后
+    // 都要重新判定「这一轮是否还是发起回退的那一轮」：迟到的 settle 会把新任务判死，而且
+    // settle 内部的 entry.abort.abort() 会掐掉新一轮才建立的取消信号。
+    const isCurrentRun = (): boolean =>
+      !signal.aborted
+      && entry.abort.signal === signal
+      && !entry.stopRequested
+      && !isDelegationTerminal(entry.record.status);
+    const describeStale = (): void => {
+      this.log("info", "delegation model fallback abandoned", {
+        delegationId: entry.record.delegationId,
+        childSessionPath: entry.record.childSessionPath,
+        status: entry.record.status,
+        replacedByNewRun: entry.abort.signal !== signal,
+      });
+    };
     if (entry.host) await this.stopHost(entry.host).catch(() => undefined);
-    if (signal.aborted || entry.stopRequested || isDelegationTerminal(entry.record.status)) {
+    if (isDelegationTerminal(entry.record.status) || entry.abort.signal !== signal) {
+      // 新一轮已经接管（或已有终态）：迟到的回退绝不能再动这条记录。
+      describeStale();
+      return;
+    }
+    if (signal.aborted || entry.stopRequested) {
       // 回退判定期间被用户/父会话停止：按取消收口，不再重启。
-      if (!isDelegationTerminal(entry.record.status)) {
-        this.settle(entry, "cancelled", "", "Stopped while switching to the parent session's model.");
-      }
+      this.settle(entry, "cancelled", "", "Stopped while switching to the parent session's model.");
       return;
     }
     const turns = await childSessionAssistantTurns(entry.record.childSessionPath);
+    if (!isCurrentRun()) {
+      describeStale();
+      return;
+    }
     if (turns > 0) {
-      settleFailed();
+      this.settle(entry, "failed", failure.report, failure.error);
       return;
     }
     const definition = entry.definition;
     const base = entry.launchPayload;
     if (!definition || !base) {
-      settleFailed();
+      this.settle(entry, "failed", failure.report, failure.error);
       return;
     }
     this.pushActivity(entry, {
@@ -1033,14 +1081,12 @@ export class DelegationCoordinator {
       fallbackProvider: parent.provider,
       ...(parent.model ? { fallbackModel: parent.model } : {}),
     });
-    // 对齐 continue 的重置方式：直接回拨状态（assertDelegationTransition 不接受 running→pending）。
-    entry.record.status = "pending";
+    // 与 continue 对齐：running → pending 的回拨走显式的 restart 迁移（原来直接赋值绕过了状态机）。
     entry.record.provider = parent.provider;
     if (parent.model) entry.record.model = parent.model;
     else delete entry.record.model;
     entry.record.error = "";
-    this.persist(entry);
-    this.publish(entry);
+    this.transition(entry, "pending", { restart: true });
     const payload: DelegationStartPayload = { ...base, provider: parent.provider };
     if (parent.model) payload.model = parent.model;
     else delete payload.model;
@@ -1148,6 +1194,14 @@ export class DelegationCoordinator {
     if (this.requestCache.size > 512) {
       const first = this.requestCache.keys().next().value;
       if (typeof first === "string") this.requestCache.delete(first);
+    }
+  }
+
+  /** 父会话换代（停止/关窗/应用退出）时清掉它遗留的响应缓存；键里已含 epoch，这里只避免留垃圾。 */
+  private invalidateRequestCache(parentSessionPath: string): void {
+    const prefix = `${parentSessionPath}:`;
+    for (const key of [...this.requestCache.keys()]) {
+      if (key.startsWith(prefix)) this.requestCache.delete(key);
     }
   }
 

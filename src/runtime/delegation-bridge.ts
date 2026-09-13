@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   DELEGATION_BRIDGE_EVENT,
   DELEGATION_BRIDGE_REQUEST,
@@ -25,6 +26,12 @@ export function createRuntimeDelegationClient(parentSessionPath?: string): Runti
   if (typeof process.send !== "function") return undefined;
   const pending = new Map<string, PendingRequest>();
   const listeners = new Set<(event: DelegationRecordSnapshot) => void>();
+  /**
+   * 进程级前缀：`requestId` 只在本 worker 进程内递增，而父进程侧的请求缓存会跨
+   * worker 重启存活。没有前缀时重启后的第一个请求仍是 `delegation-request-1`，
+   * 会命中上一代 worker 留下的缓存（父代理据此误判「启动成功」，其实拿到的是旧委派）。
+   */
+  const clientId = randomUUID().slice(0, 8);
   let requestId = 0;
   const onMessage = (message: unknown): void => {
     if (!message || typeof message !== "object") return;
@@ -45,7 +52,7 @@ export function createRuntimeDelegationClient(parentSessionPath?: string): Runti
 
   return {
     request(action, payload) {
-      const id = `delegation-request-${++requestId}`;
+      const id = `delegation-request-${clientId}-${++requestId}`;
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
         const message = {
