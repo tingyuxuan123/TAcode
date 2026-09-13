@@ -13,8 +13,8 @@ import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   MAX_SUBAGENT_CONCURRENCY,
-  MAX_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_REPORT_CHARS,
+  resolveSubagentMaxTurns,
   unknownSubagentMessage,
   type SubagentDefinition,
   type SubagentModelPin,
@@ -118,7 +118,7 @@ export interface SubagentAgentOptions {
   model: unknown;
   tools: AgentTool[];
   thinkingLevel?: string;
-  maxTurns: number;
+  maxTurns?: number;
 }
 
 export interface DelegateToolDeps {
@@ -284,9 +284,15 @@ class DelegationRunner {
     if (!tools.length) return this.settle("failed", "", undefined, "This subagent has no usable tools.");
     const auth = await this.ctx.modelRegistry.getApiKeyAndHeaders(resolved.model).catch(() => undefined);
     const thinkingLevel = (this.record.definition.thinkingLevel ?? this.ctx.thinkingLevel) as SubagentThinkingLevel | undefined;
-    const maxTurns = this.record.definition.maxTurns ?? MAX_SUBAGENT_MAX_TURNS;
+    const maxTurns = resolveSubagentMaxTurns(this.record.definition.maxTurns);
     const agent = this.deps.createAgent
-      ? this.deps.createAgent({ systemPrompt: composeSubagentSystemPrompt(this.record.definition, this.ctx.cwd), model: resolved.model, tools, ...(thinkingLevel ? { thinkingLevel } : {}), maxTurns })
+      ? this.deps.createAgent({
+          systemPrompt: composeSubagentSystemPrompt(this.record.definition, this.ctx.cwd),
+          model: resolved.model,
+          tools,
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+          ...(maxTurns !== undefined ? { maxTurns } : {}),
+        })
       : new Agent({
           streamFn: (m, context, options) => streamSimple(m, context, { ...options, ...(auth?.ok && auth.apiKey ? { apiKey: auth.apiKey } : {}), ...(auth?.ok && auth.headers ? { headers: auth.headers } : {}) }),
           ...(auth?.ok && auth.apiKey ? { getApiKey: async () => auth.apiKey } : {}),
@@ -314,7 +320,7 @@ class DelegationRunner {
           pushActivity(this.record, { at: Date.now(), kind: "report", text: text.trim() });
         }
         usage = addUsage(usage, event.message.usage);
-        if (turns >= maxTurns && !truncated) {
+        if (maxTurns !== undefined && turns >= maxTurns && !truncated) {
           truncated = true;
           this.record.live = `reached maxTurns (${maxTurns})`;
           pushActivity(this.record, { at: Date.now(), kind: "notice", text: this.record.live });

@@ -126,7 +126,7 @@ export interface AgentStartOptions {
   writableRoots?: string[];
   /** Restrict a worker to this exact tool set; omitted keeps the runtime defaults. */
   activeTools?: string[];
-  /** 子代理的轮数预算：到上限即主动收口（桥接路径由角色定义下发）。 */
+  /** 子代理的轮数预算：到上限即主动收口，省略不限制（桥接路径由角色定义下发）。 */
   maxTurns?: number;
   /** 只读命令策略（`readonly` = exec_command 只允许白名单内的只读命令）。 */
   execPolicy?: import("./subagents").SubagentExecPolicy;

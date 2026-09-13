@@ -3,6 +3,7 @@ import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_SUBAGENT_TOOLS, type SubagentDefinition } from "../../shared/subagents";
 import {
+  DELEGATE_CONTINUE_TOOL_NAME,
   DELEGATE_LIST_TOOL_NAME,
   DELEGATE_STOP_TOOL_NAME,
   DELEGATE_TOOL_NAME,
@@ -371,6 +372,30 @@ describe("delegate tool", () => {
     expect(result.details.tasks[0].status).toBe("truncated");
     expect(result.details.results[0].success).toBe(true);
     expect(result.content[0]?.text).toContain("truncated");
+  });
+
+  it("留空时首次运行和续跑超过 60 轮仍能交付完整报告", async () => {
+    const { tools } = harness({
+      definitions: [definition()],
+      script: async (agent) => {
+        for (let turn = 1; turn <= 65 && !agent.aborted; turn += 1) {
+          agent.report(turn === 65 ? "complete full report" : `step ${turn}`);
+        }
+      },
+    });
+    const result = await runTool(tools, DELEGATE_TOOL_NAME, {
+      tasks: [{ role: "explorer", task: "Review all changes" }],
+    });
+    expect(result.details.tasks[0]).toMatchObject({ status: "completed", turns: 65 });
+    expect(result.details.results[0]).toMatchObject({ success: true, output: "complete full report" });
+
+    const continued = await runTool(tools, DELEGATE_CONTINUE_TOOL_NAME, {
+      delegationId: result.details.tasks[0].delegationId,
+      message: "Review the follow-up changes",
+    });
+    expect(continued.details.delegations[0]).toMatchObject({
+      status: "completed", turns: 65, report: "complete full report",
+    });
   });
 
   it("未知 role 返回错误与目录", async () => {

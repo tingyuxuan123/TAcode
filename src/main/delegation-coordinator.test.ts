@@ -35,7 +35,7 @@ const mockSubagents = vi.hoisted(() => {
     source: "builtin",
   };
   return {
-    definitions: [explorer] as Array<typeof explorer & { model?: { providerId: string; modelId: string } }>,
+    definitions: [explorer] as Array<Omit<typeof explorer, "maxTurns"> & { maxTurns?: number; model?: { providerId: string; modelId: string } }>,
   };
 });
 
@@ -819,6 +819,81 @@ describe("DelegationCoordinator", () => {
 });
 
 describe("delegation turn limit", () => {
+  it("留空时首次运行、复用和重启 worker 续跑超过 60 轮都正常完成", async () => {
+    const original = mockSubagents.definitions[0];
+    mockSubagents.definitions[0] = { ...original, maxTurns: undefined };
+    const { coordinator, hosts, state } = await fixture({
+      hostOptions: () => ({ assistantTurns: 65, reportText: "complete full report" }),
+    });
+    try {
+      const started = await coordinator.start("/tmp/parent.jsonl", startPayload);
+      const waitForReport = async () => {
+        const result = await coordinator.wait("/tmp/parent.jsonl", {
+          delegationIds: [started.delegationId], timeoutSeconds: 5,
+        });
+        expect(result.delegations[0]).toMatchObject({ status: "completed", report: "complete full report" });
+      };
+      await waitForReport();
+      for (const restart of [false, true]) {
+        if (restart) await hosts[0].stop();
+        await coordinator.continue("/tmp/parent.jsonl", {
+          delegationId: started.delegationId, message: "Review more changes",
+        });
+        await waitForReport();
+      }
+      expect(hosts).toHaveLength(2);
+    } finally {
+      mockSubagents.definitions[0] = original;
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("留空时不轮询轮次，超过 60 轮后仍可手动停止", async () => {
+    const original = mockSubagents.definitions[0];
+    mockSubagents.definitions[0] = { ...original, maxTurns: undefined };
+    const { coordinator, hosts, state } = await fixture({
+      hostOptions: () => ({ assistantTurns: 65, neverSettle: true }),
+    });
+    try {
+      const started = await coordinator.start("/tmp/parent.jsonl", startPayload);
+      await waitFor(() => hosts[0]?.messages.length > 65);
+      await new Promise((done) => setTimeout(done, 600));
+      expect(coordinator.get("/tmp/parent.jsonl")[0]?.status).toBe("running");
+      // 只读过运行前的基准；无上限时不再每 500ms 拉取整段转录计数。
+      expect(hosts[0].calls.filter((call) => call === "request:get_messages")).toHaveLength(1);
+      await coordinator.stop("/tmp/parent.jsonl", { delegationIds: [started.delegationId] });
+      expect(hosts[0].isRunning()).toBe(false);
+      expect(coordinator.get("/tmp/parent.jsonl")[0]?.status).toBe("cancelled");
+    } finally {
+      mockSubagents.definitions[0] = original;
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("留空只取消轮次上限，完成超时仍会停止 worker", async () => {
+    const original = mockSubagents.definitions[0];
+    mockSubagents.definitions[0] = { ...original, maxTurns: undefined };
+    const { coordinator, hosts, state } = await fixture({
+      completionTimeoutMs: 650,
+      hostOptions: () => ({ assistantTurns: 65, neverSettle: true }),
+    });
+    try {
+      const started = await coordinator.start("/tmp/parent.jsonl", startPayload);
+      const result = await coordinator.wait("/tmp/parent.jsonl", {
+        delegationIds: [started.delegationId], timeoutSeconds: 5,
+      });
+      expect(result.delegations[0]?.status).toBe("failed");
+      expect(result.delegations[0]?.error).toContain("timeout");
+      expect(hosts[0].isRunning()).toBe(false);
+    } finally {
+      mockSubagents.definitions[0] = original;
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
   it("子代理跑到定义上限时收口为 truncated，并保留已产出的报告", async () => {
     // explorer 定义 maxTurns: 40；正好跑到 40 轮（边界用 >=），随后自行空闲。
     const { coordinator, logs, state } = await fixture({

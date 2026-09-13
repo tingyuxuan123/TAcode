@@ -611,7 +611,7 @@ export class DelegationCoordinator {
     if (signal.aborted) return;
     const startedAt = Date.now();
     const timeoutMs = this.options.completionTimeoutMs ?? DEFAULT_COMPLETION_TIMEOUT_MS;
-    // 轮数预算：角色定义里的 maxTurns（缺省 MAX_SUBAGENT_MAX_TURNS）。
+    // 轮数预算：角色定义里的 maxTurns；缺省不限制轮次。
     // 基准按「本次新增的 assistant 轮次」算——`continue` 会在同一 host 上再跑一轮，
     // 用绝对轮次会让续跑立刻撞上限。
     let limit = delegationTurnLimit(entry.definition ?? {});
@@ -623,7 +623,7 @@ export class DelegationCoordinator {
       this.log("warn", "delegation turn baseline unavailable; turn limit skipped for this run", {
         delegationId: entry.record.delegationId,
       });
-      limit = Number.POSITIVE_INFINITY;
+      limit = undefined;
     }
     if (signal.aborted) return;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
@@ -641,10 +641,12 @@ export class DelegationCoordinator {
     // 看门狗：子代理自己也会按同一个上限收口（runtime 的 turn_end 钩子），这里兜底
     // 「子代理没停」的情况，避免只能等 30 分钟兜底超时。
     const turnLimit = new Promise<"turn_limit">((resolve) => {
+      const maxTurns = limit;
+      if (maxTurns === undefined) return;
       limitTimer = setInterval(() => {
         void this.assistantTurns(host)
           .then((turns) => {
-            if (turns - baselineTurns >= limit) resolve("turn_limit");
+            if (turns - baselineTurns >= maxTurns) resolve("turn_limit");
           })
           .catch(() => undefined);
       }, TURN_LIMIT_POLL_MS);
@@ -726,7 +728,7 @@ export class DelegationCoordinator {
     host: DelegationHost,
     message: string,
     startedAt: number,
-    run: { baselineTurns: number; limit: number },
+    run: { baselineTurns: number; limit?: number },
     signal: AbortSignal,
   ): Promise<void> {
     if (signal.aborted) return;
@@ -751,7 +753,7 @@ export class DelegationCoordinator {
       turnLimit: run.limit,
       hasReport: Boolean(report),
     });
-    if (turns >= run.limit) {
+    if (run.limit !== undefined && turns >= run.limit) {
       // 轮数上限是「收口」而不是失败：子代理自己按同一上限停过（runtime 的 turn_end 钩子），
       // 也可能只留下工具调用没有最终文本——两种都算 truncated 并保留已产出的报告。
       const detail = `The delegated worker reached its turn limit (${run.limit} turns); the report below is what it had produced.`;

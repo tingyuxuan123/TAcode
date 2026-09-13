@@ -7,7 +7,7 @@
  * 实测暴露的缺陷（配了不生效的隐形承诺），需要有回归用例盯着。
  */
 
-import { MAX_SUBAGENT_MAX_TURNS, isSubagentThinkingLevel } from "../shared/subagents.js";
+import { isSubagentThinkingLevel, resolveSubagentMaxTurns } from "../shared/subagents.js";
 import type { SubagentThinkingLevel } from "../shared/subagents.js";
 
 /** `buildStartOptions` 能拿到的两处来源：共享 payload 与本地角色定义。 */
@@ -32,14 +32,10 @@ function knownThinkingLevel(value: unknown): SubagentThinkingLevel | undefined {
 
 /**
  * 子代理的轮数预算：定义里配了就生效（收敛到 `MAX_SUBAGENT_MAX_TURNS`），
- * 没配则与进程内路径用同一个默认值——两条路径的收口语义必须一致。
+ * 没配则不限制轮次；与进程内路径共用同一解析规则。
  */
-export function delegationTurnLimit(definition: Pick<DelegationRunSources, "maxTurns">): number {
-  const value = definition?.maxTurns;
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
-    return Math.min(value, MAX_SUBAGENT_MAX_TURNS);
-  }
-  return MAX_SUBAGENT_MAX_TURNS;
+export function delegationTurnLimit(definition: Pick<DelegationRunSources, "maxTurns">): number | undefined {
+  return resolveSubagentMaxTurns(definition?.maxTurns);
 }
 
 /**
@@ -54,11 +50,12 @@ export function delegationTurnLimit(definition: Pick<DelegationRunSources, "maxT
 export function delegationRunOptions(
   payload: DelegationRunSources,
   definition: DelegationRunSources,
-): { effort?: string; maxTurns: number; execPolicy?: "readonly" } {
+): { effort?: string; maxTurns?: number; execPolicy?: "readonly" } {
   const effort = knownThinkingLevel(payload.thinkingLevel) ?? knownThinkingLevel(definition.thinkingLevel);
+  const maxTurns = delegationTurnLimit(definition);
   return {
     ...(effort ? { effort } : {}),
-    maxTurns: delegationTurnLimit(definition),
+    ...(maxTurns !== undefined ? { maxTurns } : {}),
     ...(definition.execPolicy === "readonly" ? { execPolicy: "readonly" as const } : {}),
   };
 }

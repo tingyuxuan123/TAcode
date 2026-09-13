@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSubagentDocument, SUBAGENT_THINKING_LEVELS, type SubagentInfo } from "../shared/subagents";
+import { mergeSubagentDefinitions, parseSubagentDocument, SUBAGENT_THINKING_LEVELS, type SubagentInfo } from "../shared/subagents";
 import type { ProviderRecord } from "../shared/types";
 import {
   clampThinkingLevel,
@@ -50,6 +50,26 @@ describe("subagent draft validation", () => {
 });
 
 describe("subagent draft round trip", () => {
+  it("清空内置角色的轮次上限后，保存和重载都保持不限制", () => {
+    const builtin: SubagentInfo = {
+      name: "code-reviewer",
+      description: "Review changes.",
+      tools: ["read_file"],
+      maxTurns: 40,
+      prompt: "Review and report.",
+      source: "builtin",
+      enabled: true,
+    };
+    const cleared = { ...subagentDraftFromInfo(builtin), maxTurns: 0 };
+    const text = subagentDraftToDocument(cleared);
+    const parsed = parseSubagentDocument({ text, source: "user" });
+    expect(text).not.toContain("maxTurns:");
+    expect(parsed.warnings).toEqual([]);
+    const [saved] = mergeSubagentDefinitions([builtin], [parsed.definition!]);
+    expect(saved.maxTurns).toBeUndefined();
+    expect(subagentDraftFromInfo({ ...saved, enabled: true }).maxTurns).toBe(0);
+  });
+
   it("写出的文档能被解析器读回，含 TACode 特有的 permission / execPolicy", () => {
     const text = subagentDraftToDocument(draft({
       name: "Explorer Helper",

@@ -331,8 +331,8 @@ export class AgentHost {
         ...(options.delegationDepth !== undefined
           ? { SUBAGENT_DEPTH: String(options.delegationDepth) }
           : {}),
-        // 子代理轮数预算：runtime 侧到上限主动 abort（见 runtime/extension.ts 的 turn_end 钩子）。
-        ...(options.maxTurns ? { TACODE_MAX_TURNS: String(options.maxTurns) } : {}),
+        // 子代理轮数预算：未配置时清除继承值，runtime 不注册轮次上限钩子。
+        TACODE_MAX_TURNS: options.maxTurns !== undefined ? String(options.maxTurns) : undefined,
         // 只读命令策略：子 worker 的 exec_command 只允许白名单只读命令。
         ...(options.execPolicy ? { TACODE_EXEC_POLICY: options.execPolicy } : {}),
         ...(options.serviceId ? { TACODE_SERVICE_ID: options.serviceId } : {}),

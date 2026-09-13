@@ -66,6 +66,7 @@ export type SubagentThinkingLevel = (typeof SUBAGENT_THINKING_LEVELS)[number];
 export const MAX_SUBAGENT_DEFINITIONS = 16;
 /** 同一会话同时运行的子代理上限；与桥接路径共用同一常量。 */
 export const MAX_SUBAGENT_CONCURRENCY = DELEGATION_MAX_CONCURRENCY;
+/** 显式轮次上限允许的最大值；未配置时不使用它兜底。 */
 export const MAX_SUBAGENT_MAX_TURNS = 60;
 /** 回灌给父模型的报告上限（首尾各半截断）；与桥接落库共用同一常量。 */
 export const MAX_SUBAGENT_REPORT_CHARS = DELEGATION_MAX_REPORT_CHARS;
@@ -101,7 +102,7 @@ export interface SubagentDefinition {
   model?: SubagentModelPin;
   thinkingLevel?: SubagentThinkingLevel;
   permission?: SubagentPermission;
-  /** 轮次硬上限；省略表示默认上限。 */
+  /** 轮次硬上限；省略表示不限制轮次。 */
   maxTurns?: number;
   /**
    * 命令执行策略：`readonly` 表示这个子代理只能跑只读命令（见 `runtime/tools/readonly-commands.ts`）。
@@ -123,6 +124,12 @@ export interface SubagentInfo extends SubagentDefinition {
 export interface SubagentParseResult {
   definition?: SubagentDefinition;
   warnings: string[];
+}
+
+/** 两条执行路径与模型目录共用：缺省或非法值不限制，显式正整数收敛到允许的上限。 */
+export function resolveSubagentMaxTurns(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return undefined;
+  return Math.min(value, MAX_SUBAGENT_MAX_TURNS);
 }
 
 export function subagentCanMutate(definition: Pick<SubagentDefinition, "tools">): boolean {
@@ -205,7 +212,7 @@ export function subagentCatalogText(
   if (definitions.length === 0) return "";
   const lines = definitions.map((item) => {
     const tools = item.tools.join(", ") || "none";
-    const turns = item.maxTurns ?? MAX_SUBAGENT_MAX_TURNS;
+    const turns = resolveSubagentMaxTurns(item.maxTurns) ?? "unlimited";
     const thinking = item.thinkingLevel ? `; thinking ${item.thinkingLevel}` : "";
     return `- ${item.name}: ${item.description} (tools: ${tools}; maxTurns ${turns}${thinking})`;
   });

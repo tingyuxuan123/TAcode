@@ -229,9 +229,11 @@ describe("可写性与常量来源", () => {
   it("模型可见的子代理目录含角色、工具与上限", () => {
     const catalog = subagentCatalogText([
       { name: "explorer", description: "Read-only explorer.", tools: ["read_file"], maxTurns: 40, thinkingLevel: "medium" },
+      { name: "reviewer", description: "Review changes.", tools: ["read_file"] },
     ]);
     expect(catalog).toContain("Subagent catalog");
     expect(catalog).toContain("- explorer: Read-only explorer. (tools: read_file; maxTurns 40; thinking medium)");
+    expect(catalog).toContain("- reviewer: Review changes. (tools: read_file; maxTurns unlimited)");
     expect(subagentCatalogText([])).toBe("");
   });
 

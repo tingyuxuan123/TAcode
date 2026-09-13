@@ -10,7 +10,7 @@ import { delegationProviderTarget, delegationRunOptions, delegationTurnLimit } f
 describe("delegationRunOptions", () => {
   it("payload 里的思考等级优先（父会话/定义在桥接侧算出来的值）", () => {
     expect(delegationRunOptions({ thinkingLevel: "high" }, { thinkingLevel: "low" }))
-      .toEqual({ effort: "high", maxTurns: MAX_SUBAGENT_MAX_TURNS });
+      .toEqual({ effort: "high" });
   });
 
   it("payload 缺字段时回落到角色定义（continue() 重建 payload 的场景）", () => {
@@ -29,15 +29,21 @@ describe("delegationRunOptions", () => {
     expect(delegationRunOptions({}, { maxTurns: 40 }).maxTurns).toBe(40);
     expect(delegationRunOptions({}, { maxTurns: 30 }).maxTurns).toBe(30);
   });
+
+  it("留空时不下发轮次上限，续跑重建选项也保持不限制", () => {
+    expect(delegationRunOptions({}, {})).not.toHaveProperty("maxTurns");
+    expect(delegationRunOptions({}, { thinkingLevel: "medium" }))
+      .toEqual({ effort: "medium" });
+  });
 });
 
 describe("delegationTurnLimit", () => {
-  it("定义没配或值非法时用与进程内路径相同的默认值", () => {
-    expect(delegationTurnLimit({})).toBe(MAX_SUBAGENT_MAX_TURNS);
-    expect(delegationTurnLimit({ maxTurns: 0 })).toBe(MAX_SUBAGENT_MAX_TURNS);
-    expect(delegationTurnLimit({ maxTurns: -3 })).toBe(MAX_SUBAGENT_MAX_TURNS);
-    expect(delegationTurnLimit({ maxTurns: 2.5 })).toBe(MAX_SUBAGENT_MAX_TURNS);
-    expect(delegationTurnLimit({ maxTurns: "40" })).toBe(MAX_SUBAGENT_MAX_TURNS);
+  it("定义没配或值非法时不限制轮次", () => {
+    expect(delegationTurnLimit({})).toBeUndefined();
+    expect(delegationTurnLimit({ maxTurns: 0 })).toBeUndefined();
+    expect(delegationTurnLimit({ maxTurns: -3 })).toBeUndefined();
+    expect(delegationTurnLimit({ maxTurns: 2.5 })).toBeUndefined();
+    expect(delegationTurnLimit({ maxTurns: "40" })).toBeUndefined();
   });
 
   it("不超过收敛上限", () => {
@@ -45,8 +51,8 @@ describe("delegationTurnLimit", () => {
     expect(delegationTurnLimit({ maxTurns: MAX_SUBAGENT_MAX_TURNS })).toBe(MAX_SUBAGENT_MAX_TURNS);
   });
 
-  it("默认值与内置角色定义一致（两条路径不会各算一套）", () => {
-    expect(MAX_SUBAGENT_MAX_TURNS).toBe(60);
+  it("显式的一轮上限有效", () => {
+    expect(delegationTurnLimit({ maxTurns: 1 })).toBe(1);
   });
 });
 
