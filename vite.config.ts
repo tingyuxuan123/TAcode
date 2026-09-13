@@ -10,6 +10,7 @@ export default defineConfig({
     strictPort: true,
   },
   base: "./",
+  worker: { format: "es" },
   build: {
     outDir: "dist",
     emptyOutDir: true,

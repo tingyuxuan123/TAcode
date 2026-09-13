@@ -1,0 +1,78 @@
+{
+  "status": "passed",
+  "stages": [
+    "CodeMirror native input, save, undo/redo and find",
+    "Tree path search, file switching, read-only input and CRLF preservation",
+    "Offline local worker pool, syntax highlighting and multi-file virtualization",
+    "Unified/split, file jump, collapse/expand and review filtering",
+    "Resizable/collapsible tree, action callbacks, read-only scope, narrow/dark/English states"
+  ],
+  "worker": {
+    "managerState": "initialized",
+    "totalWorkers": 2,
+    "workersFailed": false,
+    "busyWorkers": 0,
+    "queuedTasks": 0,
+    "activeTasks": 0,
+    "themeSubscribers": 2,
+    "fileCacheSize": 0,
+    "diffCacheSize": 1
+  },
+  "rendering": {
+    "tokens": 242,
+    "mountedFiles": 1
+  },
+  "network": [],
+  "errors": [],
+  "device": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "cpu": "Apple M5",
+    "versions": {
+      "node": "22.21.1",
+      "acorn": "8.15.0",
+      "ada": "2.9.2",
+      "amaro": "1.1.4",
+      "ares": "1.34.5",
+      "brotli": "1.0.9",
+      "cjs_module_lexer": "2.1.0",
+      "cldr": "44.1",
+      "icu": "74.2",
+      "llhttp": "9.3.0",
+      "modules": "136",
+      "napi": "10",
+      "nbytes": "0.1.1",
+      "ncrypto": "0.0.1",
+      "nghttp2": "1.64.0",
+      "openssl": "0.0.0",
+      "simdjson": "3.13.0",
+      "simdutf": "7.0.0",
+      "sqlite": "3.50.4",
+      "tz": "2025b",
+      "undici": "6.22.0",
+      "unicode": "15.1",
+      "uv": "1.51.0",
+      "uvwasi": "0.0.23",
+      "v8": "13.8.258.32-electron.0",
+      "zlib": "1.3.1",
+      "zstd": "1.5.8",
+      "electron": "37.10.3",
+      "chrome": "138.0.7204.251"
+    }
+  },
+  "viewport": {
+    "files": [
+      820,
+      785
+    ],
+    "review": [
+      836,
+      740
+    ],
+    "narrow": [
+      600,
+      740
+    ],
+    "dpr": 2
+  }
+}

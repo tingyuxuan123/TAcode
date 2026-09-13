@@ -75,7 +75,9 @@ describe("shared session index", () => {
     index = new SessionIndex({ onChanged: changed, debounceMs: 10 });
     index.startWatching();
     await fs.writeFile(session("external"), transcript("external"));
-    await vi.waitFor(() => expect(index.store.get("external")).toBeDefined());
+    // macOS can batch fs.watch notifications for about one second. The default
+    // 1000 ms assertion timeout races delivery when the full suite is busy.
+    await vi.waitFor(() => expect(index.store.get("external")).toBeDefined(), { timeout: 3000 });
     await index.close();
     const calls = changed.mock.calls.length;
     await fs.writeFile(session("after-close"), transcript("after-close"));

@@ -1110,3 +1110,9 @@
 - 验证：全量 **119 文件 / 1023 测试通过**；后续补齐摘要阶段与保守时间戳路径后 6 个定向测试、`pnpm typecheck`、`git diff --check` 通过。真实受管命令覆盖写盘和异步边界；`TACODE_CHECKPOINT_SMOKE=1 node scripts/test-session-activity.mjs` 通过两个阶段及结束态的可见性验证，已查看截图 `ux-08/checkpoint-stage.png`。
 - 同本仓库 331 文件副本、交替六轮，后五轮检查中位数 **68.14 → 12.07 ms**，总耗时 **88.69 → 32.82 ms**，重复全文读取 **662 → 0 次**；首轮检查 **77.13 → 24.26 ms**。条件/原始数据见 `docs/ux-08-checkpoint-performance.md` 和 JSON，不将本地 APFS 样本外推到所有文件系统。
 - 下一项：UX-09 完整工作区文件检索与共享索引，处理深层文件和目录数量截断。整份目标继续 active。
+
+## 2026-09-13：文件与审查完整复刻专项入口
+
+- 专项在独立工作树 `.worktrees/file-review-workbench` / `codex/file-review-workbench` 实施，不覆盖原工作区正在运行的优化任务。
+- 完整范围见 `docs/file-review-workbench.md`；15 项验收见 `.agents/file-review/features.json`；详细进度见 `.agents/file-review/progress.md`。
+- FR-01 基础组件与离线 Electron 验收完成，120 文件 / 1027 测试、typecheck 通过。下一项 FR-02 Git 读取；总目标未完成，原 UX 清单不在本阶段改动。

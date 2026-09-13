@@ -1,0 +1,44 @@
+{
+  "files": {
+    "source": "codex-clipboard-3cfe1769-a165-4fa8-80a6-fb1c4544308d.png",
+    "originalSize": [
+      2940,
+      1676
+    ],
+    "crop": [
+      1248,
+      92,
+      2888,
+      1662
+    ],
+    "pixelSize": [
+      1640,
+      1570
+    ],
+    "cssSizeAtDpr2": [
+      820.0,
+      785.0
+    ]
+  },
+  "review": {
+    "source": "codex-clipboard-c54c8610-3e44-47f9-bcb6-ad8128c1e346.png",
+    "originalSize": [
+      2940,
+      1676
+    ],
+    "crop": [
+      1256,
+      78,
+      2928,
+      1558
+    ],
+    "pixelSize": [
+      1672,
+      1480
+    ],
+    "cssSizeAtDpr2": [
+      836.0,
+      740.0
+    ]
+  }
+}

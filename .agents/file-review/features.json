@@ -2,7 +2,7 @@
   {
     "id": "FR-01",
     "description": "文件与审查基础组件及 Electron 样板：截图中的白底、面包屑、工具栏、右侧文件树和多文件 diff 布局；CodeMirror 编辑与 @pierre/diffs 高亮/虚拟滚动在真实离线 Electron 构建运行，能原生输入、切换 diff 布局、定位文件并生成可复核截图。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "FR-02",

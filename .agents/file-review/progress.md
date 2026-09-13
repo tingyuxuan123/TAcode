@@ -7,3 +7,12 @@
 - 已保存完整范围 docs/file-review-workbench.md 与 15 条专项验收 .agents/file-review/features.json。
 - 当前项 FR-01。下一步完成独立依赖/基线测试，接入 CodeMirror 6 / @pierre/diffs，真实 Electron 样板验证与截图。
 - 全部产品目标仍未完成，当前不修改既有 UX 清单的 passes。
+
+## 2026-09-13 FR-01 完成
+
+- 新增 CodeMirror 编辑器、固定行高虚拟文件树、文件/审查组件、@pierre/diffs 连续 diff 与本地 Worker；浅色按参考图取色，支持局部深色、中英文、分栏与折叠。
+- 独立 Electron 构建通过真实输入/快捷键、CRLF、只读、筛选、文件跳转、统一/左右布局、折叠、分栏及离线高亮。缓存键和显示版本分别维护；修复尺寸监听循环及筛选后的布局一致性问题。
+- 全量 120 文件 / 1027 用例、typecheck、diff check 通过。既有文件监听断言因 macOS 约 1 秒事件合批而在全量下超时，调整等待上限至 3 秒后通过，未改该生产服务。
+- 证据与边界：docs/file-review-fr-01.md；原始结果 docs/file-review-reference/fr-01-result.json；截图在当前任务 visualizations 的 file-review/fr-01 目录。
+- 下一项 FR-02，独立 Git 读取；FR-01 的保存/Git 按钮目前由夹具回调验证，真实后端尚未接入。总目标保持 active。
+- main 已有 UX-09（2ffc3ac）/UX-10（d18d584）提交；另一任务继续 UX-11。本分支先完成独立 Git 模块，在 FR-06 前吸收文件索引/预览提交。

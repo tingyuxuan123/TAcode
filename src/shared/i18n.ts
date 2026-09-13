@@ -1,4 +1,5 @@
 import { capabilityZh, capabilityEn } from "./capability-i18n";
+import { workbenchZh, workbenchEn } from "./workbench-i18n";
 
 export type Locale = "zh" | "en";
 
@@ -26,6 +27,7 @@ type Vars = Record<string, string | number>;
 
 const zh = {
   ...capabilityZh,
+  ...workbenchZh,
   "update.title": "TACode 更新",
   "update.latest": "已是最新版本",
   "update.currentVersion": "当前版本：v{version}",
@@ -815,6 +817,7 @@ export type MessageKey = keyof typeof zh;
 
 const en: Record<MessageKey, string> = {
   ...capabilityEn,
+  ...workbenchEn,
   "update.title": "TACode Update",
   "update.latest": "You're up to date",
   "update.currentVersion": "Current version: v{version}",
