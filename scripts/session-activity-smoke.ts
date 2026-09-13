@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { AgentHost } from "../src/main/agent-host";
 import { AgentManager } from "../src/main/agent-manager";
 import { readSessionTranscript } from "../src/main/session-transcript";
 import { SessionMaintenance } from "../src/main/session-maintenance";
+import { SessionIndex } from "../src/main/session-index";
 import { initializeTacodeHome } from "../src/runtime/home";
 import { listTacodeThreads } from "../src/runtime/state";
 import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/types";
@@ -30,12 +31,21 @@ async function smoke() {
   const pendingPrompts = new Map<string, () => void>();
   const sessionReads = new Set<Promise<unknown>>();
   let closing = false;
+  let holdNextList = false;
+  let releaseList: (() => void) | undefined;
+  let holdMutation = false;
+  let releaseMutation: (() => void) | undefined;
+  const mutationBarrier = async () => {
+    if (holdMutation) { holdMutation = false; await new Promise<void>((resolve) => { releaseMutation = resolve; }); }
+  };
+  const sessionIndex = new SessionIndex({ onChanged: () => { if (!closing) main?.webContents.send("sessions:changed"); } });
   const starts = new Map<string, number>();
   const draftSmoke = process.env.TACODE_COMPOSER_SMOKE === "1";
   const imeSmoke = process.env.TACODE_IME_SMOKE === "1";
   const navigationSmoke = process.env.TACODE_NAVIGATION_SMOKE === "1";
   const historySmoke = process.env.TACODE_HISTORY_SMOKE === "1";
   const startupSmoke = process.env.TACODE_STARTUP_SMOKE === "1";
+  const listSmoke = process.env.TACODE_SESSION_LIST_SMOKE === "1";
   const startupBaseline = process.env.TACODE_STARTUP_BASELINE === "1";
   const startupCount = Number(process.env.TACODE_STARTUP_COUNT ?? 0);
   let startupAt = 0;
@@ -48,7 +58,7 @@ async function smoke() {
   const renames: string[] = [];
   const activity = new AgentActivityStore((value) => main?.webContents.send("agent:activity", value));
   const now = new Date().toISOString();
-  const sessionDirectory = startupSmoke ? path.join(root, "home", "sessions") : project;
+  const sessionDirectory = startupSmoke || listSmoke ? path.join(root, "home", "sessions") : project;
   const sessions: SessionSummary[] = (startupSmoke ? Array.from({ length: startupCount }, (_, i) => String(i)) : ["A", "B"]).map((name) => ({
     id: name, title: `会话 ${name}`, path: path.join(sessionDirectory, `${name}.jsonl`), storagePath: path.join(sessionDirectory, `${name}.jsonl`),
     cwd: project, createdAt: now, updatedAt: now, messageCount: 2, pinned: false, archived: false,
@@ -139,15 +149,17 @@ async function smoke() {
   const watchdog = setTimeout(() => { console.error(`Activity smoke timed out: ${stage}`); app.exit(1); }, 90_000);
   try {
     await app.whenReady();
-    if (startupSmoke) {
+    if (startupSmoke || listSmoke) {
       await mkdir(sessionDirectory, { recursive: true });
       await Promise.all(sessions.map((session) => writeFile(session.path, [
         { type: "session", version: 3, id: session.id, cwd: project, timestamp: "2026-09-13T00:00:00Z" },
         { type: "message", id: "u", parentId: null, message: { role: "user", content: session.title } },
         { type: "message", id: "a", parentId: "u", message: { role: "assistant", content: "已有记录" } },
-      ].map((entry) => JSON.stringify(entry)).join("\n"))));
+        ...(listSmoke ? [{ type: "session_info", name: session.title }] : []),
+      ].map((entry) => JSON.stringify(entry)).join("\n") + (listSmoke ? "\n" : ""))));
       startupAt = performance.now();
       await initializeTacodeHome({ deferHistory: !startupBaseline });
+      if (listSmoke) { await sessionIndex.reconcile(); sessionIndex.startWatching(); }
     }
     ipcMain.handle("app:get-locale", () => "zh");
     ipcMain.handle("app:build-status", () => ({ restartRequired: false }));
@@ -162,8 +174,12 @@ async function smoke() {
     ipcMain.handle("workspace:read", (_event, file) => ({ path: file, content: "", binary: false }));
     ipcMain.handle("sessions:list", () => {
       if (closing) return [];
-      const job = (async () => startupSmoke
-        ? (await listTacodeThreads({}, startupBaseline || startupMaintenance.ready)).map((thread) => ({ ...thread, path: thread.sessionPath })) : sessions)();
+      const job = (async () => {
+        const rows = listSmoke ? sessionIndex.store.list().map((thread) => ({ ...thread, path: thread.sessionPath })) : startupSmoke
+          ? (await listTacodeThreads({}, startupBaseline || startupMaintenance.ready)).map((thread) => ({ ...thread, path: thread.sessionPath })) : sessions;
+        if (holdNextList) { holdNextList = false; await new Promise<void>((resolve) => { releaseList = resolve; }); }
+        return rows;
+      })();
       sessionReads.add(job);
       return job.finally(() => { sessionReads.delete(job); });
     });
@@ -173,10 +189,27 @@ async function smoke() {
       if (file === delayedHistory) await new Promise<void>((resolve) => { releaseHistory = resolve; });
       return historySmoke ? readSessionTranscript(project, file, options) : { sessionPath: file, messages: transcript(file), totalMessages: 2, truncated: false };
     });
-    ipcMain.handle("sessions:rename", (_event, id, title) => {
+    ipcMain.handle("sessions:rename", async (_event, id, title) => {
+      await mutationBarrier();
+      if (listSmoke) {
+        const row = sessionIndex.store.get(id)!;
+        await appendFile(row.storagePath, JSON.stringify({ type: "session_info", name: title }) + "\n");
+        await sessionIndex.store.indexSession(row.sessionPath);
+        sessionIndex.changed();
+      }
       renames.push(title);
       const session = sessions.find((row) => row.id === id);
       if (session) session.title = title;
+    });
+    ipcMain.handle("sessions:pin", async (_event, id, pinned) => {
+      await mutationBarrier();
+      sessionIndex.store.setPinned(id, pinned);
+      sessionIndex.changed();
+    });
+    ipcMain.handle("sessions:remove", async (_event, id) => {
+      await mutationBarrier();
+      await sessionIndex.store.archive(id);
+      sessionIndex.changed();
     });
     ipcMain.handle("delegations:list", () => []);
     ipcMain.handle("skills:list", () => ({ skills: [], projectTrusted: true }));
@@ -214,10 +247,64 @@ async function smoke() {
     if (historySmoke) {
       controls.configured = false;
       for (const session of sessions) await writeTranscript(session.path, session.id === "A" ? 460 : 2);
-    } else if (!startupSmoke) for (const session of sessions) await manager.start({ cwd: project, sessionPath: session.path, provider: "openai", permission: "auto", sandbox: "read-only", serviceKey: "fixture:1" });
+    } else if (!startupSmoke && !listSmoke) for (const session of sessions) await manager.start({ cwd: project, sessionPath: session.path, provider: "openai", permission: "auto", sandbox: "read-only", serviceKey: "fixture:1" });
     manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (listSmoke) {
+      stage = "session list actions preserve optimistic results through delayed responses";
+      await wait(() => evaluate("document.querySelectorAll('.home-recent').length === 2"));
+      await evaluate("document.querySelector('.project-row').click()");
+      await wait(() => evaluate("document.querySelectorAll('.session-row').length === 2"));
+      const row = (name: string) => `Array.from(document.querySelectorAll('.session-row')).find(el => el.getAttribute('aria-label') === ${JSON.stringify(name)})`;
+      const menu = async (name: string, action: string) => {
+        await evaluate(`${row(name)}.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 100, clientY: 250 }))`);
+        await wait(() => evaluate("!!document.querySelector('.session-menu')"));
+        await evaluate(`Array.from(document.querySelectorAll('.session-menu button')).find(el => el.textContent.trim() === ${JSON.stringify(action)}).click()`);
+      };
+      const delayList = async () => {
+        releaseList = undefined;
+        holdNextList = true;
+        main!.webContents.send("sessions:changed");
+        await wait(async () => Boolean(releaseList));
+      };
+      await delayList();
+      holdMutation = true;
+      await menu("会话 A", "置顶");
+      await wait(async () => Boolean(releaseMutation));
+      await wait(() => evaluate(`!!${row("会话 A")}?.querySelector('svg')`));
+      releaseList!();
+      await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+      assert.equal(await evaluate(`!!${row("会话 A")}?.querySelector('svg')`), true);
+      releaseMutation!();
+      await wait(async () => sessionIndex.store.get("A")?.pinned);
+      stage = "rename and external rename remain visible";
+      await menu("会话 A", "重命名");
+      await wait(() => evaluate("!!document.querySelector('.session-rename')"));
+      await main.webContents.insertText("中文新标题");
+      main.webContents.sendInputEvent({ type: "keyDown", keyCode: "Return" });
+      main.webContents.sendInputEvent({ type: "keyUp", keyCode: "Return" });
+      await wait(() => evaluate(`!!${row("中文新标题")}`));
+      await wait(async () => sessionIndex.store.get("A")?.title === "中文新标题");
+      await evaluate("new Promise(resolve => setTimeout(resolve, 300))");
+      await appendFile(sessionIndex.store.get("A")!.storagePath, JSON.stringify({ type: "session_info", name: "外部标题" }) + "\n");
+      await wait(() => evaluate(`!!${row("外部标题")}`));
+      await delayList();
+      holdMutation = true;
+      releaseMutation = undefined;
+      await menu("外部标题", "移除");
+      await wait(async () => Boolean(releaseMutation));
+      await wait(() => evaluate(`!${row("外部标题")}`));
+      releaseList!();
+      await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+      assert.equal(await evaluate(`!!${row("外部标题")}`), false);
+      releaseMutation!();
+      await wait(async () => sessionIndex.store.get("A")?.archived);
+      assert.equal(manager.list().length, 0);
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      console.log("Session list smoke passed: shared SQLite, pin/rename/archive, delayed pre-mutation replies, no workers.");
+      return;
+    }
     if (startupSmoke) {
       stage = "sidebar remains usable while history is organized";
       await wait(() => evaluate("!!document.querySelector('.project-row:not([disabled])')"));
@@ -476,6 +563,7 @@ async function smoke() {
     await manager.stopAll();
     main?.destroy();
     await Promise.allSettled([...sessionReads]);
+    await sessionIndex.close();
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     app.exit(process.exitCode ?? 0);
   }

@@ -86,7 +86,7 @@
 
   **定位与风险。** [启动链路](/Users/yfdl/project/TAcode/src/main/index.ts:2211)、[initializeTacodeHome](/Users/yfdl/project/TAcode/src/runtime/home.ts:47)、[partitionExistingSessions](/Users/yfdl/project/TAcode/src/runtime/home.ts:163)。风险中等，需要保留迁移和硬链接恢复的正确性。
 
-- [ ] **UX-07 · 会话列表增量更新**
+- [x] **UX-07 · 会话列表增量更新**
 
   **代码确认 + 合成测量。** `listTacodeThreads` 每次创建 store、refresh、查询、关闭；refresh 遍历会话并执行分区/索引。前端又在标题变化和任务结束时请求列表。现有索引已用文件元数据跳过未变内容的解析，但文件枚举与分区工作仍会发生。本次临时合成样本中，1000 个未变会话的一次列表调用约 200ms；这是辅助函数耗时，不是整段界面延迟。
 

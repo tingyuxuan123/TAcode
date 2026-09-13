@@ -125,6 +125,16 @@ export class TacodeStateStore {
   readonly statePath: string;
   private readonly database: SqliteDatabase;
   private readonly findByPath: SqliteStatement;
+  private pending: Promise<unknown> = Promise.resolve();
+
+  /** 文件读取/迁移按连接串行，避免旧索引结果复活已经归档的会话。 */
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const job = this.pending.then(operation, operation);
+    this.pending = job.catch(() => undefined);
+    return job;
+  }
+
+  async idle(): Promise<void> { await this.pending; }
 
   constructor(statePath: string = getTacodeStatePath()) {
     this.statePath = statePath;
@@ -205,13 +215,16 @@ export class TacodeStateStore {
     this.database.close();
   }
 
-  async refresh(options: { signal?: AbortSignal } = {}): Promise<void> {
+  refresh(options: { signal?: AbortSignal } = {}): Promise<void> {
+    return this.enqueue(() => this.refreshFiles(options));
+  }
+
+  private async refreshFiles(options: { signal?: AbortSignal }): Promise<void> {
     const seen = new Set<string>();
     for (const file of await directJsonlFiles(getTacodeSessionsDir())) {
       options.signal?.throwIfAborted();
-      const partitioned = await partitionSessionFile(file);
-      seen.add(partitioned.storagePath);
-      await this.indexFile(partitioned.runtimePath, partitioned.storagePath, false);
+      const indexed = await this.indexSessionFile(file);
+      if (indexed) seen.add(indexed.storagePath);
     }
     for (const file of await recursiveJsonlFiles(getTacodeArchivedSessionsDir())) {
       options.signal?.throwIfAborted();
@@ -227,13 +240,33 @@ export class TacodeStateStore {
     }>;
     const remove = this.database.prepare("DELETE FROM threads WHERE id = ?");
     for (const row of rows) {
-      if (!seen.has(row.storage_path) && !row.source_delegation_id) remove.run(row.id);
+      if (!seen.has(row.storage_path) && !row.source_delegation_id && !(await fileExists(row.storage_path))) {
+        options.signal?.throwIfAborted();
+        remove.run(row.id);
+      }
     }
   }
 
-  async indexSession(file: string): Promise<TacodeThread | undefined> {
-    const partitioned = await partitionSessionFile(file);
-    return this.indexFile(partitioned.runtimePath, partitioned.storagePath, false);
+  indexSession(file: string): Promise<TacodeThread | undefined> {
+    return this.enqueue(() => this.indexSessionFile(path.resolve(file)));
+  }
+
+  private async indexSessionFile(file: string): Promise<TacodeThread | undefined> {
+    const current = this.findBySessionPath(file);
+    const archivedRoot = path.relative(getTacodeArchivedSessionsDir(), file);
+    const archived = current?.archived ?? (archivedRoot !== ".." && !archivedRoot.startsWith(`..${path.sep}`) && !path.isAbsolute(archivedRoot));
+    try {
+      const partitioned = archived ? { runtimePath: current?.sessionPath ?? file, storagePath: current?.storagePath ?? file } : await partitionSessionFile(file);
+      const indexed = await this.indexFile(partitioned.runtimePath, partitioned.storagePath, archived);
+      if (indexed) return indexed;
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+    }
+    if (current && await fileExists(current.storagePath)) {
+      return this.indexFile(current.sessionPath, current.storagePath, current.archived);
+    }
+    if (current && !current.sourceDelegationId) this.database.prepare("DELETE FROM threads WHERE id = ?").run(current.id);
+    return undefined;
   }
 
   list(options: ListThreadOptions = {}): TacodeThread[] {
@@ -369,7 +402,11 @@ export class TacodeStateStore {
     );
   }
 
-  async archive(id: string): Promise<TacodeThread | undefined> {
+  archive(id: string): Promise<TacodeThread | undefined> {
+    return this.enqueue(() => this.archiveFile(id));
+  }
+
+  private async archiveFile(id: string): Promise<TacodeThread | undefined> {
     const current = this.get(id);
     if (!current || current.archived) return current;
     const dateParts = current.createdAt.slice(0, 10).split("-");
@@ -408,7 +445,11 @@ export class TacodeStateStore {
    * 手动清理过的子会话）走 `archive` 会因 rename ENOENT 失败，只能这样归档：
    * 文件本来就无从迁移，留着未归档的行反而会让它以孤儿身份一直挂在列表里。
    */
-  async archiveRowOnly(id: string): Promise<TacodeThread | undefined> {
+  archiveRowOnly(id: string): Promise<TacodeThread | undefined> {
+    return this.enqueue(async () => this.archiveMissingRow(id));
+  }
+
+  private archiveMissingRow(id: string): TacodeThread | undefined {
     const current = this.get(id);
     if (!current || current.archived) return current;
     this.database
@@ -417,7 +458,11 @@ export class TacodeStateStore {
     return this.get(id);
   }
 
-  async unarchive(id: string): Promise<TacodeThread | undefined> {
+  unarchive(id: string): Promise<TacodeThread | undefined> {
+    return this.enqueue(() => this.unarchiveFile(id));
+  }
+
+  private async unarchiveFile(id: string): Promise<TacodeThread | undefined> {
     const current = this.get(id);
     if (!current || !current.archived) return current;
     const dateParts = current.createdAt.slice(0, 10).split("-");
@@ -505,8 +550,13 @@ export class TacodeStateStore {
         stat.size,
         stat.mtimeMs,
       );
-    return this.get(parsed.id);
+    return this.get(indexedId);
   }
+}
+
+async function fileExists(file: string): Promise<boolean> {
+  try { await fs.stat(file); return true; }
+  catch (error) { if (isNodeError(error) && error.code === "ENOENT") return false; throw error; }
 }
 
 export async function listTacodeThreads(

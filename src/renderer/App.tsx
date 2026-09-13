@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { latestContextStats } from "./context-stats";
+import { SessionListLoader } from "./session-list-loader";
 import type {
   AgentSessionStats,
   AgentSessionActivity,
@@ -475,15 +476,19 @@ export function App() {
   // JSONL，主进程 `sessions:list` 会合成一条占位（标题为 cwd 兜底）；这里用首次消息
   // 标题覆写，使新会话在切走/刷新后仍显示用户真正输入的标题，而非 cwd 名。
   const sessionTitlesRef = useRef<Map<string, string>>(new Map());
+  const pendingSessionChanges = useRef(new Map<string, { patch: Partial<SessionSummary> | null }>());
   const setSessionList = useCallback((threads: SessionSummary[]) => {
     const titles = sessionTitlesRef.current;
     setSessions(
-      threads.map((row) => {
+      threads.filter((row) => pendingSessionChanges.current.get(row.id)?.patch !== null).map((row) => {
         const title = titles.get(row.path);
-        return title && title !== row.title ? { ...row, title } : row;
+        if (title === row.title) titles.delete(row.path);
+        return { ...row, ...(title ? { title } : {}), ...pendingSessionChanges.current.get(row.id)?.patch };
       }),
     );
   }, []);
+  const sessionListLoader = useMemo(() => new SessionListLoader(() => window.harness.sessions.list(), setSessionList), [setSessionList]);
+  const refreshSessions = useCallback(() => sessionListLoader.refresh(), [sessionListLoader]);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const providersRef = useRef(providers);
   providersRef.current = providers;
@@ -602,9 +607,6 @@ export function App() {
   }, [browserPanels.openPanel]);
   // 父代理创建子代理时自动开右侧标签（对齐 Proma 的 delegation 面板），并实时刷新状态。
   useDelegationTabs(displayMessages, browserPanels, delegationRecords, activeSession);
-  useEffect(() => {
-    if (delegationRecords.size) void window.harness.sessions.list().then(setSessionList).catch(() => undefined);
-  }, [delegationRecords, setSessionList]);
 
   // 主进程是旧构建（本地重建过但没完全重启）时提示一次：否则会出现「worker 已是新代码、
   // 主进程还是旧定义」这类很难自查的现象。
@@ -823,16 +825,15 @@ export function App() {
   }), [workspace, refreshAgentSkills]);
 
   const refresh = useCallback(async () => {
-    const [recent, status, threads] = await Promise.all([
+    const [recent, status] = await Promise.all([
       window.harness.workspace.recent(),
       window.harness.auth.status(),
-      window.harness.sessions.list(),
+      refreshSessions(),
     ]);
     setWorkspaces(recent);
     setProviders(status);
-    setSessionList(threads);
     return status;
-  }, []);
+  }, [refreshSessions]);
 
   useEffect(() => {
     const api = window.harness.sessions;
@@ -847,11 +848,11 @@ export function App() {
     };
     const offStatus = api.onMaintenance(update);
     const offChanged = api.onChanged(() => {
-      void api.list().then((rows) => { if (!gone) setSessionList(rows); }).catch(() => undefined);
+      if (!gone) void refreshSessions().catch(() => undefined);
     });
     void api.maintenance().then(update).catch(() => undefined);
     return () => { gone = true; offStatus(); offChanged(); };
-  }, [refresh, setSessionList]);
+  }, [refresh, refreshSessions]);
 
   const resolveSandbox = useCallback(async (asProject: boolean, mode: PermissionMode, cwd?: string) => {
     if (!asProject) return "read-only" as const;
@@ -1103,7 +1104,7 @@ export function App() {
         sessionRef.current = file;
         setActiveSession(file);
       }
-      void window.harness.sessions.list().then((threads) => {
+      {
         // A brand-new thread's JSONL is only written when the first assistant message
         // is persisted; until then the disk-backed list misses it. Keep a placeholder
         // row visible during the first turn so the sidebar updates immediately.
@@ -1113,17 +1114,17 @@ export function App() {
           // Phase 1：缓存首次消息标题，切走/刷新后 `setSessionList` 会用它覆写主进程
           // 合成的占位标题（否则占位只能显示 cwd 兜底名）。
           sessionTitlesRef.current.set(file, seedTitle);
-          setSessions(upsertSessionSummary(threads, {
+          sessionListLoader.invalidate();
+          setSessions((threads) => upsertSessionSummary(threads, {
             path: file,
             cwd: cwdForSeed ?? "",
             title: seedTitle,
             provider: chat.id,
             model: modelId,
           }));
-        } else {
-          setSessionList(threads);
         }
-      });
+        void refreshSessions().catch(() => undefined);
+      }
       void refreshAgentSkills(snapshot.cwd ?? cwd);
       return true;
     } catch (error) {
@@ -1360,6 +1361,21 @@ export function App() {
     sessionRef.current = undefined;
   }, [detachAgentView, workspace]);
 
+  const mutateSession = useCallback(async (session: SessionSummary, patch: Partial<SessionSummary> | null, work: () => Promise<void>) => {
+    const change = { patch };
+    pendingSessionChanges.current.set(session.id, change);
+    sessionListLoader.invalidate();
+    setSessions((rows) => patch === null ? rows.filter((row) => row.id !== session.id)
+      : rows.map((row) => row.id === session.id ? { ...row, ...patch } : row));
+    try { await work(); }
+    catch (error) { setToast(error instanceof Error ? error.message : String(error)); }
+    finally {
+      if (pendingSessionChanges.current.get(session.id) === change) pendingSessionChanges.current.delete(session.id);
+      sessionListLoader.invalidate();
+      await refreshSessions().catch((error) => setToast(String(error)));
+    }
+  }, [refreshSessions, sessionListLoader]);
+
   const removeSession = useCallback(async (session: SessionSummary) => {
     if (isSameSession(session, activeSession)) {
       // 主进程按被删除会话的路径回收 worker；导航不再依赖易变的默认句柄。
@@ -1372,41 +1388,33 @@ export function App() {
       setRunning(false);
       setUiRequest(undefined);
     }
-    try {
+    await mutateSession(session, null, async () => {
       await window.harness.sessions.remove(session.id);
       composerDrafts().remove(draftScope(session.cwd, session.path));
       sessionTitlesRef.current.delete(session.path);
-      setSessionList(await window.harness.sessions.list());
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : String(error));
-    }
-  }, [activeSession, detachAgentView]);
+    });
+  }, [activeSession, detachAgentView, mutateSession]);
 
   const pinSession = useCallback(async (session: SessionSummary) => {
-    try {
+    await mutateSession(session, { pinned: !session.pinned }, async () => {
       await window.harness.sessions.pin(session.id, !session.pinned);
-      setSessionList(await window.harness.sessions.list());
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
+    });
+  }, [mutateSession]);
 
   const renameSession = useCallback(async (session: SessionSummary, title: string) => {
-    try {
+    await mutateSession(session, { title }, async () => {
       await window.harness.sessions.rename(session.id, title);
       sessionTitlesRef.current.set(session.path, title);
-      setSessionList(await window.harness.sessions.list());
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
+    });
+  }, [mutateSession]);
 
   const removeProject = useCallback(async (path: string) => {
     const seq = startSeq.current;
     const runtimeId = runtimeIdRef.current;
     try {
       setWorkspaces(await window.harness.workspace.forget(path));
-      setSessionList(await window.harness.sessions.list());
+      sessionListLoader.invalidate();
+      await refreshSessions();
     } catch (error) {
       setToast(error instanceof Error ? error.message : String(error));
       return;
@@ -1444,7 +1452,7 @@ export function App() {
       sessionRef.current = stats.sessionFile;
       setActiveSession(stats.sessionFile);
     }
-    void window.harness.sessions.list().then(setSessionList);
+    void refreshSessions().catch(() => undefined);
   }, [workspace]);
 
   const undoLastTurn = useCallback(async () => {
@@ -1515,7 +1523,7 @@ export function App() {
           ? t("toast.compactDoneTokens", { tokens: result.tokensBefore.toLocaleString(locale === "en" ? "en-US" : "zh-CN") })
           : t("toast.compactDone"),
       );
-      void window.harness.sessions.list().then(setSessionList);
+      void refreshSessions().catch(() => undefined);
     } catch (error) {
       if (seq !== startSeq.current) return;
       const raw = error instanceof Error ? error.message : String(error);
@@ -1762,16 +1770,15 @@ export function App() {
       const eventSession = event.__sessionId;
       if (event.type === "session_info_changed" && eventSession && typeof event.name === "string" && event.name.trim()) {
         const title = event.name.trim();
+        sessionListLoader.invalidate();
         sessionTitlesRef.current.set(eventSession, title);
-        setSessions((current) => current.map((session) => isSameSession(session, eventSession) ? { ...session, title } : session));
-        void window.harness.sessions.list().then(setSessionList).catch(() => undefined);
+        setSessions((current) => current.map((session) => isSameSession(session, eventSession) ? { ...session, title, ...pendingSessionChanges.current.get(session.id)?.patch } : session));
         return;
       }
       // 活动元数据跨会话、跨加载阶段接收；转录仍只应用到当前视图。
       if (eventSession && event.type === "agent_start") markSessionRunning(eventSession, true);
       if (eventSession && event.type === "agent_settled") {
         markSessionRunning(eventSession, false);
-        void window.harness.sessions.list().then(setSessionList).catch(() => undefined);
       }
       if (!live.current) { queue.clear(); return; }
       // Phase 3a：按活动会话路由。后台会话（__sessionId ≠ 当前视图）的事件不套到

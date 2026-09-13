@@ -1090,3 +1090,13 @@
 - 验证：全量 **115 文件 / 1012 测试通过**，`pnpm typecheck`、`git diff --check` 通过；状态版本保护后 14 项定向回归通过。相同构建 0/100/1000 会话各三轮阻塞/后台对照共 18 次完成；最终 100 会话桌面复核退出正常、无迟到清理错误。
 - 1000 会话的窗口出现中位数 **586.6 → 177.5 ms**，侧栏可操作 **1135.7 → 246.1 ms**，输入框就绪 **1181.1 → 265.2 ms**；后台整理约 1159 ms。条件与原始数据见 `docs/ux-06-startup-performance.md`、`docs/ux-06-startup-measurements.json`。这是 Electron ready 后的隔离夹具，使用实际初始化/索引和生产 renderer/preload，不是冷盘或完整真实账户启动基准。
 - 下一项：UX-07 主进程复用会话索引、已知变化增量更新与列表版本保护。整份目标继续 active。
+
+## 2026-09-13：UX-07 会话列表增量更新
+
+- [x] 主进程、历史整理和委派协调器共用一个 SQLite 连接；列表请求只查询索引。消息落盘、标题变化与任务结束按路径约 200 ms 合批，重复路径只处理一次。文件监听发现外部修改，60 秒核对兜底处理遗漏与外部新增/删除；已删除转录的旧运行注册信息同步清理。
+- [x] 同连接的文件索引/归档/恢复串行执行，保留置顶和委派状态，避免迟到索引复活归档记录；修复委派索引返回错误 id。外部仅删除运行链接时保留仍可读的存储副本。
+- [x] 渲染层合并列表请求，修改前后使旧请求失效；重命名、置顶、移除先更新当前行，待处理期间保留局部状态，失败后重新核对。已确认标题不再永久遮住后续外部改名。
+- 文件：main/session-index.ts、index.ts；runtime/state.ts；renderer/session-list-loader.ts、App.tsx；对应回归及 `scripts/session-activity-smoke.ts`。
+- 验证：全量 **117 文件 / 1017 测试通过**，`pnpm typecheck`、`git diff --check` 通过。1000 会话仅修改一条的用例确认 **1 次全文读取、0 次目录枚举**；30 次重复变化合并为一次通知，重复列表读取复用连接。覆盖外部新增/删除、真实 watcher 回收和归档竞态。
+- `TACODE_SESSION_LIST_SMOKE=1 node scripts/test-session-activity.mjs` 通过真实 renderer/preload/Electron/SQLite 下的置顶、中文重命名、外部改名、归档及迟到响应，未创建 worker；后台审批桌面回归通过。首次夹具失败来自合成 JSONL 缺结尾换行，修正夹具后通过；既有 ResizeObserver 警告仍留 UX-13。
+- 下一项：UX-08 命令 checkpoint 的性能与撤销正确性，先测量再缩小文件读取范围。整份目标继续 active。

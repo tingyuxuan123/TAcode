@@ -24,13 +24,11 @@ import {
   getStoredDeepSeekBaseUrl,
   getStoredModelSelection,
   initializeTacodeHome,
-  listTacodeThreads,
   loadSubagents,
   readUserSubagent,
   saveUserSubagent,
   setSubagentEnabled,
   subagentDocumentPath,
-  TacodeStateStore,
   defaultModelForProvider,
   providerDisplayName,
   providerEnvironmentKey,
@@ -62,6 +60,7 @@ import { isPathInsideRoot } from "./workspace-path";
 import { LocalLogger } from "./local-logger";
 import { readSessionTranscript } from "./session-transcript";
 import { SessionMaintenance } from "./session-maintenance";
+import { SessionIndex } from "./session-index";
 import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { registerCapabilitiesIpc } from "./capabilities-ipc";
@@ -234,6 +233,7 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
       if (!sideChat && event.type === "session_info_changed" && typeof event.name === "string") {
         touchLoadedSession(event.__sessionId, { title: event.name });
       }
+      if (!sideChat && event.__sessionId && ["agent_settled", "session_info_changed", "message_end"].includes(event.type)) sessionIndex.changed(event.__sessionId);
       mainWindow?.webContents.send(sideChat ? "side-chat:event" : "agent:event", event);
     },
     (message, sessionKey, errorRuntimeId) => {
@@ -276,8 +276,28 @@ const terminalManager = new TerminalManager((event) => {
 });
 let activeAgentCwd: string | undefined;
 let agentViewVersion = 0;
+const sessionIndex = new SessionIndex({
+  onChanged: () => mainWindow?.webContents.send("sessions:changed"),
+  onRemoved: (threads) => {
+    for (const thread of threads) {
+      if (agentManager.findBySession(thread.sessionPath)?.isRunning()) continue;
+      loadedSessions.delete(thread.sessionPath);
+      loadedSessions.delete(thread.storagePath);
+    }
+    if (threads.length) persistLoadedSessions();
+  },
+  onError: (error) => diagnostics.warn("sessions", "会话索引更新失败", { error: String(error) }),
+});
 const historyMaintenance = new SessionMaintenance({
-  onStatus: (status) => mainWindow?.webContents.send("sessions:maintenance", status),
+  createStore: () => ({
+    indexSession: (file) => sessionIndex.store.indexSession(file),
+    refresh: (options) => sessionIndex.store.refresh(options),
+    close: () => {},
+  }),
+  onStatus: (status) => {
+    mainWindow?.webContents.send("sessions:maintenance", status);
+    if (status.state === "ready") sessionIndex.startWatching();
+  },
   onChanged: () => mainWindow?.webContents.send("sessions:changed"),
 });
 
@@ -737,14 +757,14 @@ function registerIpc(): void {
   ipcMain.handle("workspace:recent", () => recentWorkspaces.list());
   ipcMain.handle("workspace:forget", async (_event, rawPath: unknown) => {
     const workspacePath = requireString(rawPath, "工作区路径", { maxLength: 4_096 });
-    const store = new TacodeStateStore();
+    const store = sessionIndex.store;
     try {
-      await store.refresh();
+      await historyMaintenance.run();
       for (const thread of store.list({ cwd: workspacePath })) {
         await store.archive(thread.id);
       }
     } finally {
-      store.close();
+      sessionIndex.changed();
     }
     return recentWorkspaces.forget(workspacePath);
   });
@@ -1040,7 +1060,7 @@ function registerIpc(): void {
       rawCwd === undefined
         ? undefined
         : requireString(rawCwd, "cwd", { maxLength: 4_096 });
-    const threads = await listTacodeThreads(cwd ? { cwd } : {}, historyMaintenance.ready);
+    const threads = sessionIndex.store.list(cwd ? { cwd } : {});
     const mapped = threads.map(
       (thread): SessionSummary => ({
         path: thread.sessionPath,
@@ -1090,9 +1110,9 @@ function registerIpc(): void {
   });
   ipcMain.handle("sessions:remove", async (_event, rawId: unknown) => {
     const id = requireString(rawId, "会话 id", { maxLength: 256 });
-    const store = new TacodeStateStore();
+    const store = sessionIndex.store;
     try {
-      await store.refresh();
+      await sessionIndex.flush();
       // 用 DB id 找到该会话的真实文件路径（sessionPath / storagePath），据此可靠清理
       // 运行中注册表与 host。磁盘会话的 id 是 DB 主键（非路径 basename），此前仅用
       // sessionIdFromPath 匹配会漏删，导致删除后残留合成占位（title 退化为 cwd 名，
@@ -1154,7 +1174,7 @@ function registerIpc(): void {
       persistLoadedSessions();
       await store.archive(id);
     } finally {
-      store.close();
+      sessionIndex.changed();
     }
   });
   ipcMain.handle(
@@ -1162,13 +1182,13 @@ function registerIpc(): void {
     async (_event, rawId: unknown, pinned: unknown) => {
       const id = requireString(rawId, "会话 id", { maxLength: 256 });
       if (typeof pinned !== "boolean") throw new Error("无效的 pinned");
-      const store = new TacodeStateStore();
+      const store = sessionIndex.store;
       try {
-        await store.refresh();
+        await sessionIndex.flush();
         if (!store.setPinned(id, pinned))
           throw new Error("Conversation not found");
       } finally {
-        store.close();
+        sessionIndex.changed();
       }
     },
   );
@@ -1180,9 +1200,9 @@ function registerIpc(): void {
         .trim()
         .slice(0, 96);
       if (!name) throw new Error("Conversation name cannot be empty");
-      const store = new TacodeStateStore();
+      const store = sessionIndex.store;
       try {
-        await store.refresh();
+        await sessionIndex.flush();
         const thread = store.get(id);
         const runtime = agentManager.list().find((item) => item.sessionKey && sessionIdFromPath(item.sessionKey) === id);
         const host = agentManager.findBySession(thread?.sessionPath) ?? agentManager.findRuntime(runtime?.runtimeId);
@@ -1208,7 +1228,7 @@ function registerIpc(): void {
           }
         }
       } finally {
-        store.close();
+        sessionIndex.changed();
       }
     },
   );
@@ -1315,14 +1335,8 @@ function registerIpc(): void {
         sessionPath,
         storagePath || sessionPath,
       );
-      const store = new TacodeStateStore();
-      try {
-        await store.refresh();
-        const thread = store.findBySessionPath(sessionPath);
-        delegatedSession = Boolean(thread?.sourceDelegationId);
-      } finally {
-        store.close();
-      }
+      const thread = await sessionIndex.store.indexSession(sessionPath);
+      delegatedSession = Boolean(thread?.sourceDelegationId);
     }
 
     // 命中已在运行的同一会话（切回后台会话，含 openSession 的 resume=false）：
@@ -2280,6 +2294,7 @@ app.whenReady().then(async () => {
     });
   })();
   delegationCoordinator = new DelegationCoordinator({
+    stateStore: sessionIndex.store,
     createHost: (runtimeId, delegationId) => createAgentHost(runtimeId, delegationId),
     findParentHost: (sessionPath) => agentManager.findBySession(sessionPath),
     buildStartOptions: async (payload, definition, sessionPath, attempt) => {
@@ -2348,6 +2363,7 @@ app.whenReady().then(async () => {
       agentManager.findBySession(parentSessionPath)?.sendDelegationEvent(event);
       // 直接广播给界面：后台 delegate 工具返回后已取消订阅，不能靠父会话消息更新面板。
       mainWindow?.webContents.send("delegations:event", event.event);
+      sessionIndex.changed();
     },
     log: diagnostics,
   });
@@ -2409,5 +2425,6 @@ app.on("before-quit", (event) => {
     delegationCoordinator?.close() ?? Promise.resolve(),
   ])
     .catch(() => undefined)
+    .then(() => sessionIndex.close())
     .finally(() => app.exit(0));
 });
