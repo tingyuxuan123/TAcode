@@ -1,19 +1,18 @@
 diff --git a/dist/modes/rpc/rpc-mode.js b/dist/modes/rpc/rpc-mode.js
-index 8567321f20caa900a4f0268d54b2921e6efd1418..b4acd835b772ca22f8d0a024afd0e3644a5919dd 100644
+index 8567321f20caa900a4f0268d54b2921e6efd1418..a5b2f41b79c8de781f8252b2ca03987c13dc4c2c 100644
 --- a/dist/modes/rpc/rpc-mode.js
 +++ b/dist/modes/rpc/rpc-mode.js
-@@ -327,6 +327,14 @@ export async function runRpcMode(runtimeHost) {
+@@ -326,6 +326,13 @@ export async function runRpcMode(runtimeHost) {
+                 return success(id, "follow_up");
              }
              case "abort": {
-                 await session.abort();
-+                // TACode patch: aborted turns must not leave queued follow-ups behind.
-+                // Extensions inject background delegation reports via sendUserMessage(followUp);
-+                // if the queue survives abort they are consumed at the end of the NEXT turn,
-+                // waking the stopped session with stale reports. User-typed steering messages
-+                // live in the steering queue and are intentionally preserved.
++                // TACode patch: clear automatic follow-ups BEFORE waiting for idle.
++                // AgentSession can continue queued messages while abort() awaits settlement,
++                // so clearing after the await allows stale delegation reports to restart it.
++                // User-typed steering messages live in a separate queue and are preserved.
 +                session.agent.clearFollowUpQueue();
 +                session._followUpMessages.length = 0;
 +                session._emitQueueUpdate();
+                 await session.abort();
                  return success(id, "abort");
              }
-             case "new_session": {

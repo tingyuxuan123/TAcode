@@ -6,6 +6,7 @@ import {
   DELEGATE_CONTINUE_TOOL_NAME,
   DELEGATE_LIST_TOOL_NAME,
   DELEGATE_STOP_TOOL_NAME,
+  DELEGATE_CONTINUE_TOOL_NAME,
   DELEGATE_TOOL_NAME,
   DELEGATE_WAIT_TOOL_NAME,
   composeSubagentSystemPrompt,
@@ -524,5 +525,65 @@ describe("delegate tool", () => {
     // 覆盖 150ms 投递延迟：定时器到点时 gate 已挂起，报告被丢弃而不是注入。
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(delivered).toHaveLength(0);
+  });
+
+  it("等待三个后台子代理期间完成的报告不会排入额外回复", async () => {
+    const completions: Array<() => void> = [];
+    const { registry, tools, delivered } = harness({
+      script: (agent) => new Promise<void>((resolve) => {
+        completions.push(() => { agent.report("complete found it"); resolve(); });
+      }),
+    });
+    try {
+      await runTool(tools, DELEGATE_TOOL_NAME, {
+        tasks: Array.from({ length: 3 }, () => ({ role: "explorer", task: "check" })), background: true,
+      });
+      await vi.waitFor(() => expect(completions).toHaveLength(3));
+      const waiting = runTool(tools, DELEGATE_WAIT_TOOL_NAME, { timeoutSeconds: 5 });
+      completions[0]();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const sentWhileWaiting = delivered.length;
+      completions[1]();
+      completions[2]();
+      const result = await waiting;
+      expect(result.details.delegations).toHaveLength(3);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(sentWhileWaiting).toBe(0);
+      expect(delivered).toHaveLength(0);
+    } finally { registry.dispose(); }
+  });
+
+  it("父代理运行期间保留已完成报告，省略 wait 的 ids 也能读取且不重复回灌", async () => {
+    const { registry, tools, delivered, eventHandlers } = harness({});
+    try {
+      eventHandlers.get("agent_start")?.({});
+      await runTool(tools, DELEGATE_TOOL_NAME, {
+        tasks: [{ role: "explorer", task: "check" }], background: true,
+      });
+      await vi.waitFor(() => expect(registry.list()[0].status).toBe("completed"));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(delivered).toHaveLength(0);
+      const result = await runTool(tools, DELEGATE_WAIT_TOOL_NAME, {});
+      expect(result.details.delegations[0]).toMatchObject({ status: "completed", report: "complete found it" });
+      eventHandlers.get("agent_end")?.({});
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(delivered).toHaveLength(0);
+    } finally { registry.dispose(); }
+  });
+
+  it("后台子代理续跑的报告通过 continue 返回后不会重复回灌", async () => {
+    const { registry, tools, delivered, eventHandlers } = harness({});
+    try {
+      eventHandlers.get("agent_start")?.({});
+      await runTool(tools, DELEGATE_TOOL_NAME, {
+        tasks: [{ role: "explorer", task: "check" }], background: true,
+      });
+      await vi.waitFor(() => expect(registry.list()[0].status).toBe("completed"));
+      const result = await runTool(tools, DELEGATE_CONTINUE_TOOL_NAME, { delegationId: registry.list()[0].id, message: "follow up" });
+      expect(result.content[0]?.text).toContain("complete found it");
+      eventHandlers.get("agent_end")?.({});
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(delivered).toHaveLength(0);
+    } finally { registry.dispose(); }
   });
 });
