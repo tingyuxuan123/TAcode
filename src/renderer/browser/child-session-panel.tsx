@@ -3,6 +3,7 @@ import { CircleAlert, LoaderCircle, Square } from "lucide-react";
 import {
   delegateStatusLabel,
   groupConversation,
+  markRunningTail,
   normalizeMessages,
   type ChatMessage,
   type DelegateTaskStatus,
@@ -124,8 +125,8 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
     const visible = messages.filter((message, index) =>
       // 注入的 prompt 作为第一条 user 消息出现，隐藏它（任务单独展示）。
       !(index === 0 && message.role === "user" && INJECTED_PROMPT.test(message.text)));
-    return groupConversation(visible);
-  }, [messages]);
+    return markRunningTail(groupConversation(visible), isRunning);
+  }, [messages, isRunning]);
   const activity = info.activity ?? [];
   const meta = [
     info.uiRequest ? t("subagent.awaitingInput") : statusText(info.status, t),
@@ -186,6 +187,9 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
                 key={group.id}
                 messages={group.messages}
                 running={isRunning && index === groups.length - 1}
+                // 等用户确认 / 正在停止：与侧边聊天同款的状态呈现，别让过程区在这两个状态下看起来还在闷头跑。
+                awaiting={Boolean(info.uiRequest) && index === groups.length - 1}
+                stopping={stopping && index === groups.length - 1}
                 canAutoCollapse={false}
               />
             ))}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { visionAgentPrompt } from "../shared/vision-api";
-import { applyAgentEvent, approvalTitle, assistantErrorRecovered, assistantGroupSucceeded, assistantReplyText, baseName, cacheHitRate, collectFileChanges, collectProgressTasks, collectTodos, collectWorkingFiles, delegateProgress, delegateTaskLabel, dropLastTurn, filterMentionPaths, formatCommand, formatThinking, friendlyAgentError, groupConversation, hasNewCheckpointUndo, isRecoverableRequestError, isTransientStreamError, lastTurnRestoreFiles, liveStatus, mentionedFiles, normalizeFilePath, normalizeMessages, omitFinalReply, optimisticUserMessage, parseFeaturesJson, planAwaitingApproval, recoverableFailStreaks, repairMarkdownTables, sessionTerminals, sessionTools, splitHttpUrls, splitPromptChips, splitPatch, stripEmptyMarkdown, terminalLabel, thoughtSteps, toolErrorText, toolSummary, toolWritePreview, takeTrailingUrl, isHttpUrl, urlChipLabel, spliceFileMention, traceRows, turnAnchorId, turnAnchors, turnWork, undoDialogTitle, upsertSessionSummary, workspaceRelative, type ChatMessage } from "./conversation";
+import { applyAgentEvent, approvalTitle, assistantErrorRecovered, assistantGroupSucceeded, assistantReplyText, baseName, cacheHitRate, collectFileChanges, collectProgressTasks, collectTodos, collectWorkingFiles, delegateProgress, delegateTaskLabel, dropLastTurn, filterMentionPaths, formatCommand, formatThinking, friendlyAgentError, groupConversation, hasNewCheckpointUndo, isRecoverableRequestError, isTransientStreamError, lastTurnRestoreFiles, liveStatus, markRunningTail, mentionedFiles, normalizeFilePath, normalizeMessages, omitFinalReply, optimisticUserMessage, parseFeaturesJson, planAwaitingApproval, recoverableFailStreaks, repairMarkdownTables, sessionTerminals, sessionTools, splitHttpUrls, splitPromptChips, splitPatch, stripEmptyMarkdown, terminalLabel, thoughtSteps, toolErrorText, toolSummary, toolWritePreview, takeTrailingUrl, isHttpUrl, urlChipLabel, spliceFileMention, traceRows, turnAnchorId, turnAnchors, turnWork, undoDialogTitle, upsertSessionSummary, workspaceRelative, type ChatMessage } from "./conversation";
 
 describe("conversation events", () => {
   it("calculates prompt cache hit rate from reported token usage", () => {
@@ -1825,5 +1825,59 @@ describe("upsertSessionSummary", () => {
       "delegation-1",
     ]);
     expect(tasks[2]?.parentId).toBeUndefined();
+  });
+});
+
+describe("markRunningTail", () => {
+  const assistant = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
+    id: "a1",
+    role: "assistant",
+    text: "",
+    images: [],
+    tools: [],
+    work: [],
+    ...overrides,
+  });
+
+  it("marks the tail turn as live so the read-only panel animates like a live stream", () => {
+    const tool = { id: "t1", name: "read_file", title: "read src/main/index.ts", status: "complete" as const, resultRecorded: false };
+    const tail = assistant({ tools: [tool] });
+    const groups = groupConversation([assistant({ id: "u1", role: "user", text: "看下入口" }), tail]);
+
+    const marked = markRunningTail(groups, true).at(-1);
+    if (marked?.type !== "assistant") throw new Error("expected an assistant tail");
+    expect(marked.messages.at(-1)?.streaming).toBe(true);
+    // 没回结果的工具就是正在跑的那个：不标记它，过程区里就没有转圈。
+    expect(marked.messages.at(-1)?.tools[0]).toMatchObject({ status: "running", endedAt: undefined });
+    // 不就地改写原对象（过程区依赖 groupConversation 的引用复用）。
+    expect(tail.streaming).toBeUndefined();
+    expect(tail.tools[0]?.status).toBe("complete");
+  });
+
+  it("leaves a tool that already returned its result alone", () => {
+    const done = { id: "t1", name: "read_file", title: "read", status: "complete" as const, resultRecorded: true, endedAt: 5 };
+    const finished = groupConversation([assistant({ text: "报告", tools: [done] })]);
+
+    // 委派已结束：整批原样返回，引用不变（面板不会再渲染一轮）。
+    expect(markRunningTail(finished, false)).toBe(finished);
+
+    const marked = markRunningTail(finished, true).at(-1);
+    if (marked?.type !== "assistant") throw new Error("expected an assistant tail");
+    expect(marked.messages.at(-1)?.streaming).toBe(true);
+    expect(marked.messages.at(-1)?.tools[0]).toBe(done);
+
+    const errored = groupConversation([assistant({
+      id: "a2",
+      tools: [{ id: "t2", name: "bash", title: "pnpm test", status: "error" as const, resultRecorded: false }],
+    })]);
+    const erroredTail = markRunningTail(errored, true).at(-1);
+    if (erroredTail?.type !== "assistant") throw new Error("expected an assistant tail");
+    expect(erroredTail.messages.at(-1)?.tools[0]?.status).toBe("error");
+  });
+
+  it("does nothing while the tail is the follow-up the parent just sent", () => {
+    const groups = groupConversation([assistant({ text: "done" }), assistant({ id: "u2", role: "user", text: "再来一次" })]);
+    expect(markRunningTail(groups, true)).toBe(groups);
+    expect(markRunningTail([], true)).toEqual([]);
   });
 });

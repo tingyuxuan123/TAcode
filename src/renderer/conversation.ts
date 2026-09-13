@@ -341,6 +341,33 @@ export function groupConversation(messages: ChatMessage[], previousGroups: Conve
   });
 }
 
+/**
+ * 只读面板拿到的是 JSONL 快照：文件里只有**已完成**的消息，运行中的回合不带任何 live 标记，
+ * 于是过程区看起来是死的——没有流式光标、思考行不闪、正在跑的工具行不转圈。子代理面板按
+ * 委派状态把尾部标成 live，与实时事件流（applyAgentEvent）的观感对齐。
+ *
+ * 只动**尾部那条** assistant 消息及其内部没回结果的工具：更早的行没有结果通常是被中断或
+ * 转录被截断，标成「运行中」会让转圈永远停在那里。
+ */
+export function markRunningTail(groups: ConversationGroup[], running: boolean): ConversationGroup[] {
+  if (!running || groups.length === 0) return groups;
+  const index = groups.length - 1;
+  const group = groups[index]!;
+  // 尾部是父会话刚发出的 follow-up（子代理还没开始回）时没有可标记的内容。
+  if (group.type !== "assistant" || group.messages.length === 0) return groups;
+  const messages = [...group.messages];
+  const tailIndex = messages.length - 1;
+  const tail = messages[tailIndex]!;
+  const tools = tail.tools.map((tool) =>
+    tool.status === "complete" && tool.resultRecorded === false
+      ? { ...tool, status: "running" as const, endedAt: undefined }
+      : tool);
+  messages[tailIndex] = { ...tail, streaming: true, tools };
+  const next = [...groups];
+  next[index] = { ...group, messages };
+  return next;
+}
+
 export function turnAnchorId(id: string): string {
   return `turn-${id}`;
 }
