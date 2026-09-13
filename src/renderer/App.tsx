@@ -502,8 +502,11 @@ export function App() {
   // Phase 3b：每个会话的运行状态（含后台会话），供侧边栏徽标与后台完成提示。
   const runningSessionIdsRef = useRef<Set<string>>(new Set());
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(new Set());
-  /** 委派子会话分支的手动开合覆盖（未设置时按“父活跃或子运行中”自动展开）。 */
+  /** 委派子会话分支的手动开合，只对当前会话的分支生效（切换会话时清空）。 */
   const [railOpen, setRailOpen] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    setRailOpen({});
+  }, [activeSession]);
   const markSessionRunning = useCallback((sessionId: string | undefined, isRunning: boolean) => {
     if (!sessionId) return;
     setRunningSessionIds((current) => {
@@ -1993,21 +1996,23 @@ export function App() {
                 <div className="session-list nested">
                   {threads.length === 0 && <p className="task-empty">{t("nav.noThreads")}</p>}
                   {groupDelegatedSessions(threads).map(({ session, children }) => {
-                    const expanded = railOpen[session.id] ?? branchAutoExpanded({
+                    // 子代理只跟随当前会话：分支属于当前会话才展开，切到别的会话一律收起
+                    // （后台运行中也不例外）；手动开合只对当前会话自己的分支生效。
+                    const isCurrentBranch = branchAutoExpanded({
                       children,
                       isActive: (item) => isSameSession(item, activeSession),
-                      isRunning: (item) => runningSessionIds.has(item.path),
                       isParentActive: () => isSameSession(session, activeSession),
                     });
+                    const expanded = isCurrentBranch ? (railOpen[session.id] ?? true) : false;
                     return (
                       <div key={session.id} className={expanded && children.length > 0 ? "session-branch open" : "session-branch"}>
                         <SessionRow
                           session={session}
                           active={isSameSession(session, activeSession)}
                           running={runningSessionIds.has(session.path)}
-                          childCount={children.length}
+                          childCount={isCurrentBranch ? children.length : 0}
                           branchExpanded={expanded}
-                          onToggleBranch={() => setRailOpen((current) => ({ ...current, [session.id]: !expanded }))}
+                          onToggleBranch={() => setRailOpen((open) => ({ ...open, [session.id]: !expanded }))}
                           onOpen={() => openSession(session)}
                           onStop={session.sourceDelegationId ? () => stopDelegatedSession(session) : undefined}
                           onPin={() => void pinSession(session)}

@@ -79,31 +79,22 @@ describe("branchAutoExpanded", () => {
     expect(branchAutoExpanded({
       children: [child],
       isActive: () => false,
-      isRunning: () => false,
       isParentActive: () => true,
     })).toBe(true);
   });
 
-  it("子会话活跃或运行中时展开", () => {
+  it("当前会话是其中一个子会话时展开", () => {
     expect(branchAutoExpanded({
       children: [child],
       isActive: (session) => session.id === "a",
-      isRunning: () => false,
-      isParentActive: () => false,
-    })).toBe(true);
-    expect(branchAutoExpanded({
-      children: [child],
-      isActive: () => false,
-      isRunning: (session) => session.id === "a",
       isParentActive: () => false,
     })).toBe(true);
   });
 
-  it("默认收起", () => {
+  it("切到其他会话后一律收起（子会话仍在后台运行也不例外）", () => {
     expect(branchAutoExpanded({
       children: [child],
       isActive: () => false,
-      isRunning: () => false,
       isParentActive: () => false,
     })).toBe(false);
   });

@@ -30,13 +30,15 @@ export function groupDelegatedSessions(threads: readonly SessionSummary[]): Sess
   return roots;
 }
 
-/** 分支是否应自动展开：父会话活跃，或任一子会话活跃/运行中。 */
+/**
+ * 子代理分支是否跟随当前会话：父会话是当前会话，或当前会话本身就是其中一个子会话。
+ * 只看「当前会话」，不看运行状态——切到别的会话后，这里的子代理一律收起（含后台运行中的）。
+ */
 export function branchAutoExpanded(input: {
   children: readonly SessionSummary[];
   isActive(session: SessionSummary): boolean;
-  isRunning(session: SessionSummary): boolean;
   isParentActive(): boolean;
 }): boolean {
   if (input.isParentActive()) return true;
-  return input.children.some((child) => input.isActive(child) || input.isRunning(child));
+  return input.children.some((child) => input.isActive(child));
 }
