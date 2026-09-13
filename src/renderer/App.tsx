@@ -1004,7 +1004,11 @@ export function App() {
       ...(session.messageCount ? { turns: session.messageCount } : {}),
       ...(session.delegationReport ? { report: session.delegationReport } : {}),
     });
-  }, [browserPanels]);
+    // 侧栏收起时点子会话：把侧栏展开。收起状态下点击的结果落在右侧面板，侧栏自己
+    // 毫无反应，看起来就像没点上；展开后树上下文可见（子会话归属就在它父会话下面）。
+    // auto-collapse 只在拖拽右侧面板宽度时触发，这里展开是稳定的，不会被打回去。
+    if (sidebarLayout.collapsed) sidebarLayout.toggle();
+  }, [browserPanels, sidebarLayout]);
 
   const stopDelegatedSession = useCallback(async (session: SessionSummary) => {
     if (!session.sourceDelegationId) return;
