@@ -250,4 +250,12 @@ describe("子代理子会话标签状态", () => {
     expect(childSessionPanelLabel({ role: "  " }, "子代理会话")).toBe("子代理会话");
     expect(childSessionPanelLabel({ role: "explorer", task: "x".repeat(60) }, "子代理会话").length).toBeLessThanOrEqual(28);
   });
+
+  it("等待确认时标题加提醒后缀，应答后恢复", () => {
+    const request = { id: "ui-1" } as unknown as ChildSessionPanelInfo["uiRequest"];
+    expect(childSessionPanelLabel({ role: "explorer", task: "分析委派链路", uiRequest: request }, "子代理会话", "等待确认"))
+      .toBe("分析委派链路 · 等待确认");
+    expect(childSessionPanelLabel({ role: "explorer", task: "分析委派链路" }, "子代理会话", "等待确认"))
+      .toBe("分析委派链路");
+  });
 });

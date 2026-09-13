@@ -174,12 +174,12 @@ export function browserPanelLabel(page: BrowserTabSnapshot | undefined, fallback
   try { return new URL(page?.url ?? "").hostname || fallback; } catch { return fallback; }
 }
 
-/** 子代理标签标题：优先委派任务摘要（两个入口都会带），再回落到标题/角色名/通用文案。 */
-export function childSessionPanelLabel(info: ChildSessionPanelInfo, fallback: string): string {
+/** 子代理标签标题：优先委派任务摘要（两个入口都会带），再回落到标题/角色名/通用文案；等待确认时加后缀提醒。 */
+export function childSessionPanelLabel(info: ChildSessionPanelInfo, fallback: string, waitingLabel?: string): string {
   const title = (info.task ?? info.title)?.replace(/\s+/g, " ").trim();
   const label = title || info.role.trim();
-  if (!label) return fallback;
-  return label.length > 28 ? `${label.slice(0, 27).trimEnd()}…` : label;
+  const base = !label ? fallback : label.length > 28 ? `${label.slice(0, 27).trimEnd()}…` : label;
+  return info.uiRequest && waitingLabel ? `${base} · ${waitingLabel}` : base;
 }
 
 export function panelReducer(state: PanelState, action: PanelAction): PanelState {

@@ -7,7 +7,7 @@ import type { MessageKey } from "../../shared/i18n";
 import { useI18n } from "../i18n";
 import { ConfirmDialog } from "../ui";
 import type { CapabilityPanelProps } from "./skills-panel";
-import { CapabilityBack, CapabilityNotice, CapabilityScopePicker, CapabilitySearch, CapabilitySwitch, CapabilityTrust, errorText, useCapabilityData, useDirty } from "./common";
+import { CapabilityBack, CapabilityNotice, CapabilityScopePicker, CapabilitySearch, CapabilitySkeleton, CapabilitySwitch, CapabilityTrust, errorText, useCapabilityData, useDirty } from "./common";
 
 const transportLabel = (kind: McpServerRow["kind"]): string => kind === "http" ? "HTTP" : kind === "sse" ? "SSE" : "stdio";
 const testKey = (server: McpServerRow): string => JSON.stringify(server);
@@ -58,13 +58,16 @@ function McpLibrary({ workspace, scope, onScopeChange, onUsePrompt, onDirtyChang
   return <section className="cap-panel" aria-label="MCP">
     <header className="cap-heading"><div className="cap-heading-title"><Plug size={22} /><h2>MCP</h2><span className="cap-count">{servers.length}</span></div><CapabilityScopePicker scope={scope} workspace={workspace} onChange={onScopeChange} /></header>
     <p className="cap-intro">{t("cap.mcpHint")}</p>
-    <div className="cap-toolbar"><CapabilitySearch value={search} onChange={setSearch} placeholder={t("cap.searchMcp")} /><button type="button" className="cap-icon-button" aria-label={t("cap.refresh")} title={t("cap.refresh")} onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} className={loading ? "cap-spinning" : ""} /></button></div>
-    <div className="cap-actions"><button type="button" className="primary" onClick={() => setEditor({ server: { name: "", kind: "stdio", command: "" } })}><Plus size={15} />{t("cap.addServer")}</button><button type="button" className="ghost" onClick={() => setImporting(true)}><FileJson size={15} />{t("cap.import")}</button><button type="button" className="cap-icon-button" title={t("cap.configFile")} aria-label={t("cap.configFile")} onClick={() => void window.harness.mcp.reveal(scope, workspace).catch((reason) => setError(errorText(reason)))}><FolderOpen size={16} /></button></div>
+    <div className="cap-toolbar"><CapabilitySearch value={search} onChange={setSearch} placeholder={t("cap.searchMcp")} /><button type="button" className="cap-icon-button" aria-label={t("cap.refresh")} title={t("cap.refresh")} onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} className={loading ? "cap-spinning" : ""} /></button>
+      <button type="button" className="primary" onClick={() => setEditor({ server: { name: "", kind: "stdio", command: "" } })}><Plus size={15} />{t("cap.addServer")}</button>
+      <button type="button" className="ghost" onClick={() => setImporting(true)}><FileJson size={15} />{t("cap.import")}</button>
+      <button type="button" className="cap-icon-button" title={t("cap.configFile")} aria-label={t("cap.configFile")} onClick={() => void window.harness.mcp.reveal(scope, workspace).catch((reason) => setError(errorText(reason)))}><FolderOpen size={16} /></button>
+    </div>
     <div className="cap-scroll">
       {scope === "project" && data && <CapabilityTrust trusted={data.projectTrusted} workspace={workspace} onTrusted={() => void refresh()} />}
       {error && <CapabilityNotice error>{error}<button type="button" className="cap-text-button" onClick={() => void refresh()}>{t("cap.retry")}</button></CapabilityNotice>}
       {notice && <CapabilityNotice>{notice}</CapabilityNotice>}
-      {loading && !data ? <div className="cap-empty">{t("cap.loading")}</div> : <>
+      {loading && !data ? <CapabilitySkeleton label={t("cap.loading")} /> : <>
         {filtered.length > 0 && <><h3 className="cap-section-title">{t("cap.configured")}<span className="cap-count">{filtered.length}</span></h3><div className="cap-card-list">{filtered.map((server) => {
           const test = tests[testKey(server)];
           return <article className={`cap-card${server.disabled ? " is-disabled" : ""}`} key={server.name}>

@@ -4,7 +4,9 @@ import type { CapabilityScope, ManagedSkill, SkillDocument } from "../../shared/
 import { skillSlashCommand } from "../../shared/skills";
 import { useI18n } from "../i18n";
 import { ConfirmDialog, Markdown } from "../ui";
-import { CapabilityBack, CapabilityNotice, CapabilityScopePicker, CapabilitySearch, CapabilitySwitch, CapabilityTrust, errorText, useCapabilityData, useDirty } from "./common";
+import { CapabilityBack, CapabilityNotice, CapabilityScopePicker, CapabilitySearch, CapabilitySkeleton, CapabilitySwitch, CapabilityTrust, errorText, useCapabilityData, useDirty } from "./common";
+
+const COLLAPSED_KEY = "skills:collapsed-groups";
 
 export interface CapabilityPanelProps {
   workspace?: string;
@@ -26,6 +28,16 @@ function SkillsLibrary({ workspace, scope, onScopeChange, onUsePrompt, onDirtyCh
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [removing, setRemoving] = useState<ManagedSkill>();
+  // 折叠的分组名跨会话记忆在 localStorage，展开仍是默认态。
+  const [collapsed, setCollapsed] = useState<string[]>(() => {
+    try { const parsed: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]"); return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : []; } catch { return []; }
+  });
+  const toggleGroup = (name: string, open: boolean) => setCollapsed((current) => {
+    const next = open ? current.filter((item) => item !== name) : current.includes(name) ? current : [...current, name];
+    if (next === current) return current;
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next)); } catch { /* 隐私模式等场景只对本次生效 */ }
+    return next;
+  });
   const skills = (data?.skills ?? []).filter((skill) => skill.scope === scope);
   const groups = useMemo(() => {
     const grouped = new Map<string, ManagedSkill[]>();
@@ -51,8 +63,7 @@ function SkillsLibrary({ workspace, scope, onScopeChange, onUsePrompt, onDirtyCh
     <p className="cap-intro">{t("cap.skillsHint")}</p>
     <div className="cap-toolbar"><CapabilitySearch value={search} onChange={setSearch} placeholder={t("cap.searchSkills")} />
       <button type="button" className="cap-icon-button" aria-label={t("cap.refresh")} title={t("cap.refresh")} onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} className={loading ? "cap-spinning" : ""} /></button>
-    </div>
-    <div className="cap-actions"><button type="button" className="primary" onClick={() => setEditing("new")} disabled={Boolean(busy)}><Plus size={15} />{t("cap.newSkill")}</button>
+      <button type="button" className="primary" onClick={() => setEditing("new")} disabled={Boolean(busy)}><Plus size={15} />{t("cap.newSkill")}</button>
       <button type="button" className="ghost" disabled={Boolean(busy)} onClick={() => void mutate("import", async () => {
         const result = await window.harness.skills.import(scope, workspace);
         if (result) {
@@ -65,16 +76,20 @@ function SkillsLibrary({ workspace, scope, onScopeChange, onUsePrompt, onDirtyCh
       {scope === "project" && data && <CapabilityTrust trusted={data.projectTrusted} workspace={workspace} onTrusted={() => void refresh()} />}
       {error && <CapabilityNotice error>{error}<button type="button" className="cap-text-button" onClick={() => void refresh()}>{t("cap.retry")}</button></CapabilityNotice>}
       {notice && <CapabilityNotice>{notice}</CapabilityNotice>}
-      {loading && !data ? <div className="cap-empty">{t("cap.loading")}</div> : groups.length === 0 ? <div className="cap-empty"><Sparkles size={28} /><h3>{search ? t("cap.noResults") : t("cap.skillsEmpty")}</h3><p>{search ? "" : t("cap.skillsEmptyHint")}</p></div> : groups.map(([name, entries]) => <details className="cap-group" key={name} open>
-        <summary><ChevronDown size={14} /><span>{name}</span><span className="cap-count">{entries.length}</span></summary>
+      {loading && !data ? <CapabilitySkeleton label={t("cap.loading")} /> : groups.length === 0 ? <div className="cap-empty"><Sparkles size={28} /><h3>{search ? t("cap.noResults") : t("cap.skillsEmpty")}</h3><p>{search ? "" : t("cap.skillsEmptyHint")}</p></div> : groups.map(([name, entries]) => <details className="cap-group" key={name} open={Boolean(search.trim()) || !collapsed.includes(name)}>
+        <summary onClick={(event) => {
+          if (search.trim()) { event.preventDefault(); return; } // 搜索时结果组保持展开，不可折叠
+          const group = event.currentTarget.parentElement as HTMLDetailsElement | null;
+          if (group) toggleGroup(name, !group.open);
+        }}><ChevronDown size={14} /><span>{name}</span><span className="cap-count">{entries.length}</span></summary>
         <div className="cap-card-list">{entries.map((skill) => <article className={`cap-card cap-skill-card${skill.enabled ? "" : " is-disabled"}`} key={skill.id}>
           <button type="button" className="cap-card-open" onClick={() => setEditing(skill.id)} aria-label={`${t("cap.configure")} ${skill.name}`}>
             <div className="cap-card-top"><span className="cap-card-icon"><Sparkles size={18} /></span><div className="cap-card-title"><h3>{skill.name}</h3><code>{skillSlashCommand(skill.name)}</code></div></div>
             <p className="cap-card-description">{skill.description || skill.warning}</p>
-            <div className="cap-card-tags"><span className="cap-chip">{skill.rootLabel}</span>{skill.version && <span className="cap-chip">v{skill.version}</span>}{skill.warning && <span className="cap-chip is-error">{t("cap.invalidSkill")}</span>}</div>
+            {skill.warning && <div className="cap-card-tags"><span className="cap-chip is-error">{t("cap.invalidSkill")}</span></div>}
           </button>
           <div className="cap-card-switch"><CapabilitySwitch checked={skill.enabled} label={t("cap.toggle", { name: skill.name })} disabled={Boolean(busy)} onChange={(enabled) => void mutate(skill.id, () => window.harness.skills.setEnabled(skill.id, enabled, workspace))} /></div>
-          <div className="cap-card-footer"><span>{t(skill.enabled ? "cap.enabled" : "cap.disabled")}</span><button type="button" className="cap-icon-button" title={t("cap.openFolder")} aria-label={`${t("cap.openFolder")} ${skill.name}`} onClick={() => void window.harness.skills.reveal(skill.id, workspace).catch((reason) => setError(errorText(reason)))}><FolderOpen size={14} /></button><button type="button" className="cap-icon-button cap-danger" title={t("cap.remove")} aria-label={`${t("cap.remove")} ${skill.name}`} disabled={Boolean(busy)} onClick={() => setRemoving(skill)}><Trash2 size={14} /></button></div>
+          <div className="cap-card-footer"><span><span className="cap-chip">{skill.rootLabel}</span>{skill.version && <span className="cap-chip">v{skill.version}</span>}</span><button type="button" className="cap-icon-button" title={t("cap.openFolder")} aria-label={`${t("cap.openFolder")} ${skill.name}`} onClick={() => void window.harness.skills.reveal(skill.id, workspace).catch((reason) => setError(errorText(reason)))}><FolderOpen size={14} /></button><button type="button" className="cap-icon-button cap-danger" title={t("cap.remove")} aria-label={`${t("cap.remove")} ${skill.name}`} disabled={Boolean(busy)} onClick={() => setRemoving(skill)}><Trash2 size={14} /></button></div>
         </article>)}</div>
       </details>)}
     </div>

@@ -31,6 +31,8 @@ import {
   DELEGATION_MAX_TIMEOUT_SECONDS,
   DELEGATION_REPORT_NUDGE,
   isDelegationTerminal,
+  isPreambleReport,
+  isUntrustedReportEnd,
   type DelegationAction,
   type DelegationBridgePayload,
   type DelegationRecordSnapshot,
@@ -122,6 +124,8 @@ export interface DelegateToolDeps {
   getDefinitions(): Promise<SubagentDefinition[]>;
   createTools(definition: SubagentDefinition, ctx: ExtensionContext): AgentTool[];
   deliverReport(text: string): void;
+  /** 返回 false 期间不回灌后台报告（父会话刚被用户停止时防止重新唤醒）。 */
+  canDeliverReport?(): boolean;
   createAgent?(options: SubagentAgentOptions): SubagentAgentLike;
   log?(message: string, details?: unknown): void;
 }
@@ -302,6 +306,7 @@ class DelegationRunner {
         });
 
     let lastReport = "";
+    let lastStopReason: string | undefined;
     let turns = 0;
     let toolCalls = 0;
     let usage: DelegationUsage | undefined;
@@ -311,6 +316,8 @@ class DelegationRunner {
       if (event.type === "message_end" && event.message.role === "assistant") {
         turns += 1;
         this.record.turns = turns;
+        const reason = (event.message as { stopReason?: unknown }).stopReason;
+        if (typeof reason === "string") lastStopReason = reason;
         const text = assistantText(event.message);
         if (text.trim()) {
           lastReport = text;
@@ -351,8 +358,11 @@ class DelegationRunner {
       // await waitForIdle()，与主进程桥接路径（AgentHost.waitForIdle）保持同一判定：
       // 空闲后以最后一条带文本的 assistant 消息为最终报告。
       await agent.waitForIdle();
-      // 空报告先补一次「只写最终报告」的指令；重试仍失败才落 failed（不无限循环）。
-      if (!lastReport.trim() && !truncated && !this.record.abort.signal.aborted) {
+      // 空报告先补一次「只写最终报告」的指令；只有一轮、零工具调用的开场白短文本
+      // （"I'll start by …"）、或以 error/aborted 收尾的运行（最后带文本的消息多半是
+      // 进度旁白）同样补发，否则它们会被当成最终报告按 completed 回灌。重试仍失败才落
+      // failed（不无限循环）。
+      if ((!lastReport.trim() || isPreambleReport(lastReport, { turns, toolCalls }) || isUntrustedReportEnd(lastStopReason)) && !truncated && !this.record.abort.signal.aborted) {
         noReportRetried = true;
         this.record.live = "no report; asking once more";
         pushActivity(this.record, {
@@ -465,6 +475,8 @@ export class DelegationRegistry {
       const pending = this.list().filter((record) => record.background && !record.delivered && isSettled(record));
       if (!pending.length) return;
       for (const record of pending) record.delivered = true;
+      // 父会话刚被用户停止时丢弃这批报告：注入会把已停止的会话重新唤醒。
+      if (this.deps.canDeliverReport && !this.deps.canDeliverReport()) return;
       this.deps.deliverReport(`${pending.length === 1 ? "A delegated subagent finished. Its report:" : `${pending.length} delegated subagents finished. Their reports:`}\n\n${reportBlock(pending)}`);
     }, 150);
     this.deliveryTimer.unref?.();
@@ -497,7 +509,9 @@ export class DelegationRegistry {
 }
 
 export function registerDelegateTools(pi: ExtensionAPI, deps: DelegateToolDeps): DelegationRegistry {
-  const registry = new DelegationRegistry(deps);
+  // watchParentAborts 返回「是否已挂起」；canDeliverReport 的语义是「允许投递」，取反接线。
+  const parentSuspended = watchParentAborts(pi);
+  const registry = new DelegationRegistry({ ...deps, canDeliverReport: () => !parentSuspended() });
   pi.registerTool({
     name: DELEGATE_TOOL_NAME,
     label: "Delegate",
@@ -602,6 +616,21 @@ function delegateProgressText(records: DelegationRecord[]): string {
   return records.map((record) => `${record.definition.name} (${record.id}) — ${statusLabel(record.status)}${record.live ? ` · ${record.live}` : ""}`).join("\n");
 }
 
+/**
+ * 跟踪父会话是否刚被用户停止：turn 以 aborted 收尾即挂起，下一次 agent_start
+ * （真实的新输入）复位。挂起期间委派报告不再注入——abort 不会清 pi 的 followUp
+ * 队列，空闲会话收到 sendUserMessage 会立刻自启新回合，已停止的会话会被一张张
+ * 迟到的报告卡片重新唤醒（agent_start 还会抵消协调器对父会话的暂停）。
+ */
+function watchParentAborts(pi: ExtensionAPI): () => boolean {
+  let suspended = false;
+  pi.on("turn_end", (event) => {
+    if (event.message.role === "assistant" && event.message.stopReason === "aborted") suspended = true;
+  });
+  pi.on("agent_start", () => { suspended = false; });
+  return () => suspended;
+}
+
 export interface RemoteDelegateDeps {
   client: {
     request(action: DelegationAction, payload: DelegationBridgePayload): Promise<unknown>;
@@ -612,11 +641,14 @@ export interface RemoteDelegateDeps {
 
 export function registerRemoteDelegateTools(pi: ExtensionAPI, deps: RemoteDelegateDeps): void {
   const backgroundDelegations = new Set<string>();
+  const deliverySuspended = watchParentAborts(pi);
   deps.client.onEvent((event) => {
     if (!backgroundDelegations.has(event.delegationId) || !isDelegationTerminal(event.status)) return;
     backgroundDelegations.delete(event.delegationId);
     // 用户停止父会话/子代理时不排入新消息，否则取消动作反而会重新唤醒父代理。
+    // 停止后迟到的完成报告同理：注入会自启新回合，报告留在委派面板与状态存储里。
     if (event.status === "cancelled" || event.status === "interrupted") return;
+    if (deliverySuspended()) return;
     try {
       pi.sendUserMessage(
         `A delegated subagent finished. Its report:\n\n${remoteReportBlock([event])}`,
@@ -676,6 +708,11 @@ export function registerRemoteDelegateTools(pi: ExtensionAPI, deps: RemoteDelega
     async execute(_id, params) {
       const result = await deps.client.request("wait", { ...(params.delegationIds ? { delegationIds: params.delegationIds } : {}), ...(params.timeoutSeconds ? { timeoutSeconds: params.timeoutSeconds } : {}), mode: "all" }) as { status?: string; delegations?: DelegationRecordSnapshot[] };
       const records = result.delegations ?? [];
+      // 报告已随工具结果当面交付：把已终态的 id 从回灌集合移除，否则 onEvent 会在本回合
+      // 结束后再投一轮迟到卡片（本地 registry.wait 标记 delivered 的语义对齐）。
+      for (const item of records) {
+        if (isDelegationTerminal(item.status)) backgroundDelegations.delete(item.delegationId);
+      }
       return { content: [{ type: "text", text: records.length ? `${result.status === "timeout" ? "Some subagents are still running.\n\n" : ""}${remoteReportBlock(records)}` : "No matching subagents." }], details: { status: result.status, delegations: records, ...(result.status === "timeout" ? { pendingIds: records.filter((item) => !isDelegationTerminal(item.status)).map((item) => item.delegationId) } : {}) } };
     },
   });
@@ -702,6 +739,9 @@ export function registerRemoteDelegateTools(pi: ExtensionAPI, deps: RemoteDelega
     executionMode: "sequential",
     async execute(_id, params) {
       const records = await deps.client.request("stop", { ...(params.delegationIds ? { delegationIds: params.delegationIds } : {}) }) as DelegationRecordSnapshot[];
+      // 停止结果由工具结果当面交代（cancelled 本就被 onEvent 过滤，这里顺手清集合，
+      // 保证之后即便有别的终态事件也不会再回灌）。
+      for (const item of records) backgroundDelegations.delete(item.delegationId);
       return { content: [{ type: "text", text: records.length ? records.map((item) => `${item.role} (${item.delegationId}) — ${item.status}`).join("\n") : "No running subagents." }], details: { stopped: records } };
     },
   });

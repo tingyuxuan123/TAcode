@@ -1,0 +1,19 @@
+diff --git a/dist/modes/rpc/rpc-mode.js b/dist/modes/rpc/rpc-mode.js
+index 8567321f20caa900a4f0268d54b2921e6efd1418..b4acd835b772ca22f8d0a024afd0e3644a5919dd 100644
+--- a/dist/modes/rpc/rpc-mode.js
++++ b/dist/modes/rpc/rpc-mode.js
+@@ -327,6 +327,14 @@ export async function runRpcMode(runtimeHost) {
+             }
+             case "abort": {
+                 await session.abort();
++                // TACode patch: aborted turns must not leave queued follow-ups behind.
++                // Extensions inject background delegation reports via sendUserMessage(followUp);
++                // if the queue survives abort they are consumed at the end of the NEXT turn,
++                // waking the stopped session with stale reports. User-typed steering messages
++                // live in the steering queue and are intentionally preserved.
++                session.agent.clearFollowUpQueue();
++                session._followUpMessages.length = 0;
++                session._emitQueueUpdate();
+                 return success(id, "abort");
+             }
+             case "new_session": {

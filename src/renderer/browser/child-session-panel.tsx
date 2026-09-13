@@ -166,7 +166,9 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
         {!readable && <p className="child-session-note">{t("subagent.noTranscript")}</p>}
         {readable && phase === "loading" && <p className="child-session-note">{t("preview.reading")}</p>}
         {readable && phase === "error" && <p className="child-session-note is-error">{error}</p>}
-        {readable && phase === "ready" && groups.length === 0 && <p className="child-session-note">{t("chat.emptySession")}</p>}
+        {readable && phase === "ready" && groups.length === 0 && (
+          <p className="child-session-note">{isRunning ? t("preview.reading") : t("chat.emptySession")}</p>
+        )}
         {groups.map((group, index) => group.type === "user"
           ? <UserTurn key={group.id} text={group.message.text} images={group.message.images} />
           : (

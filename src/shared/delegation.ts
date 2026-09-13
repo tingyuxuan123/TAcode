@@ -78,6 +78,24 @@ export const DELEGATION_REPORT_NUDGE = [
   "Start with exactly complete, partial, or blocked on the first line. State the conclusion, evidence, and limitations in Simplified Chinese; preserve paths and commands. If you could not complete the task, explain why. Keep it under about 1500 characters.",
 ].join(" ");
 
+/** 子代理最终报告的首行契约（与 composeSubagentSystemPrompt 的要求一致）。 */
+const DELEGATION_REPORT_OPENING = /^\s*[*#>\-\s]*(complete|partial|blocked)\b/i;
+/** 超过这个长度的文本视为实质报告：缺结论行也不算开场白，不值得再花一轮重试。 */
+export const DELEGATION_PREAMBLE_MAX_CHARS = 240;
+
+/**
+ * 判定一份「最终报告」是否其实是开场白：本次运行只产出一轮 assistant 文本、零工具
+ * 调用，还是没有结论行的短文本 —— 典型形态是模型刚写完 "I'll start by exploring …"
+ * 就进入空闲，被完成判定当成报告、状态落成 completed。turns/toolCalls 传本次运行的
+ * 相对值；空报告不归它管（由 no_report 路径处理）。
+ */
+export function isPreambleReport(report: string, run: { turns: number; toolCalls: number }): boolean {
+  const text = report.trim();
+  if (!text || text.length > DELEGATION_PREAMBLE_MAX_CHARS) return false;
+  if (run.turns > 1 || run.toolCalls > 0) return false;
+  return !DELEGATION_REPORT_OPENING.test(text);
+}
+
 /** 从消息数组里提取最后一条带文本的 assistant 消息作为最终报告；没有则返回空串。 */
 export function extractAssistantReport(messages: unknown[] | undefined): string {
   if (!Array.isArray(messages)) return "";
@@ -105,6 +123,8 @@ export function describeAssistantEvidence(messages: unknown[] | undefined): {
   count: number;
   lastRole?: string;
   lastType?: string;
+  /** 最后一条 assistant 消息的收尾状态：error/aborted 说明模型死在半路，文本不可当最终报告。 */
+  lastAssistantStopReason?: string;
   turns: number;
   toolCalls: number;
 } {
@@ -112,11 +132,13 @@ export function describeAssistantEvidence(messages: unknown[] | undefined): {
   const count = messages.length;
   let turns = 0;
   let toolCalls = 0;
+  let lastAssistantStopReason: string | undefined;
   for (const message of messages) {
     if (!message || typeof message !== "object") continue;
     const record = message as Record<string, unknown>;
     if (record.role !== "assistant") continue;
     turns += 1;
+    if (typeof record.stopReason === "string") lastAssistantStopReason = record.stopReason;
     if (Array.isArray(record.content)) {
       for (const part of record.content) {
         if (!part || typeof part !== "object") continue;
@@ -126,15 +148,30 @@ export function describeAssistantEvidence(messages: unknown[] | undefined): {
     }
   }
   const last = messages.at(-1);
-  if (!last || typeof last !== "object") return { count, turns, toolCalls };
-  const record = last as Record<string, unknown>;
+  const lastInfo = (() => {
+    if (!last || typeof last !== "object") return {};
+    const record = last as Record<string, unknown>;
+    return {
+      ...(typeof record.role === "string" ? { lastRole: record.role } : {}),
+      ...(typeof record.type === "string" ? { lastType: record.type } : {}),
+    };
+  })();
   return {
     count,
     turns,
     toolCalls,
-    ...(typeof record.role === "string" ? { lastRole: record.role } : {}),
-    ...(typeof record.type === "string" ? { lastType: record.type } : {}),
+    ...(lastAssistantStopReason ? { lastAssistantStopReason } : {}),
+    ...lastInfo,
   };
+}
+
+/**
+ * 这些收尾状态说明运行没有正常结束：模型死在半路，最后一条带文本的 assistant
+ * 消息多半是伴随工具调用的进度旁白，不能当最终报告采信（真实现场：code-reviewer
+ * 以 4 条 stopReason=error 收尾，旁白句被当成报告落成 completed）。
+ */
+export function isUntrustedReportEnd(stopReason: string | undefined): boolean {
+  return stopReason === "error" || stopReason === "aborted";
 }
 
 /** Serializable metadata shared by main, runtime and renderer. */
@@ -180,6 +217,12 @@ export interface DelegationStartPayload {
   baseUrl?: string;
   serviceId?: string;
   writableRoots?: string[];
+  /**
+   * 父会话正在使用的 provider/model（runtime 侧填充）：钉选模型一次都没调通时，
+   * 协调器用它原位重跑一次。缺省表示不做模型回退。
+   */
+  fallbackProvider?: string;
+  fallbackModel?: string;
 }
 
 export interface DelegationWaitPayload {

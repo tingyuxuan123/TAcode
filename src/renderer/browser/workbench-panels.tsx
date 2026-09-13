@@ -134,7 +134,7 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
             : tab.type === "side-chat"
               ? { id: tab.id, label: t("panel.sideChatNumbered", { n: tab.ordinal }), title: tab.sourceSession ?? undefined }
         : tab.type === "child-session"
-          ? { id: tab.id, label: childSessionPanelLabel(tab.info, t("delegate.detailChildSession")), title: tab.info.sessionPath ?? tab.info.task ?? "" }
+          ? { id: tab.id, label: childSessionPanelLabel(tab.info, t("delegate.detailChildSession"), t("subagent.awaitingInput")), title: tab.info.sessionPath ?? tab.info.task ?? "" }
           : tab.type === "file"
             ? { id: tab.id, label: filePanelLabel(tab.path), title: tab.path }
             : { id: tab.id, label: browserPanelLabel(tab.page, t("browser.newTab")), title: [tab.page?.title, tab.page?.url].filter(Boolean).join("\n") })}

@@ -96,4 +96,16 @@ describe("readSessionTranscript", () => {
     await writeFile(outside, messageLine("user", "nope"));
     await expect(readSessionTranscript(sessions, outside)).rejects.toThrow();
   });
+
+  it("文件未落盘时返回空转录而不是报错（子会话文件是懒创建的）", async () => {
+    const home = await tempDir();
+    const sessions = join(home, "sessions");
+    await mkdir(sessions, { recursive: true });
+    const missing = join(sessions, "delegation-not-yet.jsonl");
+    const transcript = await readSessionTranscript(sessions, missing);
+    expect(transcript.sessionPath).toBe(missing);
+    expect(transcript.messages).toEqual([]);
+    expect(transcript.totalMessages).toBe(0);
+    expect(transcript.truncated).toBe(false);
+  });
 });

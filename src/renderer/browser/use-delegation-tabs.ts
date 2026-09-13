@@ -16,6 +16,7 @@ const EMPTY_RECORDS: DelegationRecords = new Map();
  * 边界：
  * - 只对**正在执行**的委派自动开标签；重开会话时见到的历史已完成委派不会弹一堆标签。
  * - 首次出现抢焦点（和 Proma 一致），之后的实时刷新用 `activate:false`，不顶掉用户正在看的标签。
+ * - 例外：子代理发起审批请求时抢焦点（标签被关了也重开）——子代理会停在等待上，看不见就死等。
  * - 用户手动关掉后不再自动重开；进程内委派（没有子会话文件）不自动开面板。
  */
 export function useDelegationTabs(
@@ -25,6 +26,7 @@ export function useDelegationTabs(
   parentSessionPath?: string,
 ): void {
   const autoOpened = useRef(new Set<string>());
+  const attentionSeen = useRef(new Set<string>());
   const lastSignature = useRef("");
   const summaries = useMemo(() => collectDelegations(messages), [messages]);
   const openKeys = useMemo(
@@ -40,9 +42,15 @@ export function useDelegationTabs(
     const signature = JSON.stringify([delegations, [...openKeys]]);
     if (signature === lastSignature.current) return;
     lastSignature.current = signature;
-    const plan = planDelegationTabs({ delegations, openKeys, autoOpenedKeys: autoOpened.current });
+    const plan = planDelegationTabs({
+      delegations,
+      openKeys,
+      autoOpenedKeys: autoOpened.current,
+      attentionSeen: attentionSeen.current,
+    });
     if (plan.autoOpened.length === 0 && plan.requests.length === 0) return;
     for (const key of plan.autoOpened) autoOpened.current.add(key);
+    for (const id of plan.attention) attentionSeen.current.add(id);
     for (const request of plan.requests) {
       openChildSession(request.key, request.info, { activate: request.activate });
     }

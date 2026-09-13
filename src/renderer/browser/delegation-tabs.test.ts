@@ -122,4 +122,35 @@ describe("planDelegationTabs", () => {
     });
     expect(plan.requests[0]?.key).toBe("delegation-1");
   });
+
+  it("新的审批请求抢焦点并记入 attention，同一请求只提醒一次", () => {
+    const uiRequest = { id: "ui-1", method: "confirm" } as DelegationSummary["uiRequest"];
+    const waiting = summary({ uiRequest });
+    const first = planDelegationTabs({
+      delegations: [waiting],
+      openKeys: new Set(["delegation-1"]),
+      autoOpenedKeys: new Set(["delegation-1"]),
+    });
+    expect(first.attention).toEqual(["ui-1"]);
+    expect(first.requests[0]?.activate).toBe(true);
+    const again = planDelegationTabs({
+      delegations: [waiting],
+      openKeys: new Set(["delegation-1"]),
+      autoOpenedKeys: new Set(["delegation-1"]),
+      attentionSeen: new Set(["ui-1"]),
+    });
+    expect(again.attention).toEqual([]);
+    expect(again.requests[0]?.activate).toBe(false);
+  });
+
+  it("审批等待时标签被关了也会重开并抢焦点（子代理停在等待上）", () => {
+    const uiRequest = { id: "ui-2", method: "confirm" } as DelegationSummary["uiRequest"];
+    const plan = planDelegationTabs({
+      delegations: [summary({ uiRequest })],
+      openKeys: new Set(),
+      autoOpenedKeys: new Set(["delegation-1"]),
+    });
+    expect(plan.requests).toEqual([expect.objectContaining({ key: "delegation-1", activate: true })]);
+    expect(plan.attention).toEqual(["ui-2"]);
+  });
 });

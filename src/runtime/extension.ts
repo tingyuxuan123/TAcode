@@ -235,6 +235,9 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
               cwd: ctx.cwd,
               provider: definition.model?.providerId ?? options.providerId,
               model: definition.model?.modelId ?? options.modelId,
+              // 父会话正在用的模型：钉选模型一次都没调通时，协调器用它重跑一次。
+              fallbackProvider: options.providerId,
+              ...(options.modelId ? { fallbackModel: options.modelId } : {}),
               thinkingLevel: definition.thinkingLevel ?? ctx.thinkingLevel,
               permission,
               sandbox: current.sandbox,

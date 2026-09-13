@@ -56,6 +56,16 @@ export function CapabilityNotice({ children, error = false }: { children: ReactN
   return <div className={`cap-notice${error ? " is-error" : ""}`} role={error ? "alert" : "status"}>{children}</div>;
 }
 
+export function CapabilitySkeleton({ label }: { label: string }) {
+  return <div className="cap-skeleton" role="status" aria-label={label}>
+    {[0, 1, 2].map((index) => <div className="cap-skeleton-card" key={index} aria-hidden>
+      <div className="cap-skeleton-head"><span className="cap-skeleton-icon" /><span className="cap-skeleton-line" style={{ width: "42%" }} /></div>
+      <span className="cap-skeleton-line" style={{ width: "94%" }} />
+      <span className="cap-skeleton-line" style={{ width: "63%" }} />
+    </div>)}
+  </div>;
+}
+
 export function CapabilityTrust({ trusted, workspace, onTrusted }: { trusted: boolean; workspace?: string; onTrusted(): void }) {
   const { t } = useI18n();
   const [confirm, setConfirm] = useState(false);

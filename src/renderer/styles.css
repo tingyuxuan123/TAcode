@@ -7992,6 +7992,12 @@ kbd {
   overflow-wrap: anywhere;
 }
 .child-session-live-step > svg { flex: none; }
+/* 审批卡固定在滚动区顶部：转录再长、滚到哪里，待确认的请求都不能被滚出视野。 */
+.child-session-body > .approval {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
 .child-session-task {
   margin: 0;
   padding: 8px 10px;

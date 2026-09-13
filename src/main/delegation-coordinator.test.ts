@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { AgentSnapshot } from "../shared/types";
 import type { DelegationBridgeRequest, DelegationRecordSnapshot, DelegationStartPayload } from "../shared/delegation";
 import { DELEGATION_MAX_CONCURRENCY, DELEGATION_MAX_REPORT_CHARS } from "../shared/delegation";
@@ -24,8 +24,8 @@ import {
  * waitForIdle 之后再判定，不能拿 prompt 的响应当完成依据。
  */
 
-vi.mock("../runtime/subagents.js", () => ({
-  loadEnabledSubagents: async () => [{
+const mockSubagents = vi.hoisted(() => {
+  const explorer = {
     name: "explorer",
     description: "Explore",
     tools: ["read_file", "list_files", "search_files"],
@@ -33,7 +33,14 @@ vi.mock("../runtime/subagents.js", () => ({
     thinkingLevel: "medium",
     maxTurns: 40,
     source: "builtin",
-  }],
+  };
+  return {
+    definitions: [explorer] as Array<typeof explorer & { model?: { providerId: string; modelId: string } }>,
+  };
+});
+
+vi.mock("../runtime/subagents.js", () => ({
+  loadEnabledSubagents: async () => mockSubagents.definitions,
 }));
 
 type LogEntry = { level: string; scope: string; message: string; details?: unknown };
@@ -59,6 +66,8 @@ interface FakeHostOptions {
   assistantTurns?: number;
   /** 产出消息后不进入空闲，模拟「子代理没按上限自己收口」。 */
   neverSettle?: boolean;
+  /** 最后一条 assistant 消息的收尾状态（error/aborted = 模型死在半路）。 */
+  finalStopReason?: string;
   /** 按第几次 prompt（0 起）决定报告文本；用于验证 no_report 重试。 */
   reportTextForPrompt?: (promptIndex: number) => string;
 }
@@ -83,6 +92,7 @@ class FakeHost implements DelegationHost {
   private readonly promptError?: Error;
   private readonly assistantTurns: number;
   private readonly neverSettle: boolean;
+  private readonly finalStopReason?: string;
   private readonly reportTextForPrompt?: (promptIndex: number) => string;
   private readonly beforeStart?: () => Promise<void>;
   private promptCount = 0;
@@ -93,11 +103,12 @@ class FakeHost implements DelegationHost {
     this.runtimeId = options.runtimeId ?? runtimeId;
     this.sessionKey = sessionKey;
     this.requestedSessionPath = sessionKey;
-    this.reportText = options.reportText ?? "Found src/main/index.ts:1";
+    this.reportText = options.reportText ?? "complete Found src/main/index.ts:1";
     this.reportDelayMs = options.reportDelayMs ?? 0;
     this.promptError = options.promptError;
     this.assistantTurns = options.assistantTurns ?? 1;
     this.neverSettle = options.neverSettle === true;
+    this.finalStopReason = options.finalStopReason;
     this.reportTextForPrompt = options.reportTextForPrompt;
     this.beforeStart = options.beforeStart;
   }
@@ -134,7 +145,11 @@ class FakeHost implements DelegationHost {
           const text = index === turns - 1 ? reportText : `turn-${index + 1}`;
           // 单轮且没有报告文本时保持原语义：不产出 assistant 消息（no_report 场景）。
           if (single && !text) continue;
-          this.messages.push({ role: "assistant", content: text ? [{ type: "text", text }] : [] });
+          this.messages.push({
+            role: "assistant",
+            content: text ? [{ type: "text", text }] : [],
+            ...(index === turns - 1 && this.finalStopReason ? { stopReason: this.finalStopReason } : {}),
+          });
         }
         if (!this.neverSettle) this.settleTurn();
       }, this.reportDelayMs);
@@ -289,7 +304,7 @@ describe("DelegationCoordinator", () => {
       expect(waited.status).toBe("completed");
       expect(waited.delegations[0]).toMatchObject({
         status: "completed",
-        report: "Found src/main/index.ts:1",
+        report: "complete Found src/main/index.ts:1",
       });
       // 桌面子会话也必须收到通用职责/权限约束，不能只发送角色正文。
       const [role] = await loadEnabledSubagents();
@@ -300,7 +315,7 @@ describe("DelegationCoordinator", () => {
       expect(state.list({ parentSessionPath: "/tmp/parent.jsonl" })[0]).toMatchObject({
         sourceDelegationId: first.delegationId,
         delegationStatus: "completed",
-        delegationReport: "Found src/main/index.ts:1",
+        delegationReport: "complete Found src/main/index.ts:1",
       });
 
       const continued = await coordinator.continue("/tmp/parent.jsonl", {
@@ -336,7 +351,7 @@ describe("DelegationCoordinator", () => {
       expect(waited.status).toBe("completed");
       expect(waited.delegations[0]).toMatchObject({
         status: "completed",
-        report: "Found src/main/index.ts:1",
+        report: "complete Found src/main/index.ts:1",
       });
       // 判定依据写入诊断：messages 里含 assistant 报告。
       const judged = logs.find((entry) => entry.message === "delegation completion judged");
@@ -428,6 +443,91 @@ describe("DelegationCoordinator", () => {
       expect(record.status).toBe("completed");
       expect(record.report).toContain("Recovered report: src/main/index.ts:1");
       expect(logs.some((entry) => entry.message === "delegation recovered after a report-only retry")).toBe(true);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("recovers a preamble-only report with one report-only retry instead of trusting it", async () => {
+    const preamble = "I'll start by exploring the repository structure and reading the key files in scope.";
+    const { coordinator, logs, state, parent } = await fixture({
+      hostOptions: () => ({
+        reportText: preamble,
+        reportDelayMs: 30,
+        reportTextForPrompt: (promptIndex) => (promptIndex === 1 ? "complete 检查完成：src/main/index.ts:1" : preamble),
+      }),
+    });
+    try {
+      const snapshot = await coordinator.handleRequest(startRequest(), parent) as DelegationRecordSnapshot;
+      const waited = await coordinator.wait("/tmp/parent.jsonl", {
+        delegationIds: [snapshot.delegationId],
+        timeoutSeconds: 5,
+      });
+      const record = waited.delegations[0];
+      // 开场白不能直接当最终报告落成 completed：先补发一次报告指令。
+      expect(record.status).toBe("completed");
+      expect(record.report).toContain("complete 检查完成");
+      expect(logs.some((entry) => entry.message === "delegation recovered after a report-only retry")).toBe(true);
+      const delegated = (coordinator as unknown as { entries: Map<string, { record: DelegationRecordSnapshot; host?: FakeHost }> }).entries;
+      const child = [...delegated.values()].find((entry) => entry.record.delegationId === snapshot.delegationId)?.host as FakeHost;
+      expect(child.calls.filter((call) => call === "request:prompt")).toHaveLength(2);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("does not trust a report when the run ended with errors and recovers via one retry", async () => {
+    const interim = "Now let me examine the agent-manager and index.ts delegation integration points.";
+    const { coordinator, logs, state, parent } = await fixture({
+      hostOptions: () => ({
+        reportText: interim,
+        reportDelayMs: 30,
+        assistantTurns: 2,
+        finalStopReason: "error",
+        reportTextForPrompt: (promptIndex) => (promptIndex === 1 ? "complete 检查完成：src/main/index.ts:1" : interim),
+      }),
+    });
+    try {
+      const snapshot = await coordinator.handleRequest(startRequest(), parent) as DelegationRecordSnapshot;
+      const waited = await coordinator.wait("/tmp/parent.jsonl", {
+        delegationIds: [snapshot.delegationId],
+        timeoutSeconds: 5,
+      });
+      const record = waited.delegations[0];
+      // error 收尾说明模型死在半路：进度旁白不能当最终报告，先补发一次报告指令。
+      expect(record.status).toBe("completed");
+      expect(record.report).toContain("complete 检查完成");
+      expect(logs.some((entry) => entry.message === "delegation recovered after a report-only retry")).toBe(true);
+      const delegated = (coordinator as unknown as { entries: Map<string, { record: DelegationRecordSnapshot; host?: FakeHost }> }).entries;
+      const child = [...delegated.values()].find((entry) => entry.record.delegationId === snapshot.delegationId)?.host as FakeHost;
+      expect(child.calls.filter((call) => call === "request:prompt")).toHaveLength(2);
+    } finally {
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("accepts a first-line-compliant single-turn report without a retry", async () => {
+    const { coordinator, state, parent } = await fixture({
+      hostOptions: () => ({
+        reportText: "complete 入口在 src/main/index.ts:1",
+        reportDelayMs: 30,
+      }),
+    });
+    try {
+      const snapshot = await coordinator.handleRequest(startRequest(), parent) as DelegationRecordSnapshot;
+      const waited = await coordinator.wait("/tmp/parent.jsonl", {
+        delegationIds: [snapshot.delegationId],
+        timeoutSeconds: 5,
+      });
+      const record = waited.delegations[0];
+      expect(record.status).toBe("completed");
+      expect(record.report).toContain("complete 入口在");
+      const delegated = (coordinator as unknown as { entries: Map<string, { record: DelegationRecordSnapshot; host?: FakeHost }> }).entries;
+      const child = [...delegated.values()].find((entry) => entry.record.delegationId === snapshot.delegationId)?.host as FakeHost;
+      expect(child.calls.filter((call) => call === "request:prompt")).toHaveLength(1);
     } finally {
       await coordinator.stopAll();
       state.close();
@@ -899,7 +999,7 @@ describe("delegation lifecycle controls", () => {
       await coordinator.wait("/tmp/parent.jsonl");
       const completed = events.filter((record) => record.status === "completed");
       expect(completed).toHaveLength(1);
-      expect(completed[0]).toMatchObject({ report: "Found src/main/index.ts:1", completedAt: expect.any(Number) });
+      expect(completed[0]).toMatchObject({ report: "complete Found src/main/index.ts:1", completedAt: expect.any(Number) });
       expect(coordinator.list()).toHaveLength(1);
     } finally { await coordinator.stopAll(); state.close(); }
   });
@@ -994,6 +1094,108 @@ describe("delegation lifecycle controls", () => {
       coordinator.handleWorkerEvent(first.delegationId, request);
       expect(coordinator.get("/tmp/parent.jsonl")[0].uiRequest).toBeUndefined();
     } finally { await coordinator.stopAll(); state.close(); }
+  });
+
+  it("钉选模型启动失败时改用父会话模型原位重跑一次", async () => {
+    mockSubagents.definitions[0] = { ...mockSubagents.definitions[0], model: { providerId: "kimi", modelId: "kimi-k2" } };
+    const { coordinator, hosts, parent, state } = await fixture({
+      hostOptions: (index) => (index === 0
+        ? { beforeStart: async () => { throw new Error("No credentials for provider kimi"); } }
+        : {}),
+    });
+    try {
+      const request = startRequest("fallback-start");
+      request.payload = {
+        ...startPayload,
+        provider: "kimi",
+        model: "kimi-k2",
+        fallbackProvider: "deepseek",
+        fallbackModel: "deepseek-chat",
+      };
+      const snapshot = await coordinator.handleRequest(request, parent) as DelegationRecordSnapshot;
+      const waited = await coordinator.wait("/tmp/parent.jsonl", { delegationIds: [snapshot.delegationId], timeoutSeconds: 5 });
+      expect(waited.status).toBe("completed");
+      const record = waited.delegations[0];
+      expect(record).toMatchObject({ status: "completed", report: "complete Found src/main/index.ts:1", provider: "deepseek", model: "deepseek-chat" });
+      expect(hosts).toHaveLength(2);
+      expect(hosts[0].calls).toContain("start");
+      expect(hosts[1].startOptions?.model).toBe("deepseek-chat");
+      expect((record.recent ?? []).some((activity) => activity.text.includes("never responded"))).toBe(true);
+    } finally {
+      delete mockSubagents.definitions[0].model;
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("钉选模型已产出过回复时照常落失败，不回退", async () => {
+    const sessionsDir = await mkdtemp(join(tmpdir(), "tacode-fallback-"));
+    vi.stubEnv("TACODE_SESSIONS_DIR", sessionsDir);
+    mockSubagents.definitions[0] = { ...mockSubagents.definitions[0], model: { providerId: "kimi", modelId: "kimi-k2" } };
+    const { coordinator, hosts, parent, state } = await fixture({ hostOptions: () => ({ reportDelayMs: 5_000 }) });
+    try {
+      const request = startRequest("fallback-keep-failed");
+      request.payload = { ...startPayload, provider: "kimi", model: "kimi-k2", fallbackProvider: "deepseek", fallbackModel: "deepseek-chat" };
+      const snapshot = await coordinator.handleRequest(request, parent) as DelegationRecordSnapshot;
+      await waitFor(() => hosts[0].calls.includes("request:prompt"));
+      // 模拟钉选模型其实调通了：子会话文件里已有 assistant 回复。
+      await mkdir(dirname(snapshot.childSessionPath!), { recursive: true });
+      await writeFile(
+        snapshot.childSessionPath!,
+        `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "working" }] } })}\n`,
+      );
+      const delegated = (coordinator as unknown as { entries: Map<string, { record: DelegationRecordSnapshot; host?: FakeHost }> }).entries;
+      const child = [...delegated.values()].find((entry) => entry.record.delegationId === snapshot.delegationId)?.host as FakeHost;
+      child.kill(137);
+      const waited = await coordinator.wait("/tmp/parent.jsonl", { delegationIds: [snapshot.delegationId], timeoutSeconds: 5 });
+      expect(waited.delegations[0]?.status).toBe("failed");
+      expect(hosts).toHaveLength(1);
+    } finally {
+      delete mockSubagents.definitions[0].model;
+      vi.unstubAllEnvs();
+      await rm(sessionsDir, { recursive: true, force: true });
+      await coordinator.stopAll();
+      state.close();
+    }
+  }, 20_000);
+
+  it("没有回退目标（payload 未带 fallback 段）时直接落失败", async () => {
+    mockSubagents.definitions[0] = { ...mockSubagents.definitions[0], model: { providerId: "kimi", modelId: "kimi-k2" } };
+    const { coordinator, hosts, parent, state } = await fixture({
+      hostOptions: () => ({ beforeStart: async () => { throw new Error("No credentials for provider kimi"); } }),
+    });
+    try {
+      const request = startRequest("fallback-missing");
+      request.payload = { ...startPayload, provider: "kimi", model: "kimi-k2" };
+      const snapshot = await coordinator.handleRequest(request, parent) as DelegationRecordSnapshot;
+      const waited = await coordinator.wait("/tmp/parent.jsonl", { delegationIds: [snapshot.delegationId], timeoutSeconds: 5 });
+      expect(waited.delegations[0]?.status).toBe("failed");
+      expect(hosts).toHaveLength(1);
+    } finally {
+      delete mockSubagents.definitions[0].model;
+      await coordinator.stopAll();
+      state.close();
+    }
+  });
+
+  it("回退重跑也失败时只重试一次并落失败", async () => {
+    mockSubagents.definitions[0] = { ...mockSubagents.definitions[0], model: { providerId: "kimi", modelId: "kimi-k2" } };
+    const { coordinator, logs, hosts, parent, state } = await fixture({
+      hostOptions: () => ({ beforeStart: async () => { throw new Error("provider exploded"); } }),
+    });
+    try {
+      const request = startRequest("fallback-twice");
+      request.payload = { ...startPayload, provider: "kimi", model: "kimi-k2", fallbackProvider: "deepseek", fallbackModel: "deepseek-chat" };
+      const snapshot = await coordinator.handleRequest(request, parent) as DelegationRecordSnapshot;
+      const waited = await coordinator.wait("/tmp/parent.jsonl", { delegationIds: [snapshot.delegationId], timeoutSeconds: 5 });
+      expect(waited.delegations[0]?.status).toBe("failed");
+      expect(hosts).toHaveLength(2);
+      expect(logs.filter((entry) => entry.message === "delegation pinned model unreachable; retrying with the parent model")).toHaveLength(1);
+    } finally {
+      delete mockSubagents.definitions[0].model;
+      await coordinator.stopAll();
+      state.close();
+    }
   });
 });
 

@@ -40,6 +40,13 @@ export function assertReadableSessionPath(sessionsDir: string, requested: unknow
   return target;
 }
 
+const emptyTranscript = (sessionPath: string): SessionTranscript => ({
+  sessionPath,
+  messages: [],
+  totalMessages: 0,
+  truncated: false,
+});
+
 /** 逐行解析会话 JSONL，只保留 message 条目；超过 limit 时保留最后 limit 条。 */
 export function parseSessionTranscript(
   text: string,
@@ -72,7 +79,15 @@ export async function readSessionTranscript(
   requested: unknown,
 ): Promise<SessionTranscript> {
   const sessionPath = assertReadableSessionPath(sessionsDir, requested);
-  const stat = await fsp.stat(sessionPath);
+  // 子会话文件由运行时懒创建：委派一注册路径就有了，首轮写入前面板就会来轮询。
+  // 文件还没落盘不算错误，返回空转录等下一轮即可，避免面板闪一条 ENOENT 报错。
+  let stat: Awaited<ReturnType<typeof fsp.stat>>;
+  try {
+    stat = await fsp.stat(sessionPath);
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException)?.code === "ENOENT") return emptyTranscript(sessionPath);
+    throw cause;
+  }
   if (!stat.isFile()) throw new Error("会话路径不是文件。");
   const oversized = stat.size > SESSION_TRANSCRIPT_MAX_BYTES;
   let text: string;

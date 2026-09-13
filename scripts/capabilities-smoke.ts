@@ -94,6 +94,15 @@ try {
   await clickLabel("启用 created-in-sidebar");
   await wait(async () => { try { await fsp.access(path.join(project, ".agents/skills-inactive/created-in-sidebar/SKILL.md")); return true; } catch { return false; } });
   await clickLabel("启用 created-in-sidebar"); await wait(async () => { try { await fsp.access(skillFile); return true; } catch { return false; } });
+  stage = "collapse and restore a skill group";
+  const groupOpen = () => host<boolean>(`Array.from((${visible}).querySelectorAll('.cap-group')).find(el => el.querySelector('summary span')?.textContent === '开发效率')?.open ?? false`);
+  const groupSummary = `Array.from((${visible}).querySelectorAll('.cap-group')).find(el => el.querySelector('summary span')?.textContent === '开发效率').querySelector('summary')`;
+  await host(`(${groupSummary}).click()`);
+  await wait(async () => !(await groupOpen()));
+  assert.ok(await host(`localStorage.getItem('skills:collapsed-groups')?.includes('开发效率') ?? false`));
+  await host(`(${groupSummary}).click()`);
+  await wait(groupOpen);
+
   stage = "search and import a skill folder";
   await setField("搜索技能…", "created-in-sidebar");
   assert.equal(await host(`(${visible}).querySelectorAll('.cap-skill-card').length`), 1);
@@ -136,6 +145,20 @@ try {
   await wait(async () => (await panelText()).includes("created-in-sidebar"));
   const overflows = await host<string[]>(`Array.from((${visible}).querySelectorAll('input, textarea, select, .cap-card')).filter(el => el.getBoundingClientRect().right > (${visible}).getBoundingClientRect().right + 1).map(el => el.className)`);
   assert.deepEqual(overflows, []);
+  stage = "widen the panel and check two-column cards";
+  await host("localStorage.setItem('tacode.inspectWidth', '700')");
+  await main!.webContents.executeJavaScript("location.reload()");
+  await wait(() => host("!!document.querySelector('[data-project=\"0\"]')"));
+  await host("document.querySelector('[aria-label=\"Skills / MCP\"]').click()");
+  await wait(async () => (await panelText()).includes("code-review"));
+  await screenshot("skills-panel-wide.png");
+  const skillColumns = await host<string>(`getComputedStyle(Array.from((${visible}).querySelectorAll('.cap-card-list')).find(el => el.querySelector('.cap-skill-card'))).gridTemplateColumns`);
+  assert.equal(skillColumns.trim().split(/\s+/).length, 2);
+  await tab("MCP");
+  await wait(async () => (await panelText()).includes("Filesystem"));
+  await screenshot("mcp-panel-wide.png");
+  const wideOverflows = await host<string[]>(`Array.from((${visible}).querySelectorAll('input, textarea, select, .cap-card')).filter(el => el.getBoundingClientRect().right > (${visible}).getBoundingClientRect().right + 1).map(el => el.className)`);
+  assert.deepEqual(wideOverflows, []);
   assert.deepEqual(rendererErrors.filter((message) => !message.includes("Electron Security Warning")), []);
   console.log("Capabilities smoke passed: tabs, skill create/edit/toggle/import, unsaved changes, MCP connection/tools/save/toggle/import/remove, project and global isolation.");
 } catch (error) {

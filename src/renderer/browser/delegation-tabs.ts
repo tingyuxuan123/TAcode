@@ -97,9 +97,12 @@ export function planDelegationTabs(input: {
   delegations: readonly DelegationSummary[];
   openKeys: ReadonlySet<string>;
   autoOpenedKeys: ReadonlySet<string>;
-}): { requests: DelegationTabRequest[]; autoOpened: string[] } {
+  /** 已经提醒过的审批请求 id：同一个请求只抢一次焦点，应答后不再重开标签。 */
+  attentionSeen?: ReadonlySet<string>;
+}): { requests: DelegationTabRequest[]; autoOpened: string[]; /** 本次新出现的审批请求 id（调用方负责记入 attentionSeen）。 */ attention: string[] } {
   const requests: DelegationTabRequest[] = [];
   const autoOpened: string[] = [];
+  const attention: string[] = [];
   for (const item of input.delegations) {
     if (!item.childSessionPath) continue;
     const key = delegationPanelKey(item.id, item.childSessionPath);
@@ -120,20 +123,26 @@ export function planDelegationTabs(input: {
       ...(item.startedAt !== undefined ? { startedAt: item.startedAt } : {}),
       completedAt: item.completedAt,
     };
+    // 新的审批请求必须被看见：子代理会停在等待上直到用户应答，标签没开着也要重开并抢焦点。
+    const running = item.status === "pending" || item.status === "running";
+    const requestId = item.uiRequest?.id;
+    const urgent = Boolean(running && requestId && !input.attentionSeen?.has(requestId));
+    if (urgent && requestId) attention.push(requestId);
     if (!input.autoOpenedKeys.has(key)) {
       autoOpened.push(key);
       if (input.openKeys.has(key)) {
-        requests.push({ key, info, activate: false });
+        requests.push({ key, info, activate: urgent });
         continue;
       }
       // 历史委派（重开会话时见到的已完成条目）不自动弹标签，避免一次开一堆。
-      if (item.mayAutoOpen !== false && (item.status === "pending" || item.status === "running")) {
+      if (urgent || (item.mayAutoOpen !== false && running)) {
         requests.push({ key, info, activate: true });
       }
       continue;
     }
-    // 用户手动关掉后不再自动开；只刷新还开着的那个标签。
-    if (input.openKeys.has(key)) requests.push({ key, info, activate: false });
+    // 用户手动关掉后不再自动开；只刷新还开着的那个标签（审批例外：重开并抢焦点）。
+    if (input.openKeys.has(key)) requests.push({ key, info, activate: urgent });
+    else if (urgent) requests.push({ key, info, activate: true });
   }
-  return { requests, autoOpened };
+  return { requests, autoOpened, attention };
 }

@@ -7,6 +7,8 @@ import {
   DELEGATION_REPORT_NUDGE,
   describeAssistantEvidence,
   extractAssistantReport,
+  isPreambleReport,
+  isUntrustedReportEnd,
   DELEGATION_BRIDGE_EVENT,
   DELEGATION_DEFAULT_TIMEOUT_SECONDS,
   DELEGATION_MAX_CONCURRENCY,
@@ -58,6 +60,8 @@ export interface DelegationCoordinatorOptions {
     payload: DelegationStartPayload,
     definition: SubagentDefinition,
     sessionPath: string,
+    /** 模型回退重跑时置位：忽略定义里的模型钉选，完全按 payload 的 provider/model 启动。 */
+    attempt?: { ignoreModelPin?: boolean },
   ): Promise<AgentHostStartOptions>;
   stateStore?: TacodeStateStore;
   emitEvent?(parentSessionPath: string, event: DelegationBridgeEvent): void;
@@ -82,6 +86,12 @@ interface DelegationEntry {
   recent: DelegationActivity[];
   /** no_report 已自动重试过一次（只重试一次，不无限循环）。 */
   noReportRetried?: boolean;
+  /** 父会话正在用的 provider/model：钉选模型一次都没调通时的回退目标；缺省不回退。 */
+  parentModel?: { provider: string; model?: string };
+  /** 模型回退已重试过一次（只重试一次，不无限循环）。 */
+  modelFallbackTried?: boolean;
+  /** 首次启动的完整 payload：回退重跑时原样复用（record 不含 sandbox/network 等启动字段）。 */
+  launchPayload?: DelegationStartPayload;
 }
 
 const permissionRank: Record<PermissionMode, number> = {
@@ -255,6 +265,10 @@ export class DelegationCoordinator {
     const permission = effectivePermission(normalized.permission, definition.permission);
     const childProvider = definition.model?.providerId ?? normalized.provider;
     const childModel = definition.model?.modelId ?? normalized.model;
+    // 模型回退目标：只有子代理钉了与父会话不同的模型才可能用到（没钉时失败与钉选无关）。
+    const parentModel: DelegationEntry["parentModel"] = normalized.fallbackProvider
+      ? { provider: normalized.fallbackProvider, ...(normalized.fallbackModel ? { model: normalized.fallbackModel } : {}) }
+      : undefined;
     const childPayload: DelegationStartPayload = {
       ...normalized,
       permission,
@@ -294,6 +308,8 @@ export class DelegationCoordinator {
     };
     this.state.createDelegatedThread(input);
     const entry = this.createEntry(record, definition);
+    entry.parentModel = parentModel;
+    entry.launchPayload = childPayload;
     this.publish(entry);
     void this.launch(entry, childPayload, definition);
     return this.snapshot(entry);
@@ -523,6 +539,7 @@ export class DelegationCoordinator {
     entry: DelegationEntry,
     payload: DelegationStartPayload,
     definition: SubagentDefinition,
+    attempt?: { ignoreModelPin?: boolean },
   ): Promise<void> {
     const startedAt = Date.now();
     const signal = entry.abort.signal;
@@ -547,6 +564,7 @@ export class DelegationCoordinator {
         payload,
         definition,
         entry.record.childSessionPath!,
+        attempt,
       );
       if (signal.aborted) return;
       await this.startHost(entry, host, startOptions, signal);
@@ -731,9 +749,12 @@ export class DelegationCoordinator {
       await this.state.indexSession(entry.record.childSessionPath!).catch(() => undefined);
       return;
     }
-    if (!report) {
-      // 空报告不是「没干活」：子会话可能只跑了工具就结束了。先补一次「只回最终报告」的指令，
-      // 仍失败才落 failed，并把末尾活动/stderr 一起交给父代理。
+    if (!report || isPreambleReport(report, { turns, toolCalls: evidence.toolCalls }) || isUntrustedReportEnd(evidence.lastAssistantStopReason)) {
+      // 空报告不是「没干活」：子会话可能只跑了工具就结束了。只有一轮、零工具调用的
+      // 开场白短文本（"I'll start by …"）、或以 error/aborted 收尾的运行（最后带文本的
+      // 消息多半是进度旁白，真实现场：4 条 error 收尾后旁白句被当成报告）同理——直接
+      // 采信会把垃圾落成 completed。三种都先补一次「只回最终报告」的指令，仍失败才落
+      // failed，并把末尾活动/stderr 一起交给父代理。
       if (!entry.noReportRetried && !entry.stopRequested) {
         entry.noReportRetried = true;
         this.pushActivity(entry, {
@@ -928,6 +949,12 @@ export class DelegationCoordinator {
 
   private settle(entry: DelegationEntry, status: DelegationStatus, report: string, error?: string): void {
     if (isDelegationTerminal(entry.record.status)) return;
+    // 钉选模型可能调不通（凭据缺失/服务下线/模型 id 不存在）：先转模型回退重试，
+    // 不在此处落终态——record 保持 running、completion 不 resolve，wait 继续等重跑结果。
+    if (status === "failed" && !entry.stopRequested && this.canFallbackModel(entry)) {
+      void this.retryWithParentModel(entry, { report, error });
+      return;
+    }
     entry.abort.abort();
     delete entry.record.uiRequest;
     delete entry.record.live;
@@ -951,6 +978,73 @@ export class DelegationCoordinator {
     this.persist(entry);
     this.publish(entry);
     entry.resolveCompletion();
+  }
+
+  /** 是否具备模型回退条件：钉了模型、与父会话模型不同、且还没回退过。 */
+  private canFallbackModel(entry: DelegationEntry): boolean {
+    const parent = entry.parentModel;
+    if (!parent || entry.modelFallbackTried) return false;
+    const pin = entry.definition?.model;
+    // 没钉模型时子代理本来就跑在父会话模型上，失败与「钉选调不通」无关。
+    if (!pin) return false;
+    return pin.providerId !== parent.provider || pin.modelId !== parent.model;
+  }
+
+  /**
+   * 钉选模型一次都没调通时的兜底：停掉子 worker，改用父会话的模型原位重跑一次。
+   * 只回退一次（modelFallbackTried）；子会话里已有任何 assistant 输出说明模型其实能调通
+   * （失败另有原因），照常落失败，不浪费一次重跑。
+   */
+  private async retryWithParentModel(entry: DelegationEntry, failure: { report: string; error?: string }): Promise<void> {
+    // 先同步置位：并发到来的第二次 failed settle 不能再次进入回退。
+    entry.modelFallbackTried = true;
+    const parent = entry.parentModel!;
+    const pinned = [entry.record.provider, entry.record.model].filter(Boolean).join("/");
+    const signal = entry.abort.signal;
+    const settleFailed = () => this.settle(entry, "failed", failure.report, failure.error);
+    if (entry.host) await this.stopHost(entry.host).catch(() => undefined);
+    if (signal.aborted || entry.stopRequested || isDelegationTerminal(entry.record.status)) {
+      // 回退判定期间被用户/父会话停止：按取消收口，不再重启。
+      if (!isDelegationTerminal(entry.record.status)) {
+        this.settle(entry, "cancelled", "", "Stopped while switching to the parent session's model.");
+      }
+      return;
+    }
+    const turns = await childSessionAssistantTurns(entry.record.childSessionPath);
+    if (turns > 0) {
+      settleFailed();
+      return;
+    }
+    const definition = entry.definition;
+    const base = entry.launchPayload;
+    if (!definition || !base) {
+      settleFailed();
+      return;
+    }
+    this.pushActivity(entry, {
+      at: Date.now(),
+      kind: "notice",
+      text: `Model ${pinned || "pinned"} never responded; retrying once with the parent session's model (${parent.model ?? parent.provider}).`,
+    });
+    this.log("warn", "delegation pinned model unreachable; retrying with the parent model", {
+      delegationId: entry.record.delegationId,
+      childSessionPath: entry.record.childSessionPath,
+      ...(pinned ? { pinned } : {}),
+      fallbackProvider: parent.provider,
+      ...(parent.model ? { fallbackModel: parent.model } : {}),
+    });
+    // 对齐 continue 的重置方式：直接回拨状态（assertDelegationTransition 不接受 running→pending）。
+    entry.record.status = "pending";
+    entry.record.provider = parent.provider;
+    if (parent.model) entry.record.model = parent.model;
+    else delete entry.record.model;
+    entry.record.error = "";
+    this.persist(entry);
+    this.publish(entry);
+    const payload: DelegationStartPayload = { ...base, provider: parent.provider };
+    if (parent.model) payload.model = parent.model;
+    else delete payload.model;
+    await this.launch(entry, payload, definition, { ignoreModelPin: true });
   }
 
   private persist(entry: DelegationEntry): void {
@@ -1147,6 +1241,33 @@ function composeChildTask(definition: SubagentDefinition, task: string, cwd: str
     "Delegated task:",
     task,
   ].filter((part) => part.trim()).join("\n\n");
+}
+
+/**
+ * 子会话文件里的 assistant 消息数（文件缺失/损坏按 0）：
+ * 判断钉选模型是否从未产出过任何回复——一次都没有才值得换父会话模型重跑。
+ */
+async function childSessionAssistantTurns(sessionPath: string | undefined): Promise<number> {
+  if (!sessionPath) return 0;
+  try {
+    const raw = await readFile(sessionPath, "utf8");
+    let turns = 0;
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (!parsed || typeof parsed !== "object" || (parsed as { type?: unknown }).type !== "message") continue;
+        const message = (parsed as { message?: unknown }).message;
+        if (message && typeof message === "object" && (message as { role?: unknown }).role === "assistant") turns += 1;
+      } catch {
+        continue;
+      }
+    }
+    return turns;
+  } catch {
+    return 0;
+  }
 }
 
 /**

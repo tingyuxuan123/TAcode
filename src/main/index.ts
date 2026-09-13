@@ -2192,11 +2192,13 @@ app.whenReady().then(async () => {
   delegationCoordinator = new DelegationCoordinator({
     createHost: (runtimeId, delegationId) => createAgentHost(runtimeId, delegationId),
     findParentHost: (sessionPath) => agentManager.findBySession(sessionPath),
-    buildStartOptions: async (payload, definition, sessionPath) => {
+    buildStartOptions: async (payload, definition, sessionPath, attempt) => {
+      // 模型回退重跑时忽略钉选：完全按父会话的 provider/model 启动。
+      const pin = attempt?.ignoreModelPin ? undefined : definition.model;
       // 钉选的 provider 段如果命中用户加的 AI 服务，就把服务也一起接过去：
       // 子代理可以跑在与当前会话不同的服务上（对齐 PI-Desktop 的模型钉选语义）。
-      const pinnedServiceId = definition.model
-        ? await resolveDesktopServiceId(definition.model.providerId)
+      const pinnedServiceId = pin
+        ? await resolveDesktopServiceId(pin.providerId)
         : undefined;
       const target = delegationProviderTarget({
         parentProvider: String(payload.provider ?? ""),
@@ -2217,7 +2219,7 @@ app.whenReady().then(async () => {
       const maxTokens = payload.maxTokens ?? activeCustomProfile(profiles)?.maxTokens;
       const baseUrl = rawUrl ? apiBaseUrl(rawUrl) : undefined;
       const desktopProvider = target.serviceId
-        ? await resolveDesktopProvider(target.serviceId, definition.model?.modelId ?? payload.model)
+        ? await resolveDesktopProvider(target.serviceId, pin?.modelId ?? payload.model)
         : undefined;
       return {
         provider,
@@ -2228,8 +2230,8 @@ app.whenReady().then(async () => {
         cwd,
         sessionPath,
         ...delegationRunOptions(payload, definition),
-        ...(definition.model?.modelId || payload.model
-          ? { model: definition.model?.modelId ?? payload.model }
+        ...(pin?.modelId || payload.model
+          ? { model: pin?.modelId ?? payload.model }
           : {}),
         ...(baseUrl ? { baseUrl } : {}),
         ...(maxTokens ? { maxTokens } : {}),

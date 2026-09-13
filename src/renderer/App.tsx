@@ -19,6 +19,7 @@ import {
   readStoredEffort,
   writeStoredEffort,
 } from "../shared/thinking";
+import { readProjectComposerMemory, writeProjectComposerMemory } from "./composer-memory";
 import { modelSupportsVision, toPromptImages, visionAgentPrompt } from "../shared/vision-api";
 import { fallbackSessionTitle } from "../shared/session-title";
 import {
@@ -661,6 +662,12 @@ export function App() {
     void window.harness.agent.command("set_thinking_level", { level: next }).catch(() => undefined);
   }, []);
 
+  // 模式按项目记住：切换或计划批准后恢复时都写回项目记忆，新会话沿用（对齐 ZCode）。
+  const applyPermissionMode = useCallback((mode: PermissionMode) => {
+    setPermission(mode);
+    if (workspace) writeProjectComposerMemory(workspace, { mode });
+  }, [workspace]);
+
   const groupCache = useRef<ReturnType<typeof groupConversation>>([]);
   const groups = useMemo(() => {
     const next = groupConversation(displayMessages, groupCache.current);
@@ -1062,6 +1069,7 @@ export function App() {
       }
       setModel(next);
       modelRef.current = next;
+      if (workspace) writeProjectComposerMemory(workspace, { model: next });
       applyThinkingForModel(next, accounts);
       const currentService = activeChatProvider(accounts);
       // A running turn keeps its original service; ensureModelReady applies the choice next turn.
@@ -1076,7 +1084,7 @@ export function App() {
       modelSwitchBusy.current = false;
       setModelSwitchPending(false);
     }
-  }, [applyThinkingForModel, loading, modelOptions, running, t]);
+  }, [applyThinkingForModel, loading, modelOptions, running, t, workspace]);
 
   const bindProject = useCallback(async (cwd: string): Promise<boolean> => {
     // Phase 3b：多会话并行下，切换项目不再因“当前 agent 仍在运行”而阻止——每个
@@ -1084,6 +1092,14 @@ export function App() {
     if (running && agentCwd.current === cwd) return true;
     live.current = false;
     setWorkspace(cwd);
+    // 按项目恢复上次的模式/模型，新会话沿用上次切换（模型只在可用列表为空或包含时才恢复，避免落到已下架模型）。
+    const memory = readProjectComposerMemory(cwd);
+    if (memory.mode) setPermission(memory.mode);
+    if (memory.model && (!chatModelsRef.current.length || chatModelsRef.current.includes(memory.model))) {
+      modelRef.current = memory.model;
+      setModel(memory.model);
+      applyThinkingForModel(memory.model);
+    }
     setOpenProjects((current) => ({ ...current, [cwd]: true }));
     setMessages([]);
     setStats(undefined);
@@ -1100,7 +1116,7 @@ export function App() {
     agentCwd.current = undefined;
     if (!running) await window.harness.agent.stop().catch(() => undefined);
     return true;
-  }, [fillPrompt, running, t]);
+  }, [applyThinkingForModel, fillPrompt, running, t]);
   const openFolder = useCallback(async () => {
     const selected = await window.harness.workspace.choose();
     if (!selected) return;
@@ -1302,14 +1318,14 @@ export function App() {
     setLoading(true);
     try {
       await window.harness.agent.command("prompt", { message: "/plan execute" });
-      setPermission(target);
+      applyPermissionMode(target);
       setToast(t("plan.approved"));
     } catch (error) {
       setToast(agentErrorToast(error));
     } finally {
       setLoading(false);
     }
-  }, [loading, running, t]);
+  }, [applyPermissionMode, loading, running, t]);
 
   const refinePlan = useCallback(async (changes: string) => {
     const text = changes.trim();
@@ -1858,7 +1874,7 @@ export function App() {
         if (mode === "plan" && permission !== "plan") {
           permissionBeforePlan.current = permission;
         }
-        setPermission(mode);
+        applyPermissionMode(mode);
         if (!agentCwd.current) return;
         void (async () => {
           try {

@@ -52,13 +52,14 @@ class FakeAgent implements SubagentAgentLike {
     for (const listener of this.listeners) listener(event);
   }
 
-  report(text: string, totalTokens = 10): void {
+  report(text: string, totalTokens = 10, stopReason?: string): void {
     this.emit({
       type: "message_end",
       message: {
         role: "assistant",
         content: [{ type: "text", text }],
         usage: { input: 5, output: 5, totalTokens, cost: { total: 0.01 } },
+        ...(stopReason ? { stopReason } : {}),
       },
     } as unknown as AgentEvent);
   }
@@ -81,9 +82,11 @@ function harness(options: {
 }) {
   const tools = new Map<string, ToolDefinition<any, any, any>>();
   const delivered: string[] = [];
+  const eventHandlers = new Map<string, (event: unknown) => void>();
   const registry = registerDelegateTools(
     {
       registerTool: (tool: ToolDefinition<any, any, any>) => tools.set(tool.name, tool),
+      on: (event: string, handler: (event: unknown) => void) => { eventHandlers.set(event, handler); },
     } as unknown as ExtensionAPI,
     {
       getDefinitions: async () => options.definitions ?? [definition()],
@@ -99,11 +102,12 @@ function harness(options: {
       deliverReport: (text) => delivered.push(text),
       createAgent: () => {
         if (options.failAgent) throw new Error("agent construction failed");
-        return new FakeAgent(options.script ?? (async (agent) => agent.report("found it")));
+        // 默认报告带结论行（与子代理系统提示的契约一致）：单轮零工具也不会触发补写。
+        return new FakeAgent(options.script ?? (async (agent) => agent.report("complete found it")));
       },
     },
   );
-  return { registry, tools, delivered };
+  return { registry, tools, delivered, eventHandlers };
 }
 
 async function runTool<T>(
@@ -168,6 +172,7 @@ describe("delegate tool", () => {
     );
     expect(result.isError).toBeUndefined();
     expect(result.content[0]?.text).toContain("found it");
+    expect(result.content[0]?.text).toContain("complete");
     expect(result.details.tasks).toHaveLength(1);
     expect(result.details.tasks[0].status).toBe("completed");
     expect(result.details.done).toBe(1);
@@ -429,5 +434,70 @@ describe("delegate tool", () => {
     expect(text).toContain("without writing a report");
     expect(text).toContain("A second report-only instruction was sent");
     expect(text).toContain("lastActivity:");
+  });
+
+  it("开场白式报告自动补写一次，按补写结果结算", async () => {
+    let prompts = 0;
+    const { tools } = harness({
+      script: async (agent) => {
+        prompts += 1;
+        agent.report(prompts === 1 ? "I'll start by exploring the repository structure." : "complete 找到了 src/main/index.ts:1");
+      },
+    });
+    const result = await runTool(tools, DELEGATE_TOOL_NAME, {
+      tasks: [{ role: "explorer", task: "look" }],
+    });
+    expect(prompts).toBe(2);
+    expect(result.details.tasks[0].status).toBe("completed");
+    expect(result.content[0]?.text).toContain("complete 找到了");
+  });
+
+  it("带结论行的单轮报告不触发补写", async () => {
+    let prompts = 0;
+    const { tools } = harness({
+      script: async (agent) => {
+        prompts += 1;
+        agent.report("complete 入口在 src/main/index.ts:1");
+      },
+    });
+    const result = await runTool(tools, DELEGATE_TOOL_NAME, {
+      tasks: [{ role: "explorer", task: "look" }],
+    });
+    expect(prompts).toBe(1);
+    expect(result.details.tasks[0].status).toBe("completed");
+  });
+
+  it("error 收尾的运行不采信最后文本，补写一次后按结果结算", async () => {
+    let prompts = 0;
+    const { tools } = harness({
+      script: async (agent) => {
+        prompts += 1;
+        if (prompts === 1) {
+          // 真实现场：进度旁白 + 连续 error 收尾（模型死在半路）。
+          agent.report("Now let me examine the integration points.");
+          agent.report("", 10, "error");
+        } else {
+          agent.report("complete 检查完成：src/main/index.ts:1");
+        }
+      },
+    });
+    const result = await runTool(tools, DELEGATE_TOOL_NAME, {
+      tasks: [{ role: "explorer", task: "look" }],
+    });
+    expect(prompts).toBe(2);
+    expect(result.details.tasks[0].status).toBe("completed");
+    expect(result.content[0]?.text).toContain("complete 检查完成");
+  });
+
+  it("用户停止父会话后，后台报告不再回灌", async () => {
+    const { tools, delivered, eventHandlers } = harness({});
+    await runTool(tools, DELEGATE_TOOL_NAME, {
+      tasks: [{ role: "explorer", task: "find it" }],
+      background: true,
+    });
+    eventHandlers.get("turn_end")?.({ message: { role: "assistant", stopReason: "aborted" } });
+    // 覆盖 150ms 投递延迟：定时器到点时 gate 已挂起，报告被丢弃而不是注入。
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(delivered).toHaveLength(0);
   });
 });
