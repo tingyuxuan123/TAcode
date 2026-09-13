@@ -1,0 +1,171 @@
+{
+  "date": "2026-09-13T10:00:14.225Z",
+  "platform": "darwin",
+  "os": "25.6.0",
+  "cpu": "Apple M5",
+  "boundary": "app ready + seeded fixtures to window ready-to-show / first enabled project row; same production renderer build",
+  "samples": [
+    {
+      "mode": "blocking",
+      "sessions": 0,
+      "windowShownMs": 172.90445800000003,
+      "sidebarReadyMs": 230.980208,
+      "composerReadyMs": 271.034917,
+      "inputMs": 2.137833999999998,
+      "organizedMs": 274.60999999999996
+    },
+    {
+      "mode": "deferred",
+      "sessions": 0,
+      "windowShownMs": 184.820292,
+      "sidebarReadyMs": 241.08137499999998,
+      "composerReadyMs": 280.57945900000004,
+      "inputMs": 2.932749999999942,
+      "organizedMs": 285.03937500000006
+    },
+    {
+      "mode": "blocking",
+      "sessions": 100,
+      "windowShownMs": 223.20991699999996,
+      "sidebarReadyMs": 329.828459,
+      "composerReadyMs": 338.808459,
+      "inputMs": 2.7668330000000196,
+      "organizedMs": 343.60575
+    },
+    {
+      "mode": "deferred",
+      "sessions": 100,
+      "windowShownMs": 175.37275000000005,
+      "sidebarReadyMs": 234.14608400000003,
+      "composerReadyMs": 269.422084,
+      "inputMs": 2.0101249999999027,
+      "organizedMs": 340.6805
+    },
+    {
+      "mode": "blocking",
+      "sessions": 1000,
+      "windowShownMs": 605.635708,
+      "sidebarReadyMs": 1130.701875,
+      "composerReadyMs": 1175.642625,
+      "inputMs": 16.782625000000053,
+      "organizedMs": 1197.120541
+    },
+    {
+      "mode": "deferred",
+      "sessions": 1000,
+      "windowShownMs": 154.05374999999998,
+      "sidebarReadyMs": 230.407083,
+      "composerReadyMs": 265.231875,
+      "inputMs": 2.059665999999993,
+      "organizedMs": 1158.653583
+    },
+    {
+      "mode": "blocking",
+      "sessions": 0,
+      "windowShownMs": 178.84904099999994,
+      "sidebarReadyMs": 243.26075000000003,
+      "composerReadyMs": 249.01266599999997,
+      "inputMs": 2.1588749999999663,
+      "organizedMs": 252.57216600000004
+    },
+    {
+      "mode": "deferred",
+      "sessions": 0,
+      "windowShownMs": 168.01033299999995,
+      "sidebarReadyMs": 227.64654099999996,
+      "composerReadyMs": 269.085333,
+      "inputMs": 1.9540419999999585,
+      "organizedMs": 272.416791
+    },
+    {
+      "mode": "blocking",
+      "sessions": 100,
+      "windowShownMs": 210.41520900000006,
+      "sidebarReadyMs": 364.96829199999996,
+      "composerReadyMs": 373.690584,
+      "inputMs": 6.429250000000025,
+      "organizedMs": 381.88425
+    },
+    {
+      "mode": "deferred",
+      "sessions": 100,
+      "windowShownMs": 195.856041,
+      "sidebarReadyMs": 260.47970799999996,
+      "composerReadyMs": 265.22458300000005,
+      "inputMs": 3.139874999999961,
+      "organizedMs": 329.88316599999996
+    },
+    {
+      "mode": "blocking",
+      "sessions": 1000,
+      "windowShownMs": 578.839166,
+      "sidebarReadyMs": 1135.652416,
+      "composerReadyMs": 1181.0874159999998,
+      "inputMs": 12.167042000000038,
+      "organizedMs": 1197.982291
+    },
+    {
+      "mode": "deferred",
+      "sessions": 1000,
+      "windowShownMs": 177.52800000000002,
+      "sidebarReadyMs": 246.05783299999996,
+      "composerReadyMs": 283.794667,
+      "inputMs": 2.0202079999999114,
+      "organizedMs": 1161.0753329999998
+    },
+    {
+      "mode": "blocking",
+      "sessions": 0,
+      "windowShownMs": 166.55679200000003,
+      "sidebarReadyMs": 265.319958,
+      "composerReadyMs": 306.56820799999997,
+      "inputMs": 2.1463750000000346,
+      "organizedMs": 310.35987500000005
+    },
+    {
+      "mode": "deferred",
+      "sessions": 0,
+      "windowShownMs": 150.37462500000004,
+      "sidebarReadyMs": 230.1635,
+      "composerReadyMs": 274.67495900000006,
+      "inputMs": 1.9135420000000067,
+      "organizedMs": 278.032959
+    },
+    {
+      "mode": "blocking",
+      "sessions": 100,
+      "windowShownMs": 194.29654199999993,
+      "sidebarReadyMs": 345.96425,
+      "composerReadyMs": 354.255667,
+      "inputMs": 3.010582999999997,
+      "organizedMs": 358.97475
+    },
+    {
+      "mode": "deferred",
+      "sessions": 100,
+      "windowShownMs": 174.33558299999999,
+      "sidebarReadyMs": 257.833292,
+      "composerReadyMs": 263.13395799999995,
+      "inputMs": 2.747250000000008,
+      "organizedMs": 316.34937499999995
+    },
+    {
+      "mode": "blocking",
+      "sessions": 1000,
+      "windowShownMs": 586.603458,
+      "sidebarReadyMs": 1185.24925,
+      "composerReadyMs": 1233.177083,
+      "inputMs": 15.714416000000028,
+      "organizedMs": 1253.8494580000001
+    },
+    {
+      "mode": "deferred",
+      "sessions": 1000,
+      "windowShownMs": 180.246334,
+      "sidebarReadyMs": 247.09508399999999,
+      "composerReadyMs": 252.21204199999994,
+      "inputMs": 2.597332999999935,
+      "organizedMs": 1122.459209
+    }
+  ]
+}

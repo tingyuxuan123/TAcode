@@ -11,6 +11,7 @@ export {
   getTacodeSessionsDir,
   getTacodeArchivedSessionsDir,
   initializeTacodeHome,
+  maintainTacodeHome,
   partitionSessionFile,
   partitionExistingSessions,
   ensureSessionRuntimeLink,

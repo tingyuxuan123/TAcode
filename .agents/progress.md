@@ -1081,3 +1081,12 @@
 - 验证：`pnpm test --reporter=dot` **114 文件 / 1004 用例通过**；`pnpm typecheck`、`git diff --check` 通过。后端覆盖 2101 条且超过 4 MiB、单条超过 4 MiB、中文、分支、压缩、追加后的游标、替换检测、缺失链接及越界。`TACODE_HISTORY_SMOKE=1 node scripts/test-session-activity.mjs` 在真实 App/preload/Electron 下通过零 worker 无配置阅读、460 条分页到第一条、迟到读取隔离、缺失重试/空会话、按需续聊和无配置接回活跃审批；导航、草稿、后台审批三组桌面回归通过。
 - 已查看无模型配置下完整 230 轮记录的截图，位于 `/Users/yfdl/.codex/visualizations/2026/09/13/01a09958-0266-7751-adca-acfbab778dbd/ux-05/full-history.png`。无线上模型调用；既有 ResizeObserver 警告仍记入 UX-13。
 - 下一项：UX-06 启动先显示窗口，历史整理后台完成，记录 0 / 100 / 1000 会话的对照耗时。整份目标继续 active。
+
+## 2026-09-13：UX-06 首屏与后台历史整理
+
+- [x] 主进程和 RPC 启动只准备必要目录/配置，窗口出现后逐个整理与索引历史；侧栏先读取已有记录，显示整理进度与失败重试。退出取消扫描，未完成时不做删除对账。
+- [x] 分区先创建存储硬链接，始终保留原运行路径；按文件元数据复用分区结果，合并同文件并发处理，恢复日期目录中的孤立链接。旧目录逐文件完整复制后排他发布，完成才写迁移标记；中断后可继续且不覆盖已有内容。
+- 文件：runtime/home.ts、state.ts、rpc-entry.ts；main/session-maintenance.ts、index.ts；preload、shared、App、styles；home/maintenance 回归及桌面启动夹具。临时旁聊目录在窗口前改名，递归清理移到窗口创建后。
+- 验证：全量 **115 文件 / 1012 测试通过**，`pnpm typecheck`、`git diff --check` 通过；状态版本保护后 14 项定向回归通过。相同构建 0/100/1000 会话各三轮阻塞/后台对照共 18 次完成；最终 100 会话桌面复核退出正常、无迟到清理错误。
+- 1000 会话的窗口出现中位数 **586.6 → 177.5 ms**，侧栏可操作 **1135.7 → 246.1 ms**，输入框就绪 **1181.1 → 265.2 ms**；后台整理约 1159 ms。条件与原始数据见 `docs/ux-06-startup-performance.md`、`docs/ux-06-startup-measurements.json`。这是 Electron ready 后的隔离夹具，使用实际初始化/索引和生产 renderer/preload，不是冷盘或完整真实账户启动基准。
+- 下一项：UX-07 主进程复用会话索引、已知变化增量更新与列表版本保护。整份目标继续 active。

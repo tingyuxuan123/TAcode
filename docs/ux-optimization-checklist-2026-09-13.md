@@ -76,7 +76,7 @@
 
   **定位与风险。** [openSession / startAgent](/Users/yfdl/project/TAcode/src/renderer/App.tsx:790)、[readSessionTranscript](/Users/yfdl/project/TAcode/src/main/session-transcript.ts:76)。风险中等，转录读取还需保留会话分支、压缩、存储路径恢复与实时事件对账语义，不能简单替换一次 API 调用。
 
-- [ ] **UX-06 · 启动先显示窗口，历史整理后台完成**
+- [x] **UX-06 · 启动先显示窗口，历史整理后台完成**
 
   **代码确认，整机耗时待测。** 创建窗口之前等待 `initializeTacodeHome`，其中每次都执行现有会话分区。分区串行处理扁平 JSONL，包含读取头部和目录、权限等操作。
 

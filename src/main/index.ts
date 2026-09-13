@@ -61,6 +61,7 @@ import {
 import { isPathInsideRoot } from "./workspace-path";
 import { LocalLogger } from "./local-logger";
 import { readSessionTranscript } from "./session-transcript";
+import { SessionMaintenance } from "./session-maintenance";
 import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { registerCapabilitiesIpc } from "./capabilities-ipc";
@@ -275,6 +276,10 @@ const terminalManager = new TerminalManager((event) => {
 });
 let activeAgentCwd: string | undefined;
 let agentViewVersion = 0;
+const historyMaintenance = new SessionMaintenance({
+  onStatus: (status) => mainWindow?.webContents.send("sessions:maintenance", status),
+  onChanged: () => mainWindow?.webContents.send("sessions:changed"),
+});
 
 
 /**
@@ -526,6 +531,7 @@ function createWindow(): void {
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
+    void historyMaintenance.run();
     void checkForUpdates();
   });
   // Fullscreen hides the macOS traffic lights, so the renderer must stop reserving room for them.
@@ -1034,7 +1040,7 @@ function registerIpc(): void {
       rawCwd === undefined
         ? undefined
         : requireString(rawCwd, "cwd", { maxLength: 4_096 });
-    const threads = await listTacodeThreads(cwd ? { cwd } : {});
+    const threads = await listTacodeThreads(cwd ? { cwd } : {}, historyMaintenance.ready);
     const mapped = threads.map(
       (thread): SessionSummary => ({
         path: thread.sessionPath,
@@ -1064,6 +1070,8 @@ function registerIpc(): void {
   ipcMain.handle("sessions:read", async (_event, rawPath: unknown, options?: unknown) =>
     // 只读转录（含子代理子会话）：不启动 worker、不切换活动会话。
     readSessionTranscript(getTacodeSessionsDir(), rawPath, options));
+  ipcMain.handle("sessions:maintenance", () => historyMaintenance.snapshot());
+  ipcMain.handle("sessions:maintain", () => historyMaintenance.run());
   ipcMain.handle("delegations:list", (_event, rawParent?: unknown) => {
     const parent = rawParent === undefined ? undefined : requireString(rawParent, "parentSessionPath", { maxLength: 4_096 });
     return delegationCoordinator?.list(parent) ?? [];
@@ -2246,10 +2254,12 @@ async function addSkillManifests(root: string, files: string[]): Promise<void> {
 }
 
 app.whenReady().then(async () => {
-  await initializeTacodeHome();
+  await initializeTacodeHome({ deferHistory: true });
   // 侧边聊天是声明式临时会话（Codex 模式）：转录只落盘作崩溃兜底，正常退出后
   // 下一次启动即清空——「关闭应用后会消失」的语义由这里兑现，UI 永不恢复历史。
-  await fsp.rm(path.join(getTacodeHome(), "side-chats"), { recursive: true, force: true }).catch((error: unknown) => {
+  const oldSideChats = path.join(getTacodeHome(), `.side-chats-cleanup-${Date.now()}`);
+  await fsp.rename(path.join(getTacodeHome(), "side-chats"), oldSideChats).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     diagnostics.warn("side-chat", "清理临时侧边聊天目录失败", {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -2359,6 +2369,8 @@ app.whenReady().then(async () => {
   installMenu();
   if (process.platform === "darwin") applyDockIcon();
   createWindow();
+  // 大目录删除在窗口创建后执行；新旁聊使用新的 side-chats 路径。
+  void fsp.rm(oldSideChats, { recursive: true, force: true }).catch(() => undefined);
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -2392,6 +2404,7 @@ app.on("before-quit", (event) => {
   closeAllBrowserPopups();
   closeAllDetachedBrowserWindows();
   Promise.all([
+    historyMaintenance.cancel(),
     agentManager.stopAll(),
     delegationCoordinator?.close() ?? Promise.resolve(),
   ])

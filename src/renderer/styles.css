@@ -9345,3 +9345,5 @@ kbd {
 }
 .session-history-controls details { width: 100%; }
 .session-history-controls p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.session-index-status { margin: 4px 16px 12px; display: flex; flex-wrap: wrap; gap: 6px; color: var(--ink-2); font-size: 11px; }
+.session-index-status details { width: 100%; overflow-wrap: anywhere; }

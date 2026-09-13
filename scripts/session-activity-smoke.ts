@@ -8,6 +8,9 @@ import { AgentActivityStore } from "../src/main/agent-activity";
 import { AgentHost } from "../src/main/agent-host";
 import { AgentManager } from "../src/main/agent-manager";
 import { readSessionTranscript } from "../src/main/session-transcript";
+import { SessionMaintenance } from "../src/main/session-maintenance";
+import { initializeTacodeHome } from "../src/runtime/home";
+import { listTacodeThreads } from "../src/runtime/state";
 import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/types";
 import { testComposerDrafts, type ComposerSmokeControls } from "./composer-drafts-smoke";
 import { testImeInput } from "./ime-smoke";
@@ -25,17 +28,29 @@ async function smoke() {
   const rendererErrors: string[] = [];
   const replies: Array<{ runtimeId: string; id: string; confirmed?: boolean }> = [];
   const pendingPrompts = new Map<string, () => void>();
+  const sessionReads = new Set<Promise<unknown>>();
+  let closing = false;
   const starts = new Map<string, number>();
   const draftSmoke = process.env.TACODE_COMPOSER_SMOKE === "1";
   const imeSmoke = process.env.TACODE_IME_SMOKE === "1";
   const navigationSmoke = process.env.TACODE_NAVIGATION_SMOKE === "1";
   const historySmoke = process.env.TACODE_HISTORY_SMOKE === "1";
+  const startupSmoke = process.env.TACODE_STARTUP_SMOKE === "1";
+  const startupBaseline = process.env.TACODE_STARTUP_BASELINE === "1";
+  const startupCount = Number(process.env.TACODE_STARTUP_COUNT ?? 0);
+  let startupAt = 0;
+  let windowShownMs = 0;
+  const startupMaintenance = new SessionMaintenance({
+    onStatus: (status) => main?.webContents.send("sessions:maintenance", status),
+    onChanged: () => main?.webContents.send("sessions:changed"),
+  });
   const controls: ComposerSmokeControls = { configured: true, failStart: false, prompt: draftSmoke || imeSmoke ? "reject" : "approval", submitted: [] };
   const renames: string[] = [];
   const activity = new AgentActivityStore((value) => main?.webContents.send("agent:activity", value));
   const now = new Date().toISOString();
-  const sessions: SessionSummary[] = ["A", "B"].map((name) => ({
-    id: name, title: `会话 ${name}`, path: path.join(project, `${name}.jsonl`), storagePath: path.join(project, `${name}.jsonl`),
+  const sessionDirectory = startupSmoke ? path.join(root, "home", "sessions") : project;
+  const sessions: SessionSummary[] = (startupSmoke ? Array.from({ length: startupCount }, (_, i) => String(i)) : ["A", "B"]).map((name) => ({
+    id: name, title: `会话 ${name}`, path: path.join(sessionDirectory, `${name}.jsonl`), storagePath: path.join(sessionDirectory, `${name}.jsonl`),
     cwd: project, createdAt: now, updatedAt: now, messageCount: 2, pinned: false, archived: false,
   }));
   const transcript = (file: string) => [
@@ -124,6 +139,16 @@ async function smoke() {
   const watchdog = setTimeout(() => { console.error(`Activity smoke timed out: ${stage}`); app.exit(1); }, 90_000);
   try {
     await app.whenReady();
+    if (startupSmoke) {
+      await mkdir(sessionDirectory, { recursive: true });
+      await Promise.all(sessions.map((session) => writeFile(session.path, [
+        { type: "session", version: 3, id: session.id, cwd: project, timestamp: "2026-09-13T00:00:00Z" },
+        { type: "message", id: "u", parentId: null, message: { role: "user", content: session.title } },
+        { type: "message", id: "a", parentId: "u", message: { role: "assistant", content: "已有记录" } },
+      ].map((entry) => JSON.stringify(entry)).join("\n"))));
+      startupAt = performance.now();
+      await initializeTacodeHome({ deferHistory: !startupBaseline });
+    }
     ipcMain.handle("app:get-locale", () => "zh");
     ipcMain.handle("app:build-status", () => ({ restartRequired: false }));
     ipcMain.handle("app:config-notices", () => []);
@@ -135,7 +160,15 @@ async function smoke() {
     ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }]);
     ipcMain.handle("workspace:list", () => imeSmoke ? ["src/", "src/App.tsx", "src/中文.ts"] : []);
     ipcMain.handle("workspace:read", (_event, file) => ({ path: file, content: "", binary: false }));
-    ipcMain.handle("sessions:list", () => sessions);
+    ipcMain.handle("sessions:list", () => {
+      if (closing) return [];
+      const job = (async () => startupSmoke
+        ? (await listTacodeThreads({}, startupBaseline || startupMaintenance.ready)).map((thread) => ({ ...thread, path: thread.sessionPath })) : sessions)();
+      sessionReads.add(job);
+      return job.finally(() => { sessionReads.delete(job); });
+    });
+    ipcMain.handle("sessions:maintenance", () => startupSmoke && !startupBaseline ? startupMaintenance.snapshot() : { state: "ready", completed: 0, total: 0 });
+    ipcMain.handle("sessions:maintain", () => startupMaintenance.run());
     ipcMain.handle("sessions:read", async (_event, file, options) => {
       if (file === delayedHistory) await new Promise<void>((resolve) => { releaseHistory = resolve; });
       return historySmoke ? readSessionTranscript(project, file, options) : { sessionPath: file, messages: transcript(file), totalMessages: 2, truncated: false };
@@ -167,18 +200,47 @@ async function smoke() {
       return { ...snapshot, cwd: project, activity: activity.bind(snapshot.runtimeId, sessionPath) };
     });
     main = new BrowserWindow({
-      width: 1440, height: 960, show: true, backgroundColor: "#f6f4f0",
+      width: 1440, height: 960, show: !startupSmoke, backgroundColor: "#f6f4f0",
       webPreferences: { preload: path.join(path.dirname(fileURLToPath(import.meta.url)), "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: false },
     });
+    if (startupSmoke) main.once("ready-to-show", () => {
+      main!.show();
+      windowShownMs = performance.now() - startupAt;
+      if (!startupBaseline) void startupMaintenance.run();
+    });
     main.webContents.on("console-message", (_event, level, message) => { if (level >= 3) rendererErrors.push(`${stage}: ${message}`); });
+    main.webContents.on("render-process-gone", (_event, details) => { console.error("Fixture renderer exited", details); app.exit(1); });
     // 活动/输入回归从已有 worker 开始；纯阅读回归单独验证零 worker。
     if (historySmoke) {
       controls.configured = false;
       for (const session of sessions) await writeTranscript(session.path, session.id === "A" ? 460 : 2);
-    } else for (const session of sessions) await manager.start({ cwd: project, sessionPath: session.path, provider: "openai", permission: "auto", sandbox: "read-only", serviceKey: "fixture:1" });
+    } else if (!startupSmoke) for (const session of sessions) await manager.start({ cwd: project, sessionPath: session.path, provider: "openai", permission: "auto", sandbox: "read-only", serviceKey: "fixture:1" });
     manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (startupSmoke) {
+      stage = "sidebar remains usable while history is organized";
+      await wait(() => evaluate("!!document.querySelector('.project-row:not([disabled])')"));
+      const sidebarReadyMs = performance.now() - startupAt;
+      await evaluate("document.querySelector('.project-row').click()");
+      stage = "composer becomes editable during organization";
+      await wait(() => evaluate("!!document.querySelector('.prompt-input[contenteditable=true]')"));
+      const composerReadyMs = performance.now() - startupAt;
+      stage = "typing remains responsive during organization";
+      const typingAt = performance.now();
+      await evaluate("document.querySelector('.prompt-input').focus()");
+      await main.webContents.insertText("整理期间可以继续输入");
+      await wait(() => evaluate("document.querySelector('.prompt-input').textContent.includes('整理期间可以继续输入')"));
+      const inputMs = performance.now() - typingAt;
+      if (!startupBaseline) await startupMaintenance.run();
+      const rows = await listTacodeThreads({}, false);
+      assert.equal(rows.length, startupCount);
+      await wait(async () => windowShownMs > 0);
+      assert.equal(manager.list().length, 0);
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      console.log("STARTUP_RESULT " + JSON.stringify({ mode: startupBaseline ? "blocking" : "deferred", sessions: startupCount, windowShownMs, sidebarReadyMs, composerReadyMs, inputMs, organizedMs: performance.now() - startupAt }));
+      return;
+    }
     if (historySmoke) {
       stage = "read histories without model configuration or workers";
       await wait(() => evaluate("document.querySelectorAll('.home-recent').length === 2"));
@@ -404,13 +466,16 @@ async function smoke() {
   } catch (error) {
     console.error(`Session activity smoke failed at ${stage}:`, error);
     console.error(rendererErrors);
-    console.error(await evaluate("({ focused: document.hasFocus(), visibility: document.visibilityState, selected: document.querySelector('.session-row[aria-current=page]')?.getAttribute('aria-label'), loading: !!document.querySelector('.session-loading'), content: document.querySelector('main')?.textContent.slice(-600) })").catch(() => undefined));
+    console.error(await evaluate("({ focused: document.hasFocus(), visibility: document.visibilityState, url: location.href, selected: document.querySelector('.session-row[aria-current=page]')?.getAttribute('aria-label'), loading: !!document.querySelector('.session-loading'), content: document.body.innerText.slice(0, 2000) })").catch(() => undefined));
     await screenshot("failure.png").catch(() => undefined);
     process.exitCode = 1;
   } finally {
     clearTimeout(watchdog);
+    closing = true;
+    await startupMaintenance.cancel();
     await manager.stopAll();
     main?.destroy();
+    await Promise.allSettled([...sessionReads]);
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     app.exit(process.exitCode ?? 0);
   }

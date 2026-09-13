@@ -30,7 +30,8 @@ const parsed = parseRuntimeArgs(process.argv.slice(2));
 process.chdir(parsed.options.cwd);
 
 try {
-  await initializeTacodeHome();
+  // 桌面在后台整理全局历史；worker 只准备自己的数据目录。
+  await initializeTacodeHome({ deferHistory: true });
   await installTacodeCredentialStore();
   await ensureProviderConfigured(parsed.options.providerId);
   // GLM 的 Anthropic 兼容接口拒收回放历史里的过短 thinking 块（400 长度不足），

@@ -86,6 +86,14 @@ export interface SessionReadOptions {
   strict?: boolean;
 }
 
+export interface SessionMaintenanceStatus {
+  version?: number;
+  state: "pending" | "running" | "ready" | "failed";
+  completed: number;
+  total: number;
+  error?: string;
+}
+
 export interface TerminalInfo {
   id: string;
   cwd: string;
@@ -317,6 +325,10 @@ export interface DesktopApi {
   };
   sessions: {
     list(cwd?: string): Promise<SessionSummary[]>;
+    maintenance(): Promise<SessionMaintenanceStatus>;
+    maintain(): Promise<void>;
+    onMaintenance(listener: (status: SessionMaintenanceStatus) => void): () => void;
+    onChanged(listener: () => void): () => void;
     /** 只读读取某个会话转录（子代理子会话在 `~/.tacode/sessions/`）。 */
     read(sessionPath: string, options?: SessionReadOptions): Promise<SessionTranscript>;
     remove(id: string): Promise<void>;

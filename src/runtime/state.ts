@@ -205,17 +205,20 @@ export class TacodeStateStore {
     this.database.close();
   }
 
-  async refresh(): Promise<void> {
+  async refresh(options: { signal?: AbortSignal } = {}): Promise<void> {
     const seen = new Set<string>();
     for (const file of await directJsonlFiles(getTacodeSessionsDir())) {
+      options.signal?.throwIfAborted();
       const partitioned = await partitionSessionFile(file);
       seen.add(partitioned.storagePath);
       await this.indexFile(partitioned.runtimePath, partitioned.storagePath, false);
     }
     for (const file of await recursiveJsonlFiles(getTacodeArchivedSessionsDir())) {
+      options.signal?.throwIfAborted();
       seen.add(file);
       await this.indexFile(file, file, true);
     }
+    options.signal?.throwIfAborted();
     const rows = this.database.prepare("SELECT id, storage_path, source_delegation_id, delegation_status FROM threads").all() as Array<{
       id: string;
       storage_path: string;
@@ -508,10 +511,11 @@ export class TacodeStateStore {
 
 export async function listTacodeThreads(
   options: ListThreadOptions = {},
+  refresh = true,
 ): Promise<TacodeThread[]> {
   const store = new TacodeStateStore();
   try {
-    await store.refresh();
+    if (refresh) await store.refresh();
     return store.list(options);
   } finally {
     store.close();

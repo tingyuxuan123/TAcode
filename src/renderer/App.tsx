@@ -11,6 +11,7 @@ import type {
   ProviderStatus,
   SessionSummary,
   SessionTranscript,
+  SessionMaintenanceStatus,
   WorkspaceItem,
 } from "../shared/types";
 import type { AgentSkillCommand } from "../shared/skills";
@@ -501,6 +502,7 @@ export function App() {
   const [history, setHistory] = useState<SessionTranscript>();
   const [historyError, setHistoryError] = useState<string>();
   const [historyBusy, setHistoryBusy] = useState(false);
+  const [maintenance, setMaintenance] = useState<SessionMaintenanceStatus>();
   const historyRaw = useRef<unknown[]>([]);
   const historySession = useRef<string | undefined>(undefined);
   const historyStorage = useRef<string | undefined>(undefined);
@@ -831,6 +833,25 @@ export function App() {
     setSessionList(threads);
     return status;
   }, []);
+
+  useEffect(() => {
+    const api = window.harness.sessions;
+    if (!api.maintenance || !api.onMaintenance || !api.onChanged) return;
+    let gone = false;
+    let version = -1;
+    const update = (status: SessionMaintenanceStatus) => {
+      if (gone || (status.version ?? 0) < version) return;
+      version = status.version ?? 0;
+      setMaintenance(status);
+      if (status.state === "ready") void refresh().catch(() => undefined);
+    };
+    const offStatus = api.onMaintenance(update);
+    const offChanged = api.onChanged(() => {
+      void api.list().then((rows) => { if (!gone) setSessionList(rows); }).catch(() => undefined);
+    });
+    void api.maintenance().then(update).catch(() => undefined);
+    return () => { gone = true; offStatus(); offChanged(); };
+  }, [refresh, setSessionList]);
 
   const resolveSandbox = useCallback(async (asProject: boolean, mode: PermissionMode, cwd?: string) => {
     if (!asProject) return "read-only" as const;
@@ -2172,6 +2193,14 @@ export function App() {
         )}
       >
         <div className="section-label">{t("nav.sectionProjects")}</div>
+        {maintenance && maintenance.state !== "ready" && (
+          <div className="session-index-status" role="status">
+            <span>{t(maintenance.state === "failed" ? "chat.historyMaintenanceFailed" : "chat.historyMaintenance")}</span>
+            {maintenance.total > 0 && <small>{maintenance.completed} / {maintenance.total}</small>}
+            {maintenance.error && <details><summary>{t("chat.errorDetails")}</summary><p>{maintenance.error}</p></details>}
+            {maintenance.state === "failed" && <button type="button" className="ghost" onClick={() => void window.harness.sessions.maintain().catch((error) => setToast(agentErrorToast(error)))}>{t("common.retry")}</button>}
+          </div>
+        )}
         {projects.length === 0 && <p className="sidebar-empty">{t("nav.noProjects")}</p>}
         {projects.map(({ item, sessions: threads }) => {
           const open = openProjects[item.path] === true;

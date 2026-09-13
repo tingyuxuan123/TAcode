@@ -87,6 +87,10 @@ const api: DesktopApi = {
   },
   sessions: {
     list: (cwd) => ipcRenderer.invoke("sessions:list", cwd),
+    maintenance: () => ipcRenderer.invoke("sessions:maintenance"),
+    maintain: () => ipcRenderer.invoke("sessions:maintain"),
+    onMaintenance: (listener) => subscribe("sessions:maintenance", listener),
+    onChanged: (listener) => subscribe("sessions:changed", listener),
     /** 只读读取某个会话转录（含子代理子会话），不启动 worker、不切活动会话。 */
     read: (sessionPath, options) => ipcRenderer.invoke("sessions:read", sessionPath, options),
     remove: (id) => ipcRenderer.invoke("sessions:remove", id),
