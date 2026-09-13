@@ -1122,7 +1122,12 @@ function registerIpc(): void {
           loadedSessions.delete(childPath);
           deletedSessionPaths.add(childPath);
         }
-        await store.archive(child.id).catch(() => undefined);
+        await store.archive(child.id).catch(async (error: unknown) => {
+          // 转录文件不在盘上（老的进程内委派、手动清理过的子会话）时 rename 必然失败：
+          // 文件无从迁移，退化为只归档 DB 行，别让它以孤儿身份留在列表里；其余错误上抛。
+          if (child.storagePath && fs.existsSync(child.storagePath)) throw error;
+          await store.archiveRowOnly(child.id);
+        });
       }
       // 同步清理该会话对应的 host（停止并移出注册表），避免删除后残留后台进程。
       for (const path of targets) {

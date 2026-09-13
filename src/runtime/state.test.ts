@@ -52,6 +52,32 @@ describe("TacodeStateStore delegation metadata", () => {
     }
   });
 
+  it("archives a row whose transcript file is missing without touching the disk", async () => {
+    const store = new TacodeStateStore(":memory:");
+    try {
+      store.createDelegatedThread({
+        id: "child-lost",
+        sessionPath: "/tmp/child-lost.jsonl",
+        cwd: "/tmp/workspace",
+        title: "Lost transcript",
+        provider: "deepseek",
+        parentSessionPath: "/tmp/parent.jsonl",
+        sourceDelegationId: "delegation-lost",
+        delegationRole: "explorer",
+        delegationStatus: "completed",
+        delegationDepth: 1,
+        delegationGoal: "Gone",
+      });
+      // 文件从未落盘：archive() 的 rename 会 ENOENT，级联删除退化为只归档 DB 行。
+      await expect(store.archive("child-lost")).rejects.toThrow();
+      const row = await store.archiveRowOnly("child-lost");
+      expect(row).toMatchObject({ id: "child-lost", archived: true });
+      expect(store.list({ parentSessionPath: "/tmp/parent.jsonl" })).toHaveLength(0);
+    } finally {
+      store.close();
+    }
+  });
+
   it("migrates an existing v1 threads table before creating delegation indexes", () => {
     const root = mkdtempSync(join(tmpdir(), "tacode-state-migration-"));
     const file = join(root, "state.sqlite");

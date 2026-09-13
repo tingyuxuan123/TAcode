@@ -400,6 +400,20 @@ export class TacodeStateStore {
     return this.get(id);
   }
 
+  /**
+   * 只归档 DB 行、不动磁盘文件。转录文件已经不在盘上的残留会话（老的进程内委派、
+   * 手动清理过的子会话）走 `archive` 会因 rename ENOENT 失败，只能这样归档：
+   * 文件本来就无从迁移，留着未归档的行反而会让它以孤儿身份一直挂在列表里。
+   */
+  async archiveRowOnly(id: string): Promise<TacodeThread | undefined> {
+    const current = this.get(id);
+    if (!current || current.archived) return current;
+    this.database
+      .prepare("UPDATE threads SET archived = 1, updated_at = ? WHERE id = ?")
+      .run(Date.now(), id);
+    return this.get(id);
+  }
+
   async unarchive(id: string): Promise<TacodeThread | undefined> {
     const current = this.get(id);
     if (!current || !current.archived) return current;
