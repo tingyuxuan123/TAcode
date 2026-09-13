@@ -16,3 +16,11 @@
 - 证据与边界：docs/file-review-fr-01.md；原始结果 docs/file-review-reference/fr-01-result.json；截图在当前任务 visualizations 的 file-review/fr-01 目录。
 - 下一项 FR-02，独立 Git 读取；FR-01 的保存/Git 按钮目前由夹具回调验证，真实后端尚未接入。总目标保持 active。
 - main 已有 UX-09（2ffc3ac）/UX-10（d18d584）提交；另一任务继续 UX-11。本分支先完成独立 Git 模块，在 FR-06 前吸收文件索引/预览提交。
+
+## 2026-09-13 FR-02 完成
+
+- 独立 GitProcess / GitReader / 补丁解析模块及 shared/git.ts，提供四种真实比较范围、仓库/分支信息和不可变快照；没有改动主界面或原工作区。
+- index/working、HEAD/index、指定提交第一父提交、分支 merge-base 语义完成。Git 对象批量读取；支持 worktree、根提交、重命名/二进制、BOM/CRLF、特殊路径、冲突 index 和子模块指针。
+- 路径父目录 realpath/O_NOFOLLOW、异步子进程和取消/超时/输出边界；两次核对发现读取竞态后有界重试。未跟踪文本有总量预算，超限和空/二进制分开；行数仍来自 Git。
+- 定向 26 用例通过；全量 121 文件 / 1053 用例、typecheck、diff check 通过。详细证据见 docs/file-review-fr-02.md。
+- 下一项 FR-03：Git typed IPC、项目隔离和实时订阅，接入 ReviewWorkbench。FR-04/05 的写操作、FR-06 起的生产文件服务、评论/AI 及总验收仍未完成；目标保持 active。

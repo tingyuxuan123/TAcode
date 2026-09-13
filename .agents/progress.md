@@ -1116,3 +1116,9 @@
 - 专项在独立工作树 `.worktrees/file-review-workbench` / `codex/file-review-workbench` 实施，不覆盖原工作区正在运行的优化任务。
 - 完整范围见 `docs/file-review-workbench.md`；15 项验收见 `.agents/file-review/features.json`；详细进度见 `.agents/file-review/progress.md`。
 - FR-01 基础组件与离线 Electron 验收完成，120 文件 / 1027 测试、typecheck 通过。下一项 FR-02 Git 读取；总目标未完成，原 UX 清单不在本阶段改动。
+
+## 2026-09-13：文件与审查专项 FR-02
+
+- 独立 Git 读取服务及 26 个真实仓库用例完成；四种范围、worktree、特殊路径、二进制/冲突状态和读取竞态均有验证。
+- 全量 121 文件 / 1053 测试、typecheck 通过。详细进度与边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-02.md`。
+- 下一项 FR-03：将真实 Git 快照、项目隔离和订阅接到审查组件。仍在独立分支实施，原工作区不切换/重置。
