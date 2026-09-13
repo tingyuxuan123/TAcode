@@ -279,6 +279,7 @@ export function Chat({
   onSidebarAutoCollapse,
   inspectFocusToken,
   inspectMinWidth = 0,
+  drawerSignal = 0,
 }: {
   children: ReactNode;
   composer?: ReactNode;
@@ -290,10 +291,13 @@ export function Chat({
   onSidebarAutoCollapse?(): void;
   inspectFocusToken?: number;
   inspectMinWidth?: number;
+  /** App 侧请求把右侧抽屉打开（用户点开子会话标签时）——自增一次触发一次。 */
+  drawerSignal?: number;
 }) {
   const { t } = useI18n();
   const [drawer, setDrawer] = useState(true);
   useEffect(() => { if (inspectFocusToken) setDrawer(true); }, [inspectFocusToken]);
+  useEffect(() => { if (drawerSignal) setDrawer(true); }, [drawerSignal]);
   const [panelHeaderHost, setPanelHeaderHost] = useState<HTMLDivElement | null>(null);
   useEffect(() => window.harness.browser.onAgentPresentation((event) => {
     if (event.action !== "close") setDrawer(true);

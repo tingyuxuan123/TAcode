@@ -539,15 +539,17 @@ export function App() {
     panelDispatch({ type: "session-changed", ...(activeSession ? { sourceSession: activeSession } : {}) });
   }, [activeSession, panelDispatch]);
   const sidebarLayout = useSidebarLayout();
-  // 用户点开子会话的统一入口（侧栏行 + 委派卡片行都走这里）：侧栏收着时顺手展开。
-  // 点击结果落在右侧面板，收起的侧栏自己毫无反应，会让人以为没点上。自动开标签
-  // （useDelegationTabs 的后台刷新）直接走 browserPanels 原入口、不经过这里，不抢侧栏。
+  // 用户点开子会话的统一入口（侧栏行 + 委派卡片行都走这里）。除了把标签放进右侧
+  // 工作台，还要把**关着的右侧抽屉拉开**：标签加进了一个看不见的抽屉等于没反应——
+  // 这正是「点了子会话没效果」的根因。自动开标签（useDelegationTabs 的后台刷新）
+  // 直接走 browserPanels 原入口、不经过这里，不抢抽屉。
+  const [drawerSignal, setDrawerSignal] = useState(0);
   const openChildSessionFromClick = useCallback(
     (...args: Parameters<typeof browserPanels.openChildSession>) => {
       browserPanels.openChildSession(...args);
-      if (sidebarLayout.collapsed) sidebarLayout.toggle();
+      setDrawerSignal((value) => value + 1);
     },
-    [browserPanels.openChildSession, sidebarLayout],
+    [browserPanels.openChildSession],
   );
   // 供深链组件（委派卡片）打开子代理标签：卡片在 ui.tsx 的模块级 renderTool 里渲染，拿不到这里的 props。
   const panelActions = useMemo(
@@ -2043,6 +2045,7 @@ export function App() {
       <PanelActionsProvider actions={panelActions}>
       <Chat
         onSidebarAutoCollapse={sidebarLayout.collapseAutomatically}
+        drawerSignal={drawerSignal}
         inspectFocusToken={inspectFocusToken}
         inspectMinWidth={browserPanels.active === "skills" || browserPanels.active === "mcp" ? 440 : 0}
         home={home}
