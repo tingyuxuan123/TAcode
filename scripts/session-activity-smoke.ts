@@ -64,8 +64,8 @@ async function smoke() {
     cwd: project, createdAt: now, updatedAt: now, messageCount: 2, pinned: false, archived: false,
   }));
   const transcript = (file: string) => [
-    { role: "user", content: [{ type: "text", text: `${path.basename(file)} 的问题` }], timestamp: 1 },
-    { role: "assistant", content: [{ type: "text", text: `${path.basename(file)} 的回复` }], stopReason: "stop", timestamp: 2 },
+    { role: "user", content: [{ type: "text", text: `${path.basename(file)} 的问题` }], timestamp: Date.parse(now) + 1 },
+    { role: "assistant", content: [{ type: "text", text: `${path.basename(file)} 的回复` }], stopReason: "stop", timestamp: Date.parse(now) + 2 },
   ];
   const writeTranscript = (file: string, count = 2) => writeFile(file, Array.from({ length: count }, (_, index) => ({
     type: "message", id: `entry-${index}`, parentId: index ? `entry-${index - 1}` : null,
@@ -398,6 +398,22 @@ async function smoke() {
     await select("A");
     const a = manager.findBySession(sessions[0].path)!;
     if (!draftSmoke && !imeSmoke) emit(a, { type: "agent_start" });
+    if (process.env.TACODE_CHECKPOINT_SMOKE === "1") {
+      stage = "checkpoint stages are visible in the command row";
+      emit(a, { type: "tool_execution_start", toolCallId: "checkpoint-command", toolName: "exec_command", args: { cmd: "node -e empty" } });
+      for (const [phase, label] of [["before", "准备文件检查"], ["after", "检查文件改动"]]) {
+        emit(a, { type: "tool_execution_update", toolCallId: "checkpoint-command", toolName: "exec_command", partialResult: { content: [{ type: "text", text: label }], details: { checkpointPhase: phase } } });
+        await wait(() => evaluate(`document.querySelector('[data-tool-id="checkpoint-command"] .flow-tool-state')?.textContent === ${JSON.stringify(label)}`));
+        await wait(() => evaluate(`Array.from(document.querySelectorAll('.flow-status')).some(el => el.textContent === ${JSON.stringify(label)} && el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))`));
+      }
+      await evaluate("new Promise(resolve => setTimeout(resolve, 350))");
+      await screenshot("checkpoint-stage.png");
+      emit(a, { type: "tool_execution_end", toolCallId: "checkpoint-command", toolName: "exec_command", result: { content: [{ type: "text", text: "done" }], details: { running: false } } });
+      await wait(() => evaluate("!document.querySelector('[data-tool-id=checkpoint-command] .flow-tool-state')"));
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      console.log("Checkpoint UI smoke passed: preparation, after-command check, final state.");
+      return;
+    }
     stage = "open B while A runs";
     await select("B");
     const b = manager.findBySession(sessions[1].path)!;

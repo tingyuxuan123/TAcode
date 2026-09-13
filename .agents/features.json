@@ -37,7 +37,7 @@
   {
     "id": "UX-08",
     "description": "缩短命令前后的文件检查。验收：同一代表性项目中对简单命令连续测量，分别统计检查与命令本身耗时，优化后检查耗时明显下降；新增、删除、重命名、同大小覆写仍能正确撤销；超限范围有说明。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-08。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "UX-09",

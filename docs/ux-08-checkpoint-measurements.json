@@ -1,0 +1,148 @@
+{
+  "date": "2026-09-13T11:00:35.518Z",
+  "baselineRevision": "dca5047",
+  "cpu": "Apple M5",
+  "platform": "darwin",
+  "os": "25.6.0",
+  "files": 331,
+  "samples": [
+    {
+      "mode": "baseline",
+      "round": 0,
+      "totalMs": 98.095125,
+      "commandMs": 20.96875,
+      "scanMs": 77.13162500000004,
+      "reads": 662
+    },
+    {
+      "mode": "cached",
+      "round": 0,
+      "totalMs": 46.85133400000001,
+      "commandMs": 22.595708000000002,
+      "scanMs": 24.256209000000013,
+      "reads": 331,
+      "metrics": {
+        "beforeMs": 18.041457999999977,
+        "commandMs": 22.59887500000002,
+        "afterMs": 5.934917000000041,
+        "reads": 331,
+        "cacheHits": 331
+      }
+    },
+    {
+      "mode": "cached",
+      "round": 1,
+      "totalMs": 32.818916,
+      "commandMs": 20.748374999999953,
+      "scanMs": 12.070750000000032,
+      "reads": 0,
+      "metrics": {
+        "beforeMs": 5.975999999999999,
+        "commandMs": 20.75270900000004,
+        "afterMs": 5.936792000000025,
+        "reads": 0,
+        "cacheHits": 662
+      }
+    },
+    {
+      "mode": "baseline",
+      "round": 1,
+      "totalMs": 88.70224999999999,
+      "commandMs": 20.560958000000028,
+      "scanMs": 68.14150000000001,
+      "reads": 662
+    },
+    {
+      "mode": "baseline",
+      "round": 2,
+      "totalMs": 88.68795899999998,
+      "commandMs": 20.183791999999926,
+      "scanMs": 68.50462500000003,
+      "reads": 662
+    },
+    {
+      "mode": "cached",
+      "round": 2,
+      "totalMs": 32.482332999999926,
+      "commandMs": 21.841625000000022,
+      "scanMs": 10.640915999999947,
+      "reads": 0,
+      "metrics": {
+        "beforeMs": 5.182290999999964,
+        "commandMs": 21.848542000000066,
+        "afterMs": 5.313333000000057,
+        "reads": 0,
+        "cacheHits": 662
+      }
+    },
+    {
+      "mode": "cached",
+      "round": 3,
+      "totalMs": 34.55912500000011,
+      "commandMs": 21.204458000000045,
+      "scanMs": 13.355416999999989,
+      "reads": 0,
+      "metrics": {
+        "beforeMs": 7.579833000000008,
+        "commandMs": 21.212417000000073,
+        "afterMs": 5.602082999999993,
+        "reads": 0,
+        "cacheHits": 662
+      }
+    },
+    {
+      "mode": "baseline",
+      "round": 3,
+      "totalMs": 86.99324999999999,
+      "commandMs": 20.14579100000003,
+      "scanMs": 66.847668,
+      "reads": 662
+    },
+    {
+      "mode": "baseline",
+      "round": 4,
+      "totalMs": 90.49791700000003,
+      "commandMs": 21.90279200000009,
+      "scanMs": 68.59537499999988,
+      "reads": 662
+    },
+    {
+      "mode": "cached",
+      "round": 4,
+      "totalMs": 33.64512500000001,
+      "commandMs": 21.245000000000005,
+      "scanMs": 12.400250000000028,
+      "reads": 0,
+      "metrics": {
+        "beforeMs": 5.260291000000052,
+        "commandMs": 21.25412499999993,
+        "afterMs": 7.033584000000019,
+        "reads": 0,
+        "cacheHits": 662
+      }
+    },
+    {
+      "mode": "cached",
+      "round": 5,
+      "totalMs": 30.05129199999999,
+      "commandMs": 19.645415999999955,
+      "scanMs": 10.406041999999957,
+      "reads": 0,
+      "metrics": {
+        "beforeMs": 5.067166000000043,
+        "commandMs": 19.651875000000018,
+        "afterMs": 5.229208000000085,
+        "reads": 0,
+        "cacheHits": 662
+      }
+    },
+    {
+      "mode": "baseline",
+      "round": 5,
+      "totalMs": 87.71008400000017,
+      "commandMs": 21.14208300000007,
+      "scanMs": 66.56820900000002,
+      "reads": 662
+    }
+  ]
+}

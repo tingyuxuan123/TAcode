@@ -132,6 +132,10 @@ const Thought = memo(function Thought({ itemId, text, active, expanded, pending,
 });
 
 const toolIcons = { think: Brain, run: SquareTerminal, write: FilePenLine, read: FileText, search: Search, look: Globe, tool: Wrench };
+function checkpointPhase(tool?: ToolActivity): "before" | "after" | undefined {
+  const phase = tool?.details && typeof tool.details === "object" && "checkpointPhase" in tool.details ? tool.details.checkpointPhase : undefined;
+  return phase === "before" || phase === "after" ? phase : undefined;
+}
 const ToolLine = memo(function ToolLine({ itemId, tool, workspace, expanded, onToggle, onOpenFile, render }: {
   itemId: string; tool: ToolActivity; workspace?: string; expanded: boolean; onToggle(id: string, defaultOpen?: boolean): void;
   /** 文件类工具行点击时在右侧面板开文件标签（对齐 ZCode 的 code viewer）；缺省回退行内展开。 */
@@ -144,7 +148,8 @@ const ToolLine = memo(function ToolLine({ itemId, tool, workspace, expanded, onT
   const pending = tool.status === "running";
   const error = tool.status === "error";
   const unknown = tool.resultRecorded === false && !pending;
-  const state = tool.interrupted ? t("flow.interrupted") : pending ? t("flow.running") : error ? t("flow.failed") : unknown ? t("flow.unrecorded") : "";
+  const phase = checkpointPhase(tool);
+  const state = tool.interrupted ? t("flow.interrupted") : pending ? t(phase === "before" ? "flow.preparingFiles" : phase === "after" ? "flow.checkingFiles" : "flow.running") : error ? t("flow.failed") : unknown ? t("flow.unrecorded") : "";
   const id = useId();
   // 文件行（读取/写入/编辑）点击开右侧文件标签，不做行内展开——对齐 ZCode 的
   // code viewer 交互；没有 onOpenFile（探针环境）时保持旧行为。
@@ -285,7 +290,11 @@ export function ExecutionFlow({ view, live, streaming, awaiting, stopping, inter
     });
   }, []);
   const toolMap = useMemo(() => new Map(view.tools.map((tool) => [tool.id, tool])), [view.tools]);
-  const status = stopping ? t("flow.stopping") : awaiting ? t("flow.awaiting") : interrupted ? t("flow.interrupted") : live ? t("flow.running") : failed ? t("flow.failed") : unknown ? t("flow.unrecorded") : !view.reply.length ? t("flow.ended") : "";
+  let phase: "before" | "after" | undefined;
+  for (let i = view.tools.length - 1; i >= 0; i--) {
+    if (view.tools[i]!.status === "running") { phase = checkpointPhase(view.tools[i]); break; }
+  }
+  const status = stopping ? t("flow.stopping") : awaiting ? t("flow.awaiting") : interrupted ? t("flow.interrupted") : live ? t(phase === "before" ? "flow.preparingFiles" : phase === "after" ? "flow.checkingFiles" : "flow.running") : failed ? t("flow.failed") : unknown ? t("flow.unrecorded") : !view.reply.length ? t("flow.ended") : "";
   const runningCount = view.tools.filter((tool) => tool.status === "running").length;
   const summary = useMemo(() => {
     const toolCount = view.tools.length;

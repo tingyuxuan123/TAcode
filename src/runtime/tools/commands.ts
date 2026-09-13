@@ -8,7 +8,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { clipForModel } from "./files.js";
-import { captureWorkspaceCheckpoint, type Checkpoint } from "./checkpoint.js";
+import { captureWorkspaceCheckpoint, WorkspaceCheckpointCache, type Checkpoint } from "./checkpoint.js";
 import { ManagedProcessRegistry, type ManagedResult } from "./managed-process.js";
 import {
   commandNeedsNetwork,
@@ -196,6 +196,7 @@ export function registerCommandTools(pi: ExtensionAPI, options: CommandToolOptio
  */
 export function createCommandTools(options: CommandToolOptions) {
   const { registry, getPermission, access, sandboxFor, onAccessChanged, onCheckpoint, readOnly } = options;
+  const checkpointCache = new WorkspaceCheckpointCache();
 
   const execTool: ToolDefinition<typeof execCommandParameters, ManagedResult> = {
     name: "exec_command",
@@ -239,6 +240,7 @@ export function createCommandTools(options: CommandToolOptions) {
         );
       }
       let liveTimer: NodeJS.Timeout | undefined;
+      let latestResult: ManagedResult | undefined;
       const publishLive = (result: ManagedResult) => {
         if (!onUpdate || liveTimer) return;
         liveTimer = setTimeout(() => {
@@ -250,8 +252,8 @@ export function createCommandTools(options: CommandToolOptions) {
         }, 250);
         liveTimer.unref?.();
       };
-      const run = (current: EffectiveAccess) =>
-        registry.start(params.cmd, {
+      const run = async (current: EffectiveAccess) => {
+        latestResult = await registry.start(params.cmd, {
           cwd: ctx.cwd,
           sandbox: sandboxFor(current.sandbox, current.network),
           yieldTimeMs: normalized.yieldTimeMs,
@@ -259,9 +261,11 @@ export function createCommandTools(options: CommandToolOptions) {
           ...(signal ? { signal } : {}),
           onOutput: (partial) => publishLive(partial),
         });
+        return latestResult;
+      };
       try {
         const workspace = new Workspace(ctx.cwd);
-        const { checkpoint, result } = await captureWorkspaceCheckpoint(workspace, params.cmd, async () => {
+        const captured = await captureWorkspaceCheckpoint(workspace, params.cmd, async () => {
           let currentResult = await run(commandAccess);
           const boundary = detectSandboxBoundary(params.cmd, currentResult, commandAccess);
           if (boundary && !(getPermission() === "plan" && boundary === "host")) {
@@ -278,8 +282,16 @@ export function createCommandTools(options: CommandToolOptions) {
             currentResult = await run(commandAccess);
           }
           return currentResult;
-        });
-        if (checkpoint && !result.running) onCheckpoint(checkpoint);
+        }, { cache: checkpointCache, signal, onPhase: (phase) => {
+          if (liveTimer) { clearTimeout(liveTimer); liveTimer = undefined; }
+          onUpdate?.({ content: [{ type: "text", text: phase === "before" ? "正在准备文件检查…" : "正在检查文件改动…" }], details: {
+            processId: "", running: true, output: "", command: params.cmd, warnings: [], sandbox: commandAccess.sandbox,
+            ...latestResult, checkpointPhase: phase,
+          } });
+        } });
+        const { checkpoint } = captured;
+        const result = { ...captured.result, warnings: [...captured.result.warnings, ...captured.warnings], checkpointMetrics: captured.metrics };
+        if (checkpoint) onCheckpoint(checkpoint);
         return {
           content: [{ type: "text", text: formatManagedResult(result, false, normalized.notes) }],
           details: result,

@@ -12,6 +12,7 @@ import { lintShellCommand } from "./command-lint.js";
 import { BoundedOutput } from "./process.js";
 import { killProcessTree, trackDetachedChild } from "./process-tree.js";
 import { sandboxCommand, type SandboxOptions } from "./sandbox.js";
+import type { CheckpointMetrics } from "./checkpoint.js";
 
 /**
  * 进程结束后的保留时间：结束后仍然可以轮询到最终输出，而不是立刻变成
@@ -35,6 +36,8 @@ export interface ManagedResult {
   exitCode?: number | null;
   timedOut?: boolean;
   sandbox: string;
+  checkpointPhase?: "before" | "after";
+  checkpointMetrics?: CheckpointMetrics;
 }
 
 export interface ManagedListEntry {

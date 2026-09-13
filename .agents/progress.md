@@ -1100,3 +1100,13 @@
 - 验证：全量 **117 文件 / 1017 测试通过**，`pnpm typecheck`、`git diff --check` 通过。1000 会话仅修改一条的用例确认 **1 次全文读取、0 次目录枚举**；30 次重复变化合并为一次通知，重复列表读取复用连接。覆盖外部新增/删除、真实 watcher 回收和归档竞态。
 - `TACODE_SESSION_LIST_SMOKE=1 node scripts/test-session-activity.mjs` 通过真实 renderer/preload/Electron/SQLite 下的置顶、中文重命名、外部改名、归档及迟到响应，未创建 worker；后台审批桌面回归通过。首次夹具失败来自合成 JSONL 缺结尾换行，修正夹具后通过；既有 ResizeObserver 警告仍留 UX-13。
 - 下一项：UX-08 命令 checkpoint 的性能与撤销正确性，先测量再缩小文件读取范围。整份目标继续 active。
+
+## 2026-09-13：UX-08 命令文件检查与撤销边界
+
+- [x] 文件身份、mtime/ctime 纳秒时间戳、大小和权限均未变化时复用已读内容与哈希；目录仍核对新增/删除。16 路有界读取，缓存只保留最近工作区的一次扫描；近期粗粒度时间戳/无 ctime 保守重读。检查中持续变化、无法读取、符号链接和非 UTF-8 文件明确排除，不推断为新增/删除。
+- [x] 严格执行 2000 文件、单个 1 MB、扫描 32 MiB、每个 checkpoint 500 变更/约 4 MiB 的边界并提示；达到上限后仍优先复查已覆盖文件。保存 BOM、同大小覆写、原子替换和权限；主进程恢复已有文件后显式恢复权限。
+- [x] 执行行及过程摘要显示“准备文件检查 / 检查文件改动”。仍运行的后台命令跳过结束扫描，并明确告知其改动不在本次自动撤销中，不保存尚未完成的快照；普通结束和已中止的写入继续检查。
+- 文件：runtime/tools/checkpoint.ts、commands.ts、managed-process.ts；main/index.ts；renderer/execution-flow.tsx、shared/i18n.ts；相关测试、桌面夹具和基准脚本。
+- 验证：全量 **119 文件 / 1023 测试通过**；后续补齐摘要阶段与保守时间戳路径后 6 个定向测试、`pnpm typecheck`、`git diff --check` 通过。真实受管命令覆盖写盘和异步边界；`TACODE_CHECKPOINT_SMOKE=1 node scripts/test-session-activity.mjs` 通过两个阶段及结束态的可见性验证，已查看截图 `ux-08/checkpoint-stage.png`。
+- 同本仓库 331 文件副本、交替六轮，后五轮检查中位数 **68.14 → 12.07 ms**，总耗时 **88.69 → 32.82 ms**，重复全文读取 **662 → 0 次**；首轮检查 **77.13 → 24.26 ms**。条件/原始数据见 `docs/ux-08-checkpoint-performance.md` 和 JSON，不将本地 APFS 样本外推到所有文件系统。
+- 下一项：UX-09 完整工作区文件检索与共享索引，处理深层文件和目录数量截断。整份目标继续 active。

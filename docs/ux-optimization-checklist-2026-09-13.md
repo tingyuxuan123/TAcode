@@ -96,7 +96,7 @@
 
   **定位与风险。** [listTacodeThreads](/Users/yfdl/project/TAcode/src/runtime/state.ts:509)、[TacodeStateStore.refresh](/Users/yfdl/project/TAcode/src/runtime/state.ts:208)、[列表刷新触发](/Users/yfdl/project/TAcode/src/renderer/App.tsx:1528)。风险中等；复用连接与减少全量扫描需要一起处理，单独换单例收益有限。
 
-- [ ] **UX-08 · 缩短命令前后的文件检查**
+- [x] **UX-08 · 缩短命令前后的文件检查**
 
   **代码确认 + 合成测量。** `exec_command` 的 checkpoint 在执行前后读取、哈希工作区文本文件。临时合成样本中，1000 个约 8.5 KB 文本文件包围一次空操作，约耗时 170ms，发生约 2000 次文件读取。代码中的 2000 文件判断位于递归目录入口，同一大目录仍可能超过该数量。
 

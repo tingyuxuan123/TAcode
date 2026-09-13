@@ -882,6 +882,7 @@ function registerIpc(): void {
               encoding: "utf8",
               ...(item.mode !== undefined ? { mode: item.mode } : {}),
             });
+            if (item.mode !== undefined) await fsp.chmod(item.resolved, item.mode);
           }
           restored.push(item.path);
         } catch (error) {
