@@ -9326,3 +9326,10 @@ kbd {
   color: #067647;
   font-size: calc(11.5px * var(--ui-font-scale));
 }
+.prompt-draft-notice {
+  margin: 0;
+  padding: 6px 12px 10px;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.5;
+}

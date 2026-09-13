@@ -16,6 +16,8 @@ import { effortLabelKey, reasoningLevelsAvailable } from "../shared/thinking";
 import type { ModelOption } from "../shared/model-selection";
 import { EffortPicker, ModelPicker, usePickerPopover } from "./composer-pickers";
 import { PromptToolbar } from "./prompt-toolbar";
+import { MAX_DRAFT_IMAGE_SIZE, type DraftImage } from "./composer-drafts";
+import { useComposerDraft } from "./use-composer-draft";
 import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, toolCommand, toolPath, toolSummary, toolWritePreview, toolWriteSource, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type DelegateTaskState, type FileChange, type SessionFile, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
 import { tokenizeCode } from "./highlight";
 import { isTightTableCell } from "./markdown-table";
@@ -2284,6 +2286,7 @@ function stripHtml(html: string): string {
 }
 
 export function PromptBar({
+  draftKey = "temporary",
   fillText,
   fillToken = 0,
   onSubmit,
@@ -2311,10 +2314,11 @@ export function PromptBar({
   skillCommands = [],
   placement = "dock",
 }: {
+  draftKey?: string;
   /** Parent bumps fillToken when it wants to inject/clear the composer (edit queue, restore, reset). */
   fillText?: string;
   fillToken?: number;
-  onSubmit(text?: string, images?: string[]): void;
+  onSubmit(text?: string, images?: string[]): boolean | void | Promise<boolean | void>;
   onStop(): void;
   steering?: string[];
   rootRef?: Ref<HTMLDivElement>;
@@ -2342,15 +2346,24 @@ export function PromptBar({
   placement?: "dock" | "hero";
 }) {
   const { t } = useI18n();
-  const [value, setValue] = useState("");
+  const { store: drafts, draft } = useComposerDraft(draftKey);
+  const value = draft.text;
+  const attachments = draft.images;
+  const setValue = (text: string) => drafts.update(draftKey, { text });
+  const setAttachments = (update: DraftImage[] | ((previous: DraftImage[]) => DraftImage[])) =>
+    drafts.update(draftKey, { images: typeof update === "function" ? update(drafts.get(draftKey).images) : update });
   const [cursor, setCursor] = useState(0);
   const [files, setFiles] = useState<string[]>([]);
   const [listing, setListing] = useState(false);
   const [picked, setPicked] = useState(0);
   const [dropOver, setDropOver] = useState(false);
   const [blank, setBlank] = useState(true);
-  const [attachments, setAttachments] = useState<Array<{ id: string; name: string; dataUri: string }>>([]);
   const [attachmentView, setAttachmentView] = useState<string>();
+  const [draftError, setDraftError] = useState("");
+  const submitting = useRef(false);
+  const currentKey = useRef(draftKey);
+  currentKey.current = draftKey;
+  const lastFillToken = useRef(fillToken);
   const skipHydrate = useRef(false);
   const area = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -2359,7 +2372,9 @@ export function PromptBar({
   const matches = mention ? filterMentionPaths(files, mention.query) : [];
 
   useEffect(() => {
-    setValue(fillText ?? "");
+    if (lastFillToken.current === fillToken) return;
+    lastFillToken.current = fillToken;
+    drafts.update(draftKey, { text: fillText ?? "" });
   }, [fillToken]);
 
   useEffect(() => {
@@ -2424,32 +2439,51 @@ export function PromptBar({
     menu.current?.querySelector(".on")?.scrollIntoView({ block: "nearest" });
   }, [picked]);
 
-  useEffect(() => {
+  const hydratedKey = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
     const root = area.current;
     if (!root) return;
-    if (skipHydrate.current) {
+    const changedScope = hydratedKey.current !== draftKey;
+    if (changedScope) {
+      hydratedKey.current = draftKey;
+      setAttachmentView(undefined);
+      setDraftError("");
+    }
+    setBlank(!value.trim() && attachments.length === 0);
+    if (skipHydrate.current && !changedScope) {
       skipHydrate.current = false;
       return;
     }
+    skipHydrate.current = false;
     if (serializePrompt(root) === value) return;
     hydratePrompt(root, value);
-    setBlank(isPromptEmpty(root) && attachments.length === 0);
-  }, [value]);
+  }, [draftKey, value, attachments.length]);
 
   const addUploads = async (list: FileList | File[]) => {
-    const next: Array<{ id: string; name: string; dataUri: string }> = [];
-    for (const file of [...list]) {
-      if (!file.type.startsWith("image/")) continue;
-      next.push({
-        id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()}`,
-        name: file.name,
-        dataUri: await readDataUri(file, t),
-      });
+    const next: DraftImage[] = [];
+    const target = drafts.follow(draftKey);
+    try {
+      for (const file of [...list]) {
+        if (!file.type.startsWith("image/")) continue;
+        if (file.size > MAX_DRAFT_IMAGE_SIZE * 0.75) throw new Error("draftImageSize");
+        next.push({
+          id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()}`,
+          name: file.name,
+          dataUri: await readDataUri(file, t),
+        });
+      }
+      if (next.length === 0 || target.discarded) return;
+      const previous = drafts.get(target.key).images;
+      if (previous.length + next.length > MAX_UPLOAD_IMAGES) throw new Error("draftImageCount");
+      drafts.update(target.key, { images: [...previous, ...next] });
+      if (currentKey.current === target.key) { setDraftError(""); area.current?.focus(); }
+    } catch (error) {
+      if (currentKey.current === draftKey) setDraftError(t(error instanceof Error && error.message === "draftImageBudget"
+        ? "composer.draftImageBudget" : error instanceof Error && error.message === "draftImageCount"
+          ? "composer.draftImageCount" : "composer.draftImageSize"));
+    } finally {
+      drafts.release(target);
     }
-    if (next.length === 0) return;
-    const room = MAX_UPLOAD_IMAGES - attachments.length;
-    setAttachments((prev) => [...prev, ...next].slice(0, MAX_UPLOAD_IMAGES));
-    if (room > 0) area.current?.focus();
   };
 
   const removeAttachment = (id: string) => {
@@ -2518,15 +2552,26 @@ export function PromptBar({
 
   const sendNow = () => {
     const root = area.current;
-    if (!root || disabled) return;
+    if (!root || disabled || !drafts.ready || submitting.current) return;
     const text = serializePrompt(root).trim();
     const refs = attachments.map((item) => item.dataUri);
     if (!text && refs.length === 0) return;
+    drafts.update(draftKey, { text: serializePrompt(root) });
+    const receipt = drafts.begin(draftKey);
+    submitting.current = true;
     root.replaceChildren();
     setBlank(true);
-    setValue("");
-    setAttachments([]);
-    onSubmit(text, refs.length ? refs : undefined);
+    skipHydrate.current = false;
+    void (async () => {
+      try {
+        const accepted = await onSubmit(text, refs.length ? refs : undefined);
+        drafts.finish(receipt.id, accepted !== false);
+      } catch {
+        drafts.finish(receipt.id, false);
+      } finally {
+        submitting.current = false;
+      }
+    })();
   };
 
   const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -2640,7 +2685,7 @@ export function PromptBar({
   const hero = placement === "hero";
   const folder = workspace ? baseName(workspace) : undefined;
   return (
-    <div ref={rootRef} className={hero ? "prompt-wrap hero" : "prompt-wrap"}>
+    <div ref={rootRef} className={hero ? "prompt-wrap hero" : "prompt-wrap"} data-draft-key={draftKey}>
       <div className="prompt-shell">
         {(hero || (steering && steering.length > 0)) && (
           <div className="prompt-topbar">
@@ -2725,7 +2770,8 @@ export function PromptBar({
         <div
           ref={area}
           className={blank ? "prompt-input empty" : "prompt-input"}
-          contentEditable={!dropOver}
+          contentEditable={!dropOver && drafts.ready}
+          aria-busy={!drafts.ready}
           suppressContentEditableWarning
           role="textbox"
           aria-multiline="true"
@@ -2807,7 +2853,7 @@ export function PromptBar({
               <i />
             </button>
           ) : (
-            <button type="submit" className="send" disabled={disabled || blank} aria-label={t("composer.send")}>
+            <button type="submit" className="send" disabled={disabled || blank || !drafts.ready} aria-label={t("composer.send")}>
               <Icon path="M12 19V5M5 12l7-7 7 7" size={15} />
             </button>
           )}>
@@ -2827,7 +2873,7 @@ export function PromptBar({
             className="prompt-attach"
             aria-label={t("composer.uploadImage")}
             title={t("composer.uploadImage")}
-            disabled={attachments.length >= MAX_UPLOAD_IMAGES}
+            disabled={attachments.length >= MAX_UPLOAD_IMAGES || !drafts.ready}
             onClick={() => picker.current?.click()}
           >
             <Icon path="M12 5v14M5 12h14" size={16} />
@@ -2852,6 +2898,9 @@ export function PromptBar({
           )}
         </PromptToolbar>
       </form>
+      {(draftError || drafts.storageError || draft.unconfirmed || draft.restored) && <p className="prompt-draft-notice" role="status">
+        {draftError || t(drafts.storageError ? "composer.draftStorageError" : draft.unconfirmed ? "composer.draftUnconfirmed" : "composer.draftRestored")}
+      </p>}
       {attachmentView && createPortal(
         <div className="modal" onClick={() => setAttachmentView(undefined)} onKeyDown={(event) => { if (event.key === "Escape") setAttachmentView(undefined); }}>
           <img className="lightbox" src={attachmentView} alt="" />

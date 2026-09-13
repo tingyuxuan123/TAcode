@@ -88,6 +88,7 @@ import { delegationPanelKey, type ChildSessionPanelInfo } from "./browser/panel-
 import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
 import { useAgentActivities } from "./use-agent-activities";
+import { composerDrafts, draftScope } from "./composer-drafts";
 import { SessionActivityError, SessionActivityIndicator } from "./session-activity";
 import logo from "./logo.svg";
 import { useI18n } from "./i18n";
@@ -816,6 +817,7 @@ export function App() {
     mode = permission,
     seedMessage?: ChatMessage,
     storagePath?: string,
+    sourceDraftKey?: string,
   ) => {
     const seq = ++startSeq.current;
     eventQueue.current?.clear();
@@ -891,7 +893,11 @@ export function App() {
       if (snapshot.activity) mergeActivity(snapshot.activity);
       runtimeIdRef.current = snapshot.runtimeId;
       const file = sessionFileOf(snapshot) ?? sessionPath;
-      if (file) sessionRef.current = file;
+      if (seedMessage && sourceDraftKey && file) composerDrafts().move(sourceDraftKey, draftScope(snapshot.cwd ?? cwd, file));
+      if (file) {
+        sessionRef.current = file;
+        setActiveSession(file);
+      }
       if (file && typeof snapshot.state.sessionName === "string" && snapshot.state.sessionName.trim() && !sessionTitlesRef.current.has(file)) {
         sessionTitlesRef.current.set(file, snapshot.state.sessionName);
       }
@@ -1154,7 +1160,6 @@ export function App() {
     setOpenProjects((current) => ({ ...current, [cwd]: true }));
     setMessages([]);
     setStats(undefined);
-    fillPrompt("");
     setSteering([]);
     setActiveSession(undefined);
     sessionRef.current = undefined;
@@ -1167,7 +1172,7 @@ export function App() {
     agentCwd.current = undefined;
     if (!running) await window.harness.agent.stop().catch(() => undefined);
     return true;
-  }, [applyThinkingForModel, fillPrompt, running, t]);
+  }, [applyThinkingForModel, running, t]);
   const openFolder = useCallback(async () => {
     const selected = await window.harness.workspace.choose();
     if (!selected) return;
@@ -1183,7 +1188,6 @@ export function App() {
     if (workspace) setOpenProjects((current) => ({ ...current, [workspace]: true }));
     setMessages([]);
     setStats(undefined);
-    fillPrompt("");
     setSteering([]);
     setRunning(false);
     setUiRequest(undefined);
@@ -1196,7 +1200,7 @@ export function App() {
     agentCwd.current = undefined;
     await window.harness.agent.command("abort").catch(() => undefined);
     await window.harness.agent.stop().catch(() => undefined);
-  }, [fillPrompt, workspace]);
+  }, [workspace]);
 
   const removeSession = useCallback(async (session: SessionSummary) => {
     if (isSameSession(session, activeSession)) {
@@ -1217,6 +1221,7 @@ export function App() {
     }
     try {
       await window.harness.sessions.remove(session.id);
+      composerDrafts().remove(draftScope(session.cwd, session.path));
       sessionTitlesRef.current.delete(session.path);
       setSessionList(await window.harness.sessions.list());
     } catch (error) {
@@ -1393,30 +1398,31 @@ export function App() {
     }
   }, [loading, running]);
 
-  const sendMessage = useCallback(async (preset?: string, images?: string[]) => {
+  const sendMessage = useCallback(async (preset?: string, images?: string[], sourceDraftKey?: string): Promise<boolean> => {
     const text = (preset ?? "").trim();
     if (text === "/undo") {
-      if (running) return;
-      fillPrompt("");
+      if (running) return false;
       void undoLastTurn();
-      return;
+      return true;
     }
-    if ((!text && !images?.length) || loading || modelSwitchBusy.current || sending.current) return;
+    if ((!text && !images?.length) || loading || modelSwitchBusy.current || sending.current) return false;
     if (running) {
-      if (text.startsWith("/")) return;
+      if (text.startsWith("/")) return false;
       const followup = text || t("toast.defaultImagePrompt");
-      fillPrompt("");
+      const targetRuntimeId = runtimeIdRef.current;
       try {
         const payload: Record<string, unknown> = { message: followup };
         if (images?.length) payload.images = toPromptImages(images);
-        await window.harness.agent.command("steer", payload);
-        setSteering((current) => (current.includes(followup) ? current : [...current, followup]));
-        setToast(t("toast.steered"));
+        await window.harness.agent.command("steer", payload, targetRuntimeId);
+        if (targetRuntimeId === runtimeIdRef.current) {
+          setSteering((current) => (current.includes(followup) ? current : [...current, followup]));
+          setToast(t("toast.steered"));
+        }
+        return true;
       } catch (error) {
-        fillPrompt(text);
         setToast(agentErrorToast(error));
+        return false;
       }
-      return;
     }
     sending.current = true;
     const question = text || t("toast.defaultImagePrompt");
@@ -1428,18 +1434,25 @@ export function App() {
       };
     });
     let optimistic: ChatMessage | undefined;
+    let targetRuntimeId = runtimeIdRef.current;
+    let targetSeq = startSeq.current;
+    const stillViewing = () => targetRuntimeId ? targetRuntimeId === runtimeIdRef.current : targetSeq === startSeq.current;
     try {
       let cwd = workspace ?? agentCwd.current;
       if (!cwd) {
         const opened = await openFolder();
-        if (!opened) return;
+        if (!opened) return false;
         cwd = opened;
+        if (sourceDraftKey) {
+          const nextKey = draftScope(cwd);
+          composerDrafts().move(sourceDraftKey, nextKey);
+          sourceDraftKey = nextKey;
+        }
       }
 
       // Paint the user turn immediately so first-send doesn't sit on the home screen.
       optimistic = optimisticUserMessage(question, false, thumbs);
       runEpoch.current += 1;
-      fillPrompt("");
       setMessages((current) => [...current, optimistic!]);
       setRunning(true);
 
@@ -1448,6 +1461,8 @@ export function App() {
         // session path remains so retry can restart the same transcript instead
         // of silently creating a new conversation.
         const sessionPath = sessionRef.current;
+        targetRuntimeId = undefined;
+        targetSeq = startSeq.current + 1;
         const started = await startAgent(
           cwd,
           sessionPath,
@@ -1455,29 +1470,34 @@ export function App() {
           Boolean(sessionPath),
           permission,
           optimistic,
+          undefined,
+          sourceDraftKey,
         );
         if (!started) {
           setMessages((current) => current.filter((item) => item.id !== optimistic!.id));
-          fillPrompt(text);
-          setRunning(false);
-          return;
+          if (stillViewing()) setRunning(false);
+          return false;
         }
-      } else if (!(await ensureModelReady())) {
-        setMessages((current) => current.filter((item) => item.id !== optimistic!.id));
-        fillPrompt(text);
-        setRunning(false);
-        return;
+        targetRuntimeId = runtimeIdRef.current;
+      } else {
+        const targetSession = sessionRef.current;
+        if (!(await ensureModelReady()) || targetSession !== sessionRef.current) {
+          setMessages((current) => current.filter((item) => item.id !== optimistic!.id));
+          if (stillViewing()) setRunning(false);
+          return false;
+        }
+        targetRuntimeId = runtimeIdRef.current;
       }
 
       if (!images?.length) {
-        await window.harness.agent.command("prompt", { message: question });
+        await window.harness.agent.command("prompt", { message: question }, targetRuntimeId);
       } else if (agentModelsRef.current.find((item) => item.provider === runtimeProviderRef.current && item.id === modelRef.current)?.input?.includes("image")
         ?? modelSupportsVision(modelRef.current)) {
         try {
           await window.harness.agent.command("prompt", {
             message: question,
             images: toPromptImages(images),
-          });
+          }, targetRuntimeId);
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           // Model declared vision but API rejected images — fall back to dedicated vision tool.
@@ -1485,26 +1505,27 @@ export function App() {
             throw error;
           }
           const message = visionAgentPrompt(question, await window.harness.vision.stage(images));
-          await window.harness.agent.command("prompt", { message });
+          await window.harness.agent.command("prompt", { message }, targetRuntimeId);
         }
       } else {
         const message = visionAgentPrompt(question, await window.harness.vision.stage(images));
-        await window.harness.agent.command("prompt", { message });
+        await window.harness.agent.command("prompt", { message }, targetRuntimeId);
       }
+      return true;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       const optimisticId = optimistic?.id;
       if (optimisticId) setMessages((current) => current.filter((item) => item.id !== optimisticId));
-      fillPrompt(text);
-      setRunning(false);
-      if (/Agent session closed|No workspace session is active|No active agent session/i.test(detail)) {
+      if (stillViewing()) setRunning(false);
+      if (stillViewing() && /Agent session closed|No workspace session is active|No active agent session/i.test(detail)) {
         dropAgentSession();
       }
       if (!/Agent session closed/.test(detail)) setToast(agentErrorToast(error));
+      return false;
     } finally {
       sending.current = false;
     }
-  }, [dropAgentSession, ensureModelReady, fillPrompt, loading, openFolder, permission, running, startAgent, t, undoLastTurn, workspace]);
+  }, [dropAgentSession, ensureModelReady, loading, openFolder, permission, running, startAgent, t, undoLastTurn, workspace]);
 
   useEffect(() => {
     void refresh().then((status) => {
@@ -1880,9 +1901,10 @@ export function App() {
   ).slice(0, 5);
   const composer = (
     <PromptBar
+      draftKey={draftScope(workspace, activeSession)}
       fillText={promptFill.text}
       fillToken={promptFill.token}
-      onSubmit={(text, images) => void sendMessage(text, images)}
+      onSubmit={(text, images) => sendMessage(text, images, draftScope(workspace, activeSession))}
       onStop={() => {
         const seq = startSeq.current;
         const epoch = runEpoch.current;

@@ -173,6 +173,12 @@ const zh = {
 
   "composer.placeholderWorkspace": "输入你的需求或问题，输入 @ 可选择文件…",
   "composer.placeholderEmpty": "输入你的想法或指令，或从上方选择项目开始…",
+  "composer.draftRestored": "未发送成功，文字和图片已恢复到草稿。",
+  "composer.draftUnconfirmed": "上次发送状态未确认，请先核对会话记录再发送。",
+  "composer.draftStorageError": "草稿暂时只保存在当前窗口，请勿关闭或刷新。",
+  "composer.draftImageSize": "图片读取失败或超过 6 MB，请选择较小的图片。",
+  "composer.draftImageCount": "每次最多添加 4 张图片。",
+  "composer.draftImageBudget": "草稿图片缓存已满，请先发送或移除其他草稿中的图片。",
   "composer.placeholderFollowup": "Enter 插话，Shift+Enter 换行",
   "composer.steering": "{n} 条插话",
   "composer.selectProject": "选择项目",
@@ -954,6 +960,12 @@ const en: Record<MessageKey, string> = {
     "This OS has no command sandbox. The agent needs direct read/write access to run commands.\n\nAllow access to:\n{cwd}",
 
   "composer.placeholderWorkspace": "Ask anything — type @ to attach files…",
+  "composer.draftRestored": "Sending failed. Your text and images are back in the draft.",
+  "composer.draftUnconfirmed": "The previous send was not confirmed. Check the conversation before sending again.",
+  "composer.draftStorageError": "This draft is only saved in this window. Keep it open until storage is available.",
+  "composer.draftImageSize": "The image could not be read or exceeds 6 MB. Choose a smaller image.",
+  "composer.draftImageCount": "Add up to 4 images at a time.",
+  "composer.draftImageBudget": "The draft image cache is full. Send or remove images from other drafts first.",
   "composer.placeholderEmpty":
     "Share an idea, or pick a project above to begin…",
   "composer.placeholderFollowup":

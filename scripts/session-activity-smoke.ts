@@ -8,6 +8,7 @@ import { AgentActivityStore } from "../src/main/agent-activity";
 import { AgentHost } from "../src/main/agent-host";
 import { AgentManager } from "../src/main/agent-manager";
 import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/types";
+import { testComposerDrafts, type ComposerSmokeControls } from "./composer-drafts-smoke";
 
 /** 真实 App + preload + Electron IPC + Host 行协议；生成事件由本地夹具驱动，不访问模型服务。 */
 async function smoke() {
@@ -23,6 +24,8 @@ async function smoke() {
   const replies: Array<{ runtimeId: string; id: string; confirmed?: boolean }> = [];
   const pendingPrompts = new Map<string, () => void>();
   const starts = new Map<string, number>();
+  const draftSmoke = process.env.TACODE_COMPOSER_SMOKE === "1";
+  const controls: ComposerSmokeControls = { configured: true, failStart: false, prompt: draftSmoke ? "reject" : "approval", submitted: [] };
   const activity = new AgentActivityStore((value) => main?.webContents.send("agent:activity", value));
   const now = new Date().toISOString();
   const sessions: SessionSummary[] = ["A", "B"].map((name) => ({
@@ -56,16 +59,22 @@ async function smoke() {
             replies.push({ ...request, runtimeId });
             if (request.id === "approve-a-2") pendingPrompts.get(runtimeId)?.();
           } else if (request.type === "prompt") {
-            pendingPrompts.set(runtimeId, () => {
-              emit(host, { type: "response", id: request.id, success: true, data: {} });
+            controls.submitted.push(request);
+            const complete = (accepted: boolean) => {
+              if (accepted) emit(host, { type: "agent_start" });
+              emit(host, { type: "response", id: request.id, success: accepted, data: {}, error: accepted ? undefined : "fixture rejected send" });
               pendingPrompts.delete(runtimeId);
-            });
+            };
+            if (controls.prompt === "approval") pendingPrompts.set(runtimeId, () => complete(true));
+            else if (controls.prompt === "delay") controls.completePrompt = complete;
+            else queueMicrotask(() => complete(controls.prompt === "accept"));
           }
           else queueMicrotask(() => emit(host, {
-            type: "response", id: request.id, success: true,
+            type: "response", id: request.id, success: !(controls.failSetup && request.type === "set_model"),
+            error: controls.failSetup && request.type === "set_model" ? "fixture model setup failed" : undefined,
             data: request.type === "get_state" ? { sessionFile: host.sessionKey, isStreaming: host.isInTurn(), model: { id: "fixture" }, thinkingLevel: "off" }
               : request.type === "get_messages" ? { messages: transcript(host.sessionKey!) }
-                : request.type === "get_available_models" ? { models: [{ id: "fixture", provider: "openai" }] }
+                : request.type === "get_available_models" ? { models: [{ id: "fixture", provider: "openai", input: ["text", "image"] }] }
                   : request.type === "get_available_thinking_levels" ? { levels: ["off"] }
                     : request.type === "get_commands" ? { commands: [] }
                       : request.type === "get_session_stats" ? { sessionFile: host.sessionKey } : {},
@@ -96,6 +105,7 @@ async function smoke() {
   const screenshot = async (name: string) => {
     const output = process.env.TACODE_UX_ARTIFACT_DIR;
     if (!output || !main) return;
+    await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     await mkdir(output, { recursive: true });
     await writeFile(path.join(output, name), (await main.webContents.capturePage()).toPNG());
   };
@@ -105,6 +115,10 @@ async function smoke() {
     ipcMain.handle("app:get-locale", () => "zh");
     ipcMain.handle("app:build-status", () => ({ restartRequired: false }));
     ipcMain.handle("app:config-notices", () => []);
+    ipcMain.handle("app:version", () => "test");
+    ipcMain.handle("providers:list", () => []);
+    ipcMain.handle("providers:defaults", () => ({ defaultProviderId: null, defaultModelId: null }));
+    ipcMain.handle("vision:config", () => ({ profiles: [], activeProfileId: "" }));
     ipcMain.handle("app:log-diagnostic", () => {});
     ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }]);
     ipcMain.handle("workspace:list", () => []);
@@ -112,7 +126,7 @@ async function smoke() {
     ipcMain.handle("sessions:list", () => sessions);
     ipcMain.handle("delegations:list", () => []);
     ipcMain.handle("skills:list", () => ({ skills: [], projectTrusted: true }));
-    ipcMain.handle("auth:status", () => [{ id: "openai", serviceId: "fixture", serviceVersion: "1", preferred: true, configured: true, defaultModel: "fixture", models: ["fixture"] }]);
+    ipcMain.handle("auth:status", () => [{ id: "openai", serviceId: "fixture", serviceVersion: "1", preferred: true, configured: controls.configured, defaultModel: "fixture", models: ["fixture"] }]);
     ipcMain.handle("agent:runtimes", () => manager.list());
     ipcMain.handle("agent:activities", () => activity.list());
     ipcMain.handle("agent:acknowledge-activity", (_event, id, version) => activity.acknowledge(id, version));
@@ -121,8 +135,10 @@ async function smoke() {
     ipcMain.handle("agent:stop", (_event, id) => manager.stop(id));
     ipcMain.handle("agent:ui-response", (_event, id, response, runtimeId) => manager.respondToUi(runtimeId, id, response));
     ipcMain.handle("agent:start", async (_event, options) => {
-      const snapshot = await manager.start({ ...options, cwd: project });
-      return { ...snapshot, cwd: project, activity: activity.bind(snapshot.runtimeId, options.sessionPath) };
+      if (controls.failStart) throw new Error("fixture worker startup failed");
+      const sessionPath = options.sessionPath ?? path.join(project, "new.jsonl");
+      const snapshot = await manager.start({ ...options, sessionPath, cwd: project });
+      return { ...snapshot, cwd: project, activity: activity.bind(snapshot.runtimeId, sessionPath) };
     });
     main = new BrowserWindow({
       width: 1440, height: 960, show: true, backgroundColor: "#f6f4f0",
@@ -136,10 +152,20 @@ async function smoke() {
     await evaluate("document.querySelector('.home-recent').click()");
     await select("A");
     const a = manager.findBySession(sessions[0].path)!;
-    emit(a, { type: "agent_start" });
+    if (!draftSmoke) emit(a, { type: "agent_start" });
     stage = "open B while A runs";
     await select("B");
     const b = manager.findBySession(sessions[1].path)!;
+    if (draftSmoke) {
+      await testComposerDrafts({ main, evaluate, select, wait, controls, screenshot, stage: (next) => { stage = next; }, failActive: () => {
+        const host = manager.activeHost()!;
+        emit(host, { type: "agent_end", messages: [{ role: "assistant", stopReason: "error", errorMessage: "fixture model failed after acceptance" }] });
+        emit(host, { type: "agent_settled" });
+      } });
+      assert.deepEqual(rendererErrors.filter((message) => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      console.log("Composer drafts smoke passed: two images, A/B isolation, reload, rejected send, concurrent edits, missing configuration, failed start, accepted send followed by model error.");
+      return;
+    }
     if (process.env.TACODE_ACTIVITY_BASELINE === "1") {
       stage = "baseline navigation";
       for (const name of ["A", "B", "A", "B"]) await select(name);

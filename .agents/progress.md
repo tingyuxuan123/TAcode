@@ -1037,3 +1037,13 @@
 - 验证：`pnpm test --reporter=dot` **110 文件 / 967 用例通过**；`pnpm typecheck` 与 `git diff --check` 通过。实际生产 renderer + preload + Electron IPC + Host 行协议的 `node scripts/test-session-activity.mjs` 通过，覆盖 A/B 后台审批、B 输入保留、重载多条确认、被确认阻塞的 prompt、显式 runtime 路由、失败原因与完成已读。未调用真实模型。
 - 已查看桌面恢复审批截图。测试图片位于 `/Users/yfdl/.codex/visualizations/2026/09/13/01a09958-0266-7751-adca-acfbab778dbd/ux-01/`。测试发现普通会话切换会产生 ResizeObserver 布局警告；用提交 dbda9b1 的 App/ui/styles 对照复现相同警告，测试继续单独报告计数（本次 8），其余 renderer 错误仍导致失败；布局警告留给 UX-13 回放定位，未宣称已消除。
 - 下一项：UX-02 完整草稿、附件与发送失败恢复。其余 16 项仍未完成，整份目标保持 active。
+
+## 2026-09-13：UX-02 完整草稿与发送失败恢复
+
+- [x] 主输入框按项目/会话保存原始文字（含文件引用）和图片。IndexedDB 单独保存图片，输入文字时只更新元数据；同步文字副本负责退出时保底。保留最近 100 份、30 天内的草稿，图片缓存上限 32 MiB Data URI，单张上传 6 MiB、一次最多 4 张，超限明确提示；已发送/删除/过期图片从缓存回收。
+- [x] 发送保留独立收据，以 Pi prompt preflight / steer 接收结果提交清空；拒绝、缺配置、启动失败恢复全部内容，并合并等待期间的新文字/附件。已接收后发生模型失败不再重复恢复。发送确认前重载会显示“状态未确认，请核对记录”，不自动重发。
+- [x] 新会话产生真实路径时迁移草稿、发送收据及正在读取的图片；即使 worker 已建立但模型初始化失败，也能在当前会话看到恢复草稿。归档清理草稿，迟到失败不能重新生成已删除草稿；A/B 切换与后台失败均按原会话恢复。
+- 主要文件：renderer/composer-drafts.ts、use-composer-draft.ts、ui.tsx、App.tsx、styles.css、shared/i18n.ts；新增 9 条草稿状态/缓存回归与桌面测试 scripts/composer-drafts-smoke.ts。
+- 验证：`pnpm test --reporter=dot` **111 文件 / 980 用例通过**；`pnpm typecheck`、`git diff --check` 通过。`TACODE_COMPOSER_SMOKE=1 node scripts/test-session-activity.mjs` 使用真实 App/IndexedDB/preload/IPC，通过两图 A/B 隔离、重载恢复、拒绝、等待时新增文字、缺配置、spawn 失败、建立会话后的模型初始化失败、接收后模型失败场景。UX-01 桌面回归也通过；测试中的 fixture rejected / startup failed 是主动注入的预期错误，没有线上模型调用。
+- 已查看恢复草稿截图：原文字、新文字和两张缩略图同时保留，截图在 `/Users/yfdl/.codex/visualizations/2026/09/13/01a09958-0266-7751-adca-acfbab778dbd/ux-02/`。沿用 UX-01 已确认的 ResizeObserver 警告记录，后续 UX-13 处理。
+- 下一项：UX-03 中文输入法与快捷键兼容。其余 15 项仍未完成，整份目标保持 active。

@@ -36,7 +36,7 @@
 
   **定位与风险。** [主会话事件路由](/Users/yfdl/project/TAcode/src/renderer/App.tsx:1538)、[快照恢复](/Users/yfdl/project/TAcode/src/renderer/App.tsx:883)、[AgentHost.snapshot](/Users/yfdl/project/TAcode/src/main/agent-host.ts:214)。风险中等，重点是过期请求、重复事件和并发会话隔离。
 
-- [ ] **UX-02 · 完整草稿保存与发送失败恢复**
+- [x] **UX-02 · 完整草稿保存与发送失败恢复**
 
   **代码确认。** `PromptBar.sendNow` 在调用父层发送前清空文字和附件；`sendMessage` 的失败分支只通过 `fillPrompt(text)` 恢复文字。输入内容由组件局部状态管理，没有按会话保存的完整草稿；切项目和新建会话还会显式清空文字。现有 composer memory 保存的是模式与模型。
 
