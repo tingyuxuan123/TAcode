@@ -1205,3 +1205,19 @@
 - 独立复核（code-reviewer 只读）发现并已修：跨作用域保存已有服务器会被 main 判为「服务器已被移除」或静默覆盖目标作用域同名项；只切 JSON 即被判未保存；JSON→表单→JSON 会丢掉表单不承载的跨类型字段（env/headers/cwd）。仍未处理（已知限制，非本次引入）：`parseServerMap` 对 `timeout`/`cwd`/`description` 的类型错误仍是静默忽略（与既有导入行为一致）；表单的 `KEY=value` 文本格式无法承载含换行的 env 值。
 - 边界：JSON 模式一次只处理一个服务器，批量仍走列表页「导入」；不做语法高亮、格式化按钮和 Tab 缩进插入；不改 main / runtime / preload / IPC 契约。JSON 模式保留原始字段（不注入表单默认 `timeout: 20`），只有经过表单再回到 JSON 时才会补上表单默认值。
 - 文件：shared/mcp-config.ts（含 test）、shared/capability-i18n.ts；renderer/capabilities/mcp-panel.tsx、common.tsx、capabilities.css；scripts/capabilities-smoke.ts。
+
+## 2026-09-14：当前项目视图分节展示全局继承 MCP 服务器与覆盖联动
+
+- [x] 当前项目视图直观可见全局配置：当选择「当前项目」时，界面分节呈现「项目服务器」与「全局继承」服务器，并计算有效 MCP 总数展示在头部 badge（对齐会话顶部状态栏的 MCP 工具总数心智）。
+- [x] 全局继承服务器联动：卡片标明 `[全局]` 标签；若当前项目已配置同名服务器，全局卡片标记 `[已由项目覆盖]` 并展示说明，开关禁用；若未被覆盖，卡片支持直接在当前工作区「测试连接」、直接切换全局开关，并提供快捷按钮「在项目中覆盖」（以该全局服务器为模板自动打开编辑器，作用域预选为当前项目，保存后即成为项目专属配置并覆盖全局）。
+- [x] 纯净全局视图与常用连接（Catalog）感知：切到「全局」视图时保持纯净的全局配置管理；常用连接自动排除已在项目或全局配置过的服务器，避免重复推荐。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 全量 **132 文件 / 1055 测试 100% 通过**（新增 `mcp-manager.test.ts` 项目查询返回 `inheritedServers` 断言）；`pnpm test:capabilities` 端到端冒烟测试全绿通过，覆盖在项目视图中查看全局继承、已覆盖标识及点击「在项目中覆盖」自动化保存。
+- 文件：shared/capabilities.ts、shared/capability-i18n.ts；main/mcp-manager.ts、main/mcp-manager.test.ts；renderer/capabilities/mcp-panel.tsx、capabilities.css；scripts/capabilities-smoke.ts。
+
+## 2026-09-14：MCP 与能力面板视觉降噪优化
+
+- [x] 顶部状态条轻量化：正常已加载（loaded）或未激活（inactive）且无错误/待生效重载时自动隐藏，消除常驻占位的两行大横幅；仅在需要提示或重载（pending/restart-required/scheduled/reloading/failed/错误）或未信任项目时展示。
+- [x] 移除多余中间提示框：删除项目无专属配置但有全局继承时的提示块，直接干净地呈现「全局继承」卡片。
+- [x] 收敛底部常用连接（Catalog）：当用户已有配置时，常用连接自动折叠为底部的 `<details>`，默认不占空间，搜索匹配时自动展开；仅当用户没有任何配置时才平铺作为新手引导。
+- 验证：`pnpm typecheck` 通过；`pnpm test` 全量 **132 文件 / 1055 测试 100% 通过**；`pnpm test:capabilities` 与 `test-session-activity.mjs` 端到端冒烟测试全绿通过。
+- 文件：renderer/capabilities/runtime-status.tsx、mcp-panel.tsx、capabilities.css。

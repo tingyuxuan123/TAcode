@@ -34,6 +34,7 @@
 .cap-card-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(252px, 100%), 1fr)); gap: 12px; align-items: stretch; }
 .cap-card { position: relative; display: flex; flex-direction: column; min-width: 0; overflow: hidden; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-hairline); }
 .cap-card.is-disabled { background: var(--inset); }
+.cap-card.is-overridden { opacity: .78; background: var(--inset); }
 .cap-card.is-disabled .cap-card-open { opacity: .66; }
 .cap-card-open { display: block; width: 100%; border: 0; background: transparent; padding: 16px 16px 12px; color: inherit; text-align: left; cursor: pointer; }
 .cap-card-open:hover { background: color-mix(in srgb, var(--hover) 28%, transparent); }
@@ -47,6 +48,7 @@
 .cap-card-tags, .cap-detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .cap-chip { display: inline-flex; align-self: flex-start; max-width: 100%; padding: 2px 6px; border-radius: 5px; background: var(--inset); color: var(--ink-2); font-size: 10px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cap-chip.is-error { color: var(--red); background: var(--red-tint); }
+.cap-chip.cap-chip-muted { color: var(--ink-3); border: 1px dashed var(--line-strong); background: var(--surface); }
 .cap-card-switch { position: absolute; top: 17px; right: 16px; }
 .cap-switch { position: relative; display: inline-block; flex-shrink: 0; width: 31px; height: 19px; border: 0; border-radius: 99px; background: var(--line-strong); padding: 0; cursor: pointer; transition: background .15s; }
 .cap-switch span { position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px #0002; transition: transform .15s; }
@@ -56,6 +58,7 @@
 .cap-card-footer > span:first-child { display: inline-flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
 .cap-status-success { color: var(--green); }
 .cap-status-error { color: var(--red); }
+.cap-status-muted { color: var(--ink-3); font-size: 11px; }
 .cap-text-button { border: 0; border-radius: 5px; background: transparent; color: var(--ink-2); cursor: pointer; padding: 4px; font: inherit; font-size: 11px; white-space: nowrap; }
 .cap-text-button:hover { color: var(--ink); background: var(--hover); }
 .cap-footer { flex-shrink: 0; padding: 12px 20px; border-top: 1px solid var(--line); }

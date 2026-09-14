@@ -49,6 +49,10 @@ export function CapabilityRuntime({ workspace, sessionPath, active }: { workspac
     finally { if (activation.current === epoch) setBusy(false); }
   };
   const state = status?.state;
+  const hasErrors = Boolean(error || status?.error || status?.report?.mcpErrors?.length);
+  const needsAttention = state === "pending" || state === "restart-required" || state === "scheduled" || state === "reloading" || state === "failed" || hasErrors;
+  const isUntrusted = typeof document !== "undefined" && Boolean(document.querySelector(".cap-trust"));
+  if (!needsAttention && !isUntrusted) return null;
   const label = state === "inactive" ? t("cap.runtimeInactive") : state === "loaded" ? t("cap.runtimeLoaded")
     : state === "pending" ? t("cap.runtimePending") : state === "restart-required" ? t("cap.runtimeRestart")
       : state === "scheduled" ? t("cap.runtimeScheduled") : state === "reloading" ? t("cap.runtimeReloading")

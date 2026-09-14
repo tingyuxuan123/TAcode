@@ -76,7 +76,6 @@ try {
   await wait(async () => (await panelText()).includes("Filesystem"));
   await screenshot("mcp-panel.png");
 
-  stage = "create skill in sidebar and save the real file";
   await tab("Skills"); await clickText("新建技能");
   await setField("技能名称", "created-in-sidebar"); await setField("描述", "A real saved skill"); await setField("技能说明", "Do the work."); await clickText("保存");
   await wait(async () => (await panelText()).includes("编辑 SKILL.md"));
@@ -86,6 +85,7 @@ try {
   await setField("编辑 SKILL.md", `${await fsp.readFile(skillFile, "utf8")}\nSaved in the editor.\n`); await clickText("保存");
   await wait(async () => (await panelText()).includes("已保存")); assert.match(await fsp.readFile(skillFile, "utf8"), /Saved in the editor/);
   stage = "guard unsaved edits when closing a tab";
+  await host("new Promise(resolve => setTimeout(resolve, 80))");
   await setField("编辑 SKILL.md", `${await fsp.readFile(skillFile, "utf8")}\nUnsaved.\n`);
   await host("Array.from(document.querySelectorAll('[role=tab]')).find(el => el.querySelector('.inspect-tab-label')?.textContent === 'Skills').querySelector('.inspect-tab-close').click()");
   await wait(() => host("document.querySelector('[role=dialog]')?.textContent.includes('放弃未保存')"));
@@ -119,7 +119,7 @@ try {
   assert.ok((await panelText()).includes("echo"));
   await host(`(${visible}).querySelector('.cap-test-result').scrollIntoView({ block: 'center' })`);
   await screenshot("mcp-connection-test.png");
-  await clickText("保存"); await wait(async () => (await panelText()).includes("我的服务器"));
+  await clickText("保存"); await wait(async () => (await panelText()).includes("项目服务器"));
   const mcpFile = path.join(project, ".tacode/mcp.json");
   assert.equal(JSON.parse(await fsp.readFile(mcpFile, "utf8")).mcpServers["local-fixture"].env.MCP_FIXTURE_VALUE, "sidebar");
   await clickLabel("启用 local-fixture");
@@ -139,6 +139,7 @@ try {
   await wait(() => host("!!document.querySelector('[role=dialog]')"));
   await host("Array.from(document.querySelectorAll('[role=dialog] button')).find(el => el.textContent === '移除').click()");
   await wait(async () => !JSON.parse(await fsp.readFile(mcpFile, "utf8")).mcpServers["remote-fixture"]);
+  await wait(async () => !(await panelText()).includes("remote-fixture"));
 
   stage = "create and test a server from pasted JSON in the editor";
   await clickText("添加服务器"); await clickText("JSON");
@@ -153,8 +154,7 @@ try {
   assert.equal(regenerated["json-fixture"].command, process.env.TACODE_TEST_NODE);
   assert.deepEqual(regenerated["json-fixture"].env, { MCP_FIXTURE_VALUE: "json" });
   assert.equal(regenerated["json-fixture"].timeout, 20);
-  await clickText("保存");
-  await wait(async () => (await panelText()).includes("我的服务器"));
+  await clickText("保存"); await wait(async () => (await panelText()).includes("项目服务器"));
   assert.equal(JSON.parse(await fsp.readFile(mcpFile, "utf8")).mcpServers["json-fixture"].env.MCP_FIXTURE_VALUE, "json");
 
   stage = "reject a multi-server JSON and discard it with cancel";
@@ -167,7 +167,7 @@ try {
   await clickText("取消");
   await wait(() => host("document.querySelector('[role=dialog]')?.textContent.includes('放弃未保存')"));
   await host("Array.from(document.querySelectorAll('[role=dialog] button')).find(el => el.textContent === '放弃修改').click()");
-  await wait(async () => (await panelText()).includes("我的服务器"));
+  await wait(async () => (await panelText()).includes("项目服务器"));
 
   stage = "paste a wrapped config and save it into the global scope";
   await clickText("添加服务器"); await clickText("JSON");
@@ -180,9 +180,10 @@ try {
   assert.equal(wrapped.type, "sse");
   assert.equal(wrapped.headers.Authorization, "Bearer fixture");
 
-  stage = "switching to JSON without edits stays clean, and a server can be copied into another scope";
+  stage = "switching to JSON without edits stays clean, and global inherited server is visible and overridable in project";
   await setField("配置范围", "project");
-  await wait(async () => (await panelText()).includes("json-fixture"));
+  await wait(async () => (await panelText()).includes("json-fixture") && (await panelText()).includes("全局继承") && (await panelText()).includes("wrapped-fixture"));
+  assert.ok((await panelText()).includes("全局"));
   await clickLabel("配置 json-fixture");
   await wait(async () => (await panelText()).includes("高级配置"));
   assert.equal(await fieldValue("服务器名称"), "json-fixture");
@@ -190,17 +191,17 @@ try {
   await wait(() => host<boolean>(`!!(${visible}).querySelector('textarea[aria-label="完整配置"]')`));
   assert.equal(JSON.parse(await fieldValue("完整配置"))["json-fixture"].env.MCP_FIXTURE_VALUE, "json");
   await clickLabel("返回列表");
-  await wait(async () => (await panelText()).includes("我的服务器"));
+  await wait(async () => (await panelText()).includes("项目服务器"));
   assert.equal(await host("!!document.querySelector('[role=dialog]')"), false);
-  await clickLabel("配置 json-fixture");
+  // 在项目视图中，点击全局继承的 wrapped-fixture 卡片上的「在项目中覆盖」
+  await clickText("在项目中覆盖");
   await wait(async () => (await panelText()).includes("高级配置"));
-  await setField("配置范围", "user");
+  assert.equal(await fieldValue("服务器名称"), "wrapped-fixture");
   await clickText("保存");
   await wait(async () => (await panelText()).includes("已保存"));
-  const copied = JSON.parse(await fsp.readFile(path.join(home, "mcp.json"), "utf8")).mcpServers["json-fixture"];
-  assert.equal(copied.command, process.env.TACODE_TEST_NODE);
-  assert.equal(copied.env.MCP_FIXTURE_VALUE, "json");
-  assert.equal(JSON.parse(await fsp.readFile(mcpFile, "utf8")).mcpServers["json-fixture"].env.MCP_FIXTURE_VALUE, "json");
+  // 保存后，项目服务器中有了 wrapped-fixture，全局继承列表中显示「已由项目覆盖」
+  await wait(async () => (await panelText()).includes("已由项目覆盖"));
+  assert.ok(JSON.parse(await fsp.readFile(mcpFile, "utf8")).mcpServers["wrapped-fixture"]);
   stage = "reopen collapsed sidebar and check layout";
   await host("document.querySelector('[aria-label=\"收起右侧抽屉\"]').click()");
   assert.equal(await host("document.querySelector('.inspect-shell').getBoundingClientRect().width"), 0);

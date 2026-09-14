@@ -28,6 +28,10 @@ describe("MCP 配置持久化与项目隔离", () => {
     await manager.setEnabled("shared", true, "project", project);
     expect((await loadRuntimeMcpServers(project))[0].kind).toBe("http");
     expect((await manager.list("user")).servers[0].command).toBe("global");
+    expect((await manager.list("user")).inheritedServers).toBeUndefined();
+    const projectSnapshot = await manager.list("project", project);
+    expect(projectSnapshot.servers[0].kind).toBe("http");
+    expect(projectSnapshot.inheritedServers?.[0].command).toBe("global");
   });
 
   it("增删改、重命名和并发写入保留其他服务器与顶层字段", async () => {

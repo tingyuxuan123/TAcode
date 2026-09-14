@@ -70,6 +70,7 @@ export interface McpSnapshot {
   servers: McpServerRow[];
   configPath: string;
   projectTrusted: boolean;
+  inheritedServers?: McpServerRow[];
 }
 
 export interface CapabilitiesApi {

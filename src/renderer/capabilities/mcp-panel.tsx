@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, CheckCircle2, CircleDashed, Code2, Database, FileJson, FolderOpen, Globe, Plug, Plus, RefreshCw, Search, Server, Trash2, XCircle } from "lucide-react";
+import { Bot, CheckCircle2, ChevronDown, CircleDashed, Code2, Database, FileJson, FolderOpen, Globe, Plug, Plus, RefreshCw, Search, Server, Trash2, XCircle } from "lucide-react";
 import type { CapabilityScope, McpTestResult } from "../../shared/capabilities";
 import type { McpServerRow } from "../../shared/integrations";
 import { formatMcpServerJson, parseMcpArguments, parseMcpKeyValues, parseMcpServerJson, validateMcpServer } from "../../shared/mcp-config";
@@ -40,27 +40,39 @@ function McpLibrary({ workspace, scope, onScopeChange, notice, onNoticeChange: s
   const load = useCallback(() => window.harness.mcp.list(scope, workspace), [scope, workspace]);
   const { data, loading, error, refresh, setError } = useCapabilityData(load, workspace);
   const [search, setSearch] = useState("");
-  const [editor, setEditor] = useState<{ server: McpServerRow; previousName?: string }>();
+  const [editor, setEditor] = useState<{ server: McpServerRow; previousName?: string; editorScope?: CapabilityScope }>();
   const [importing, setImporting] = useState(false);
-  const [removing, setRemoving] = useState<McpServerRow>();
+  const [removing, setRemoving] = useState<{ server: McpServerRow; scope: CapabilityScope }>();
   const [busy, setBusy] = useState("");
   const [tests, setTests] = useState<Record<string, McpTestResult>>({});
-  const servers = data?.servers ?? [];
-  const filtered = servers.filter((server) => [server.name, server.description, displayTarget(server)].join(" ").toLowerCase().includes(search.toLowerCase().trim()));
-  const available = useMemo(() => catalog(workspace).filter((item) => !servers.some((server) => server.name === item.server.name) && [item.name, t(item.description)].join(" ").toLowerCase().includes(search.toLowerCase().trim())), [workspace, servers, search, t]);
+  const projectServers = data?.servers ?? [];
+  const inheritedServers = scope === "project" ? (data?.inheritedServers ?? []) : [];
+  const overriddenNames = useMemo(() => new Set(projectServers.map((server) => server.name)), [projectServers]);
+  const matchesSearch = (server: McpServerRow) => [server.name, server.description, displayTarget(server)].join(" ").toLowerCase().includes(search.toLowerCase().trim());
+  const filteredProject = projectServers.filter(matchesSearch);
+  const filteredInherited = inheritedServers.filter(matchesSearch);
+  const allConfiguredNames = useMemo(() => {
+    const names = new Set(projectServers.map((server) => server.name));
+    for (const server of inheritedServers) names.add(server.name);
+    return names;
+  }, [projectServers, inheritedServers]);
+  const available = useMemo(() => catalog(workspace).filter((item) => !allConfiguredNames.has(item.server.name) && [item.name, t(item.description)].join(" ").toLowerCase().includes(search.toLowerCase().trim())), [workspace, allConfiguredNames, search, t]);
+  const totalCount = scope === "project"
+    ? projectServers.length + inheritedServers.filter((server) => !overriddenNames.has(server.name)).length
+    : projectServers.length;
   const mutate = async (name: string, action: () => Promise<unknown>) => {
     setBusy(name); setError("");
     try { await action(); await refresh(); } catch (reason) { setError(errorText(reason)); } finally { setBusy(""); }
   };
 
   if (importing) return <McpImport scope={scope} workspace={workspace} onBack={() => setImporting(false)} onDirtyChange={onDirtyChange} onSaved={(count) => { setImporting(false); setNotice(t("cap.jsonImported", { count })); void refresh(); }} />;
-  if (editor) return <McpEditor key={editor.previousName ?? "new"} {...editor} scope={scope} workspace={workspace} onDirtyChange={onDirtyChange} onBack={() => setEditor(undefined)} onSaved={(savedScope) => { setEditor(undefined); setNotice(t("cap.saved")); if (savedScope === scope) void refresh(); else onScopeChange(savedScope); }} onTested={(server, result) => setTests((current) => ({ ...current, [testKey(server)]: result }))} />;
+  if (editor) return <McpEditor key={`${editor.editorScope ?? scope}:${editor.previousName ?? "new"}`} {...editor} scope={editor.editorScope ?? scope} workspace={workspace} onDirtyChange={onDirtyChange} onBack={() => setEditor(undefined)} onSaved={(savedScope) => { setEditor(undefined); setNotice(t("cap.saved")); if (savedScope === scope) void refresh(); else onScopeChange(savedScope); }} onTested={(server, result) => setTests((current) => ({ ...current, [testKey(server)]: result }))} />;
 
   return <section className="cap-panel" aria-label="MCP">
-    <header className="cap-heading"><div className="cap-heading-title"><Plug size={22} /><h2>MCP</h2><span className="cap-count">{servers.length}</span></div><CapabilityScopePicker scope={scope} workspace={workspace} onChange={onScopeChange} /></header>
+    <header className="cap-heading"><div className="cap-heading-title"><Plug size={22} /><h2>MCP</h2><span className="cap-count">{totalCount}</span></div><CapabilityScopePicker scope={scope} workspace={workspace} onChange={onScopeChange} /></header>
     <p className="cap-intro">{t("cap.mcpHint")}</p>
     <div className="cap-toolbar"><CapabilitySearch value={search} onChange={setSearch} placeholder={t("cap.searchMcp")} /><button type="button" className="cap-icon-button" aria-label={t("cap.refresh")} title={t("cap.refresh")} onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} className={loading ? "cap-spinning" : ""} /></button>
-      <button type="button" className="primary" onClick={() => setEditor({ server: { name: "", kind: "stdio", command: "" } })}><Plus size={15} />{t("cap.addServer")}</button>
+      <button type="button" className="primary" onClick={() => setEditor({ server: { name: "", kind: "stdio", command: "" }, editorScope: scope })}><Plus size={15} />{t("cap.addServer")}</button>
       <button type="button" className="ghost" onClick={() => setImporting(true)}><FileJson size={15} />{t("cap.import")}</button>
       <button type="button" className="cap-icon-button" title={t("cap.configFile")} aria-label={t("cap.configFile")} onClick={() => void window.harness.mcp.reveal(scope, workspace).catch((reason) => setError(errorText(reason)))}><FolderOpen size={16} /></button>
     </div>
@@ -69,23 +81,58 @@ function McpLibrary({ workspace, scope, onScopeChange, notice, onNoticeChange: s
       {error && <CapabilityNotice error>{error}<button type="button" className="cap-text-button" onClick={() => void refresh()}>{t("cap.retry")}</button></CapabilityNotice>}
       {notice && <CapabilityNotice>{notice}</CapabilityNotice>}
       {loading && !data ? <CapabilitySkeleton label={t("cap.loading")} /> : <>
-        {filtered.length > 0 && <><h3 className="cap-section-title">{t("cap.configured")}<span className="cap-count">{filtered.length}</span></h3><div className="cap-card-list">{filtered.map((server) => {
-          const test = tests[testKey(server)];
-          return <article className={`cap-card${server.disabled ? " is-disabled" : ""}`} key={server.name}>
-            <button type="button" className="cap-card-open" onClick={() => setEditor({ server, previousName: server.name })} aria-label={`${t("cap.configure")} ${server.name}`}><div className="cap-card-top"><span className="cap-card-icon"><Server size={18} /></span><div className="cap-card-title"><h3>{server.name}</h3><span className="cap-chip">{transportLabel(server.kind)}</span></div></div><p className="cap-card-description">{server.description || displayTarget(server)}</p></button>
-            <div className="cap-card-switch"><CapabilitySwitch checked={!server.disabled} label={t("cap.toggle", { name: server.name })} disabled={Boolean(busy)} onChange={(enabled) => void mutate(server.name, () => window.harness.mcp.setEnabled(server.name, enabled, scope, workspace))} /></div>
-            <div className="cap-card-footer"><span className={test?.success ? "cap-status-success" : test ? "cap-status-error" : ""}>{server.disabled ? t("cap.disabled") : test?.success ? <><CheckCircle2 size={13} />{t("cap.testPassed", { count: test.tools.length })}</> : test ? <><XCircle size={13} />{t("cap.testFailed")}</> : <><CircleDashed size={13} />{t("cap.notTested")}</>}</span>
-              <button type="button" className="cap-text-button" disabled={Boolean(busy)} onClick={() => void mutate(server.name, async () => { const result = await window.harness.mcp.test(server, workspace); setTests((current) => ({ ...current, [testKey(server)]: result })); if (!result.success) setNotice(result.message); })}>{busy === server.name ? t("cap.testing") : t("cap.test")}</button><button type="button" className="cap-icon-button cap-danger" title={t("cap.remove")} aria-label={`${t("cap.remove")} ${server.name}`} disabled={Boolean(busy)} onClick={() => setRemoving(server)}><Trash2 size={14} /></button>
-            </div>
-          </article>;
-        })}</div></>}
-        {!servers.length && !search && <div className="cap-empty cap-empty-compact"><h3>{t("cap.mcpEmpty")}</h3><p>{t("cap.mcpEmptyHint")}</p></div>}
-        {available.length > 0 && <><h3 className="cap-section-title">{t("cap.catalog")}<span className="cap-count">{available.length}</span></h3><p className="cap-section-hint">{t("cap.catalogHint")}</p><div className="cap-card-list">{available.map((item) => <article className="cap-card cap-catalog-card" key={item.name}><div className="cap-card-top"><span className="cap-card-icon"><item.icon size={20} /></span><div className="cap-card-title"><h3>{item.name}</h3><span className="cap-chip">{transportLabel(item.server.kind)}</span></div></div><p className="cap-card-description">{t(item.description)}</p><div className="cap-card-footer"><span><CircleDashed size={13} />{t("cap.notConfigured")}</span><button type="button" className="ghost" aria-label={`${t("cap.configure")} ${item.name}`} onClick={() => setEditor({ server: { ...item.server, description: t(item.description) } })}>{t("cap.configure")}</button></div></article>)}</div></>}
-        {search && !filtered.length && !available.length && <div className="cap-empty">{t("cap.noResults")}</div>}
+        {scope === "user" ? <>
+          {filteredProject.length > 0 && <><h3 className="cap-section-title">{t("cap.configured")}<span className="cap-count">{filteredProject.length}</span></h3><div className="cap-card-list">{filteredProject.map((server) => {
+            const test = tests[testKey(server)];
+            return <article className={`cap-card${server.disabled ? " is-disabled" : ""}`} key={server.name}>
+              <button type="button" className="cap-card-open" onClick={() => setEditor({ server, previousName: server.name, editorScope: "user" })} aria-label={`${t("cap.configure")} ${server.name}`}><div className="cap-card-top"><span className="cap-card-icon"><Server size={18} /></span><div className="cap-card-title"><h3>{server.name}</h3><span className="cap-chip">{transportLabel(server.kind)}</span></div></div><p className="cap-card-description">{server.description || displayTarget(server)}</p></button>
+              <div className="cap-card-switch"><CapabilitySwitch checked={!server.disabled} label={t("cap.toggle", { name: server.name })} disabled={Boolean(busy)} onChange={(enabled) => void mutate(server.name, () => window.harness.mcp.setEnabled(server.name, enabled, "user"))} /></div>
+              <div className="cap-card-footer"><span className={test?.success ? "cap-status-success" : test ? "cap-status-error" : ""}>{server.disabled ? t("cap.disabled") : test?.success ? <><CheckCircle2 size={13} />{t("cap.testPassed", { count: test.tools.length })}</> : test ? <><XCircle size={13} />{t("cap.testFailed")}</> : <><CircleDashed size={13} />{t("cap.notTested")}</>}</span>
+                <button type="button" className="cap-text-button" disabled={Boolean(busy)} onClick={() => void mutate(server.name, async () => { const result = await window.harness.mcp.test(server, workspace); setTests((current) => ({ ...current, [testKey(server)]: result })); if (!result.success) setNotice(result.message); })}>{busy === server.name ? t("cap.testing") : t("cap.test")}</button><button type="button" className="cap-icon-button cap-danger" title={t("cap.remove")} aria-label={`${t("cap.remove")} ${server.name}`} disabled={Boolean(busy)} onClick={() => setRemoving({ server, scope: "user" })}><Trash2 size={14} /></button>
+              </div>
+            </article>;
+          })}</div></>}
+          {!projectServers.length && !search && <div className="cap-empty cap-empty-compact"><h3>{t("cap.mcpEmpty")}</h3><p>{t("cap.mcpEmptyHint")}</p></div>}
+        </> : <>
+          {filteredProject.length > 0 && <><h3 className="cap-section-title">{t("cap.projectServers")}<span className="cap-count">{filteredProject.length}</span></h3><div className="cap-card-list">{filteredProject.map((server) => {
+            const test = tests[testKey(server)];
+            return <article className={`cap-card${server.disabled ? " is-disabled" : ""}`} key={server.name}>
+              <button type="button" className="cap-card-open" onClick={() => setEditor({ server, previousName: server.name, editorScope: "project" })} aria-label={`${t("cap.configure")} ${server.name}`}><div className="cap-card-top"><span className="cap-card-icon"><Server size={18} /></span><div className="cap-card-title"><h3>{server.name}</h3><span className="cap-chip">{transportLabel(server.kind)}</span></div></div><p className="cap-card-description">{server.description || displayTarget(server)}</p></button>
+              <div className="cap-card-switch"><CapabilitySwitch checked={!server.disabled} label={t("cap.toggle", { name: server.name })} disabled={Boolean(busy)} onChange={(enabled) => void mutate(server.name, () => window.harness.mcp.setEnabled(server.name, enabled, "project", workspace))} /></div>
+              <div className="cap-card-footer"><span className={test?.success ? "cap-status-success" : test ? "cap-status-error" : ""}>{server.disabled ? t("cap.disabled") : test?.success ? <><CheckCircle2 size={13} />{t("cap.testPassed", { count: test.tools.length })}</> : test ? <><XCircle size={13} />{t("cap.testFailed")}</> : <><CircleDashed size={13} />{t("cap.notTested")}</>}</span>
+                <button type="button" className="cap-text-button" disabled={Boolean(busy)} onClick={() => void mutate(server.name, async () => { const result = await window.harness.mcp.test(server, workspace); setTests((current) => ({ ...current, [testKey(server)]: result })); if (!result.success) setNotice(result.message); })}>{busy === server.name ? t("cap.testing") : t("cap.test")}</button><button type="button" className="cap-icon-button cap-danger" title={t("cap.remove")} aria-label={`${t("cap.remove")} ${server.name}`} disabled={Boolean(busy)} onClick={() => setRemoving({ server, scope: "project" })}><Trash2 size={14} /></button>
+              </div>
+            </article>;
+          })}</div></>}
+          {!projectServers.length && !inheritedServers.length && !search && <div className="cap-empty cap-empty-compact"><h3>{t("cap.mcpEmpty")}</h3><p>{t("cap.mcpEmptyHint")}</p></div>}
+          {filteredInherited.length > 0 && <><h3 className="cap-section-title">{t("cap.inheritedServers")}<span className="cap-count">{filteredInherited.length}</span></h3><p className="cap-section-hint">{t("cap.inheritedHint")}</p><div className="cap-card-list">{filteredInherited.map((server) => {
+            const isOverridden = overriddenNames.has(server.name);
+            const test = tests[testKey(server)];
+            return <article className={`cap-card${server.disabled ? " is-disabled" : ""}${isOverridden ? " is-overridden" : ""}`} key={`inherited:${server.name}`}>
+              <button type="button" className="cap-card-open" onClick={() => setEditor({ server, previousName: server.name, editorScope: "user" })} aria-label={`${t("cap.configure")} ${server.name}`}><div className="cap-card-top"><span className="cap-card-icon"><Server size={18} /></span><div className="cap-card-title"><h3>{server.name}</h3><span className="cap-chip">{transportLabel(server.kind)}</span><span className="cap-chip">{t("cap.globalBadge")}</span>{isOverridden && <span className="cap-chip cap-chip-muted">{t("cap.overridden")}</span>}</div></div><p className="cap-card-description">{server.description || displayTarget(server)}</p></button>
+              <div className="cap-card-switch"><CapabilitySwitch checked={!server.disabled} label={t("cap.toggle", { name: server.name })} disabled={Boolean(busy) || isOverridden} onChange={(enabled) => void mutate(server.name, () => window.harness.mcp.setEnabled(server.name, enabled, "user"))} /></div>
+              <div className="cap-card-footer">{isOverridden ? <span className="cap-status-muted">{t("cap.overriddenHint")}</span> : <span className={test?.success ? "cap-status-success" : test ? "cap-status-error" : ""}>{server.disabled ? t("cap.disabled") : test?.success ? <><CheckCircle2 size={13} />{t("cap.testPassed", { count: test.tools.length })}</> : test ? <><XCircle size={13} />{t("cap.testFailed")}</> : <><CircleDashed size={13} />{t("cap.notTested")}</>}</span>}
+                {!isOverridden && <button type="button" className="cap-text-button" disabled={Boolean(busy)} onClick={() => void mutate(server.name, async () => { const result = await window.harness.mcp.test(server, workspace); setTests((current) => ({ ...current, [testKey(server)]: result })); if (!result.success) setNotice(result.message); })}>{busy === server.name ? t("cap.testing") : t("cap.test")}</button>}
+                {!isOverridden && <button type="button" className="cap-text-button" disabled={Boolean(busy)} onClick={() => setEditor({ server: { ...server }, previousName: undefined, editorScope: "project" })} title={t("cap.overrideInProject")}>{t("cap.overrideInProject")}</button>}
+                <button type="button" className="cap-icon-button cap-danger" title={t("cap.remove")} aria-label={`${t("cap.remove")} ${server.name}`} disabled={Boolean(busy)} onClick={() => setRemoving({ server, scope: "user" })}><Trash2 size={14} /></button>
+              </div>
+            </article>;
+          })}</div></>}
+        </>}
+        {available.length > 0 && (projectServers.length === 0 && inheritedServers.length === 0 ? (
+          <><h3 className="cap-section-title">{t("cap.catalog")}<span className="cap-count">{available.length}</span></h3><p className="cap-section-hint">{t("cap.catalogHint")}</p><div className="cap-card-list">{available.map((item) => <article className="cap-card cap-catalog-card" key={item.name}><div className="cap-card-top"><span className="cap-card-icon"><item.icon size={20} /></span><div className="cap-card-title"><h3>{item.name}</h3><span className="cap-chip">{transportLabel(item.server.kind)}</span></div></div><p className="cap-card-description">{t(item.description)}</p><div className="cap-card-footer"><span><CircleDashed size={13} />{t("cap.notConfigured")}</span><button type="button" className="ghost" aria-label={`${t("cap.configure")} ${item.name}`} onClick={() => setEditor({ server: { ...item.server, description: t(item.description) }, editorScope: scope })}>{t("cap.configure")}</button></div></article>)}</div></>
+        ) : (
+          <details className="cap-group cap-catalog-group" open={Boolean(search.trim())}>
+            <summary><ChevronDown size={14} /><span>{t("cap.catalog")}</span><span className="cap-count">{available.length}</span></summary>
+            <p className="cap-section-hint">{t("cap.catalogHint")}</p>
+            <div className="cap-card-list">{available.map((item) => <article className="cap-card cap-catalog-card" key={item.name}><div className="cap-card-top"><span className="cap-card-icon"><item.icon size={20} /></span><div className="cap-card-title"><h3>{item.name}</h3><span className="cap-chip">{transportLabel(item.server.kind)}</span></div></div><p className="cap-card-description">{t(item.description)}</p><div className="cap-card-footer"><span><CircleDashed size={13} />{t("cap.notConfigured")}</span><button type="button" className="ghost" aria-label={`${t("cap.configure")} ${item.name}`} onClick={() => setEditor({ server: { ...item.server, description: t(item.description) }, editorScope: scope })}>{t("cap.configure")}</button></div></article>)}</div>
+          </details>
+        ))}
+        {search && !filteredProject.length && !filteredInherited.length && !available.length && <div className="cap-empty">{t("cap.noResults")}</div>}
       </>}
     </div>
     <footer className="cap-footer">{onUsePrompt && <button type="button" className="cap-agent-action" onClick={() => onUsePrompt(t("cap.agentMcpPrompt"))}><Bot size={16} />{t("cap.agentMcp")}</button>}<p>{t("cap.appliesNext")}</p></footer>
-    {removing && <ConfirmDialog title={t("cap.mcpRemoveTitle", { name: removing.name })} detail={t("cap.mcpRemoveDetail")} confirmLabel={t("cap.remove")} cancelLabel={t("cap.cancel")} onCancel={() => setRemoving(undefined)} onConfirm={() => { const server = removing; setRemoving(undefined); void mutate(server.name, () => window.harness.mcp.remove(server.name, scope, workspace)); }} />}
+    {removing && <ConfirmDialog title={removing.scope === "user" ? t("cap.mcpRemoveGlobalTitle", { name: removing.server.name }) : t("cap.mcpRemoveTitle", { name: removing.server.name })} detail={removing.scope === "user" ? t("cap.mcpRemoveGlobalDetail") : t("cap.mcpRemoveDetail")} confirmLabel={t("cap.remove")} cancelLabel={t("cap.cancel")} onCancel={() => setRemoving(undefined)} onConfirm={() => { const { server, scope: targetScope } = removing; setRemoving(undefined); void mutate(server.name, () => window.harness.mcp.remove(server.name, targetScope, targetScope === "project" ? workspace : undefined)); }} />}
   </section>;
 }
 

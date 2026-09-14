@@ -9,7 +9,22 @@ import { withCapabilityLock } from "./skills-manager";
 export class McpManager {
   async list(scope: CapabilityScope, cwd?: string): Promise<McpSnapshot> {
     const file = mcpConfigPath(scope, cwd);
-    return { servers: parseMcpServers(await readMcpConfig(file)), configPath: file, projectTrusted: isCapabilityProjectTrusted(cwd) };
+    const servers = parseMcpServers(await readMcpConfig(file));
+    let inheritedServers: McpServerRow[] | undefined;
+    if (scope === "project") {
+      try {
+        const globalFile = mcpConfigPath("user");
+        inheritedServers = parseMcpServers(await readMcpConfig(globalFile));
+      } catch {
+        inheritedServers = [];
+      }
+    }
+    return {
+      servers,
+      configPath: file,
+      projectTrusted: isCapabilityProjectTrusted(cwd),
+      ...(inheritedServers !== undefined ? { inheritedServers } : {}),
+    };
   }
 
   private mutate(scope: CapabilityScope, cwd: string | undefined, update: (servers: Record<string, unknown>) => void): Promise<void> {
