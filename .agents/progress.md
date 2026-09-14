@@ -1184,3 +1184,13 @@
 - 边界：首次信任是恢复当前会话进程，非完全热加载；失败显示重试且保留可读历史。Pi 恢复隐藏 custom 消息时可能使用相差数毫秒的 JSONL entry 时间，测试保留其正文并严格核对 user/assistant 时间。
 - 文件：main/agent-host.ts、agent-manager.ts、capabilities-ipc.ts、index.ts；runtime/extension.ts、mcp-extension.ts；shared/capabilities.ts、capability-i18n.ts；preload、renderer 能力状态/面板、App；真实集成与 capability-status-smoke.ts。
 - 下一项：UX-17 空闲 worker 和缓存预算、队列与浏览器状态回收、委派等待和轮数统计减少唤醒。整份目标继续 active。
+
+## 2026-09-14：UX-17 长时间使用后的资源回收
+
+- [x] AgentManager 增加最近使用时间、最多 8 个空闲 worker 与 5 分钟 TTL；回收按最近使用顺序执行。活动会话、生成中、等待审批/浏览器请求、有委派子任务、能力重载、停止中和命令队列中的 host 均跳过；会话启动配置与索引随 host 一起释放，历史下次可从 JSONL 恢复。按 50 个顺序会话回归，保留当前选中会话，空闲资源回到最多 8 个后台 worker。
+- [x] runtime 队列在链完成时删除且只删除当前链；AgentHost 回放增加 2 MiB 字节预算并记录缺口，renderer 回放溢出改取权威快照；子会话初始事件缓冲上限 1000 条/2 MiB，超限重读转录再接续直播。
+- [x] BrowserAutomation 在 runtime 没有工作标签或归属标签时删除 session，窗口销毁清理空 session；AgentHost 停止时清理浏览器引用。DelegationCoordinator.wait 改完成通知，不再 25ms 轮询；真实 AgentHost 的 maxTurns 看门狗按 `message_end` 增量事件，只有无事件订阅的最小替身使用 500ms 兜底。
+- 验证：全量 **132 文件 / 1053 测试通过**（2 workers），`pnpm typecheck`、`git diff --check` 通过。新增 agent lifecycle 50 会话/保护/队列测试、回放预算/事件订阅测试、浏览器 session 生命周期测试；委派完整回归 46 项通过。
+- 边界：空闲预算保留 8 个后台 worker，当前选中会话另计；worker、浏览器标签和 transcript 仍有各自明确上限。关闭窗口的 workspace watcher 已在 UX-10 完成，本项只补 manager/browser 资源清理；跨平台进程回收仍沿用 UX-12 的边界。
+- 文件：main/agent-manager.ts、agent-host.ts、index.ts、delegation-coordinator.ts、browser/automation.ts；renderer/App.tsx、browser/child-session-panel.tsx；新增生命周期回归测试。
+- 下一项：17 项使用体验优化均已完成，进入整体验收与最终状态核对。

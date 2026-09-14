@@ -38,6 +38,9 @@ function formatElapsed(startedAt?: number, completedAt?: number): string {
 
 /** 有子会话转录文件才读盘；进程内委派没有文件，只能看卡片上的报告/活动。 */
 const isTranscriptPath = (value: string | undefined): boolean => Boolean(value && /\.jsonl$/i.test(value));
+const MAX_PENDING_EVENTS = 1_000;
+const MAX_PENDING_BYTES = 2 * 1024 * 1024;
+const textEncoder = new TextEncoder();
 
 /** 去掉运行时注入给子代理的那段超长 prompt（面板顶部已单独展示委派任务）。 */
 const INJECTED_PROMPT = /^\s*(You are the .{0,80}subagent inside TACode|You are the .{0,80} subagent inside TACode)/;
@@ -77,6 +80,8 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
    * null 表示快照已落定，之后的事件直接套到当前消息列表上。
    */
   const pendingRef = useRef<AgentEvent[] | null>(readable ? [] : null);
+  const pendingBytesRef = useRef(0);
+  const pendingOverflowRef = useRef(false);
 
   /**
    * 直播内容不断追加，视图必须跟着最新走。用户往上滚时自动停止跟随、
@@ -90,6 +95,8 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
 
   useEffect(() => {
     pendingRef.current = readable ? [] : null;
+    pendingBytesRef.current = 0;
+    pendingOverflowRef.current = false;
     clearPending();
     setMessages([]);
     setPhase(readable ? "loading" : "ready");
@@ -107,11 +114,20 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
       // 桥接缺失/同步抛错都不该炸掉整个界面：统一转成 rejected promise 走下面的错误分支。
       void Promise.resolve()
         .then(() => window.harness.sessions.read(sessionPath))
-        .then((transcript) => {
+        .then(async (transcript) => {
           if (gone) return;
+          // 事件超过内存预算时，丢弃临时事件并重新读取权威转录；这样不会把
+          // 有界缓冲的缺口静默拼进面板。重读期间仍保留新事件；如果重读期间再次
+          // 超限，再取一次快照，最多三轮后才放行，避免异常流量让初始化无限等待。
+          for (let attempt = 0; attempt < 3 && pendingOverflowRef.current && !gone; attempt += 1) {
+            pendingOverflowRef.current = false;
+            transcript = await window.harness.sessions.read(sessionPath);
+          }
           const base = normalizeMessages(transcript.messages);
           const buffered = pendingRef.current ?? [];
           pendingRef.current = null;
+          pendingBytesRef.current = 0;
+          pendingOverflowRef.current = false;
           setMessages(buffered.reduce((current, event) => applyAgentEvent(current, event), base));
           setTruncated(transcript.truncated);
           setPhase("ready");
@@ -121,6 +137,7 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
           // 读盘失败也放行已缓冲的事件：直播继续，错误横幅提示快照缺失。
           const buffered = pendingRef.current ?? [];
           pendingRef.current = null;
+          pendingBytesRef.current = 0;
           setMessages(buffered.reduce((current, event) => applyAgentEvent(current, event), [] as ChatMessage[]));
           setError(cause instanceof Error ? cause.message : String(cause));
           setPhase("error");
@@ -138,7 +155,17 @@ export const ChildSessionPanel = memo(function ChildSessionPanel({
       if (payload.delegationId !== delegationId) return;
       const pending = pendingRef.current;
       if (pending) {
-        pending.push(payload.event);
+        let bytes = 0;
+        try {
+          const serialized = JSON.stringify(payload.event);
+          bytes = serialized ? textEncoder.encode(serialized).byteLength : 0;
+        } catch { bytes = 0; }
+        pendingBytesRef.current += bytes;
+        if (pending.length >= MAX_PENDING_EVENTS || pendingBytesRef.current > MAX_PENDING_BYTES) {
+          pending.length = 0;
+          pendingBytesRef.current = 0;
+          pendingOverflowRef.current = true;
+        } else pending.push(payload.event);
         return;
       }
       push(payload.event);

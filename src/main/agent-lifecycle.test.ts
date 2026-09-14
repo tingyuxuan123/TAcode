@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentManager, type AgentHostStartOptions } from "./agent-manager";
+import { AgentManager, MAX_IDLE_WORKERS, IDLE_WORKER_TTL_MS, type AgentHostStartOptions } from "./agent-manager";
 import { NO_ACTIVE_SESSION_MESSAGE } from "../shared/agent-protocol";
 import type { AgentEvent, AgentSnapshot } from "../shared/types";
 import type { AgentHost } from "./agent-host";
@@ -15,6 +15,7 @@ class FakeHost {
   uiResponses: Array<{ id: string; response: Record<string, unknown> }> = [];
   running = false;
   turnActive = false;
+  hasPendingWork = false;
   /** 每次 start 后由测试设置，模拟底层会话文件。 */
   nextSessionFile?: string;
   private seq = 0;
@@ -341,6 +342,70 @@ describe("AgentManager", () => {
     await expect(manager.command(started.runtimeId, "get_state")).rejects.toThrow(NO_ACTIVE_SESSION_MESSAGE);
     expect(manager.findRuntime(started.runtimeId)).toBeUndefined();
     expect(manager.active).toBeUndefined();
+  });
+
+  it("keeps an idle worker budget while protecting the selected session", async () => {
+    for (let index = 0; index < 50; index += 1) {
+      await manager.start(options(`/idle-${index}.jsonl`));
+      hosts.at(-1)!.turnActive = false;
+    }
+
+    await manager.reapIdle(Date.now() + IDLE_WORKER_TTL_MS + 1);
+
+    expect(manager.list().length).toBeLessThanOrEqual(MAX_IDLE_WORKERS + 1);
+    expect(manager.active).toBeDefined();
+    expect(manager.findRuntime(manager.active)).toBeDefined();
+    expect(hosts.filter((host) => host.stops > 0).length).toBeGreaterThan(0);
+    expect((manager as unknown as { startOptions: Map<string, unknown> }).startOptions.size)
+      .toBeLessThanOrEqual(MAX_IDLE_WORKERS + 1);
+  });
+
+  it("does not reap a worker with pending work, and removes it once safe", async () => {
+    const first = await manager.start(options("/pending.jsonl"));
+    hosts[0].turnActive = false;
+    hosts[0].hasPendingWork = true;
+    await manager.start(options("/selected.jsonl"));
+    hosts[1].turnActive = false;
+
+    await manager.reapIdle(Date.now() + IDLE_WORKER_TTL_MS + 1);
+    expect(manager.findRuntime(first.runtimeId)).toBeDefined();
+
+    hosts[0].hasPendingWork = false;
+    await manager.reapIdle(Date.now() + IDLE_WORKER_TTL_MS + 1);
+    expect(manager.findRuntime(first.runtimeId)).toBeUndefined();
+  });
+
+  it("protects a parent worker while it still owns delegated children", async () => {
+    let children = true;
+    manager = new AgentManager({
+      hasDelegations: () => children,
+      createHost: () => {
+        const host = new FakeHost({});
+        hosts.push(host);
+        return asHost(host);
+      },
+    });
+    const parent = await manager.start(options("/delegating.jsonl"));
+    hosts[0].turnActive = false;
+    await manager.start(options("/selected.jsonl"));
+    hosts[1].turnActive = false;
+
+    await manager.reapIdle(Date.now() + IDLE_WORKER_TTL_MS + 1);
+    expect(manager.findRuntime(parent.runtimeId)).toBeDefined();
+    children = false;
+    await manager.reapIdle(Date.now() + IDLE_WORKER_TTL_MS + 1);
+    expect(manager.findRuntime(parent.runtimeId)).toBeUndefined();
+  });
+
+  it("removes a completed command queue entry after the chain settles", async () => {
+    const started = await manager.start(options("/queue.jsonl"));
+    hosts[0].blockNextRequest("get_state");
+    const pending = manager.command(started.runtimeId, "get_state");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect((manager as unknown as { queues: Map<string, unknown> }).queues.has(started.runtimeId)).toBe(true);
+    hosts[0].releaseRequest();
+    await pending;
+    expect((manager as unknown as { queues: Map<string, unknown> }).queues.has(started.runtimeId)).toBe(false);
   });
 });
 

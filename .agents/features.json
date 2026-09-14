@@ -82,6 +82,6 @@
   {
     "id": "UX-17",
     "description": "长时间使用后的资源回收。验收：顺序浏览/运行并结束 50 个会话后，空闲 worker、Map 条目和监听器数量回到约定范围；打开再关闭窗口不累加监听；无任务时减少定时唤醒；运行中、等待审批和仍有子任务的会话不被当作可回收空闲会话。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-17。",
-    "passes": false
+    "passes": true
   }
 ]

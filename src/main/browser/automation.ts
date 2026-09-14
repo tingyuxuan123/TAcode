@@ -79,6 +79,7 @@ export class BrowserAutomation {
       for (const session of this.sessions.values()) session.workingTabId = undefined;
       for (const tab of this.tabs.values()) tab.refs.clear();
       for (const tabId of [...this.previewWatches.keys()]) this.stopPreviewWatch(tabId);
+      for (const [key, session] of this.sessions) if (!session.queued) this.sessions.delete(key);
       return;
     }
     const session = this.sessions.get(runtimeId);
@@ -88,6 +89,15 @@ export class BrowserAutomation {
         tab.refs.clear();
         this.stopPreviewWatch(tab.tabId);
       }
+    if (!session?.queued && ![...this.tabs.values()].some((tab) => tab.ownerRuntimeId === runtimeId)) this.sessions.delete(runtimeId);
+  }
+
+  private maybeDropSession(key: string): void {
+    const session = this.sessions.get(key);
+    if (!session || session.queued) return;
+    if (session.workingTabId) return;
+    if (session.runtimeId && [...this.tabs.values()].some((tab) => tab.ownerRuntimeId === session.runtimeId)) return;
+    this.sessions.delete(key);
   }
 
   register(owner: WebContents, registration: BrowserRegistration) {
@@ -126,6 +136,10 @@ export class BrowserAutomation {
       if (tab.owner === owner) this.remove(tab);
     for (const [requestId, pending] of this.presentations)
       if (pending.owner === owner) this.presentations.delete(requestId);
+    for (const [key, session] of this.sessions) {
+      if (session.queued || session.workingTabId) continue;
+      if (!session.runtimeId || ![...this.tabs.values()].some((tab) => tab.ownerRuntimeId === session.runtimeId)) this.sessions.delete(key);
+    }
   }
 
   /** 预览文件变更后刷新对应 guest（对齐 PI-Desktop 的 live reload）。 */
@@ -177,6 +191,7 @@ export class BrowserAutomation {
       return this.perform(tool, input, signal, session);
     });
     session.queue = run.catch(() => undefined);
+    void session.queue.then(() => this.maybeDropSession(session.runtimeId || "default"));
     return run;
   }
 

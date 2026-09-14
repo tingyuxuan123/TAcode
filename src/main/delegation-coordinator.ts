@@ -52,6 +52,7 @@ export interface DelegationHost {
   waitForIdle(options?: { startGraceMs?: number }): Promise<void>;
   /** 最近一次 worker 退出信息（退出码/信号/stderr 摘要）；仍在运行时为 undefined。 */
   describeExit?(): { code?: number; signal?: string; stderrExcerpt: string } | undefined;
+  onEvent?(listener: (event: AgentEvent) => void): () => void;
 }
 
 export interface DelegationCoordinatorOptions {
@@ -116,9 +117,8 @@ const TERMINAL_RETENTION_MS = 60_000;
 const MAX_ACTIVITY_TEXT_CHARS = 200;
 /** 单次委派完成的兜底超时：超时归类 timeout，不再无限等待。 */
 const DEFAULT_COMPLETION_TIMEOUT_MS = 30 * 60_000;
-/** 轮数看门狗的轮询间隔；比它更细的意义不大，子代理自己也会按同一上限收口。 */
-const TURN_LIMIT_POLL_MS = 500;
-
+/** 仅用于旧版/最小 host 没有 onEvent 时的兼容兜底；真实 AgentHost 走事件流。 */
+const TURN_LIMIT_FALLBACK_POLL_MS = 500;
 export class DelegationCoordinator {
   private readonly entries = new Map<string, DelegationEntry>();
   /** parentSessionPath → 该父会话的委派 id，避免每次 list/wait 全表扫描。 */
@@ -129,6 +129,8 @@ export class DelegationCoordinator {
   private readonly pausedParents = new Set<string>();
   private readonly parentEpochs = new Map<string, number>();
   private readonly hostStops = new WeakMap<DelegationHost, Promise<void>>();
+  /** wait() 的完成通知，避免每个父会话每 25ms 唤醒一次。 */
+  private readonly completionListeners = new Set<() => void>();
   private readonly state: TacodeStateStore;
   private readonly ownsState: boolean;
 
@@ -344,23 +346,23 @@ export class DelegationCoordinator {
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > DELEGATION_MAX_TIMEOUT_SECONDS) {
       throw new Error(`Delegation timeout must be an integer between 1 and ${DELEGATION_MAX_TIMEOUT_SECONDS} seconds.`);
     }
-    let pollTimer: ReturnType<typeof setTimeout> | undefined;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let checkCompletion: (() => void) | undefined;
     const waitForTarget = new Promise<void>((resolve) => {
-      const poll = (): void => {
+      checkCompletion = (): void => {
         const completed = entries.filter((entry) => isDelegationTerminal(entry.record.status)).length;
         if (completed >= target) resolve();
-        else pollTimer = setTimeout(poll, 25);
       };
-      poll();
+      this.completionListeners.add(checkCompletion);
+      checkCompletion();
     });
     const timeout = new Promise<"timeout">((resolve) => {
       timeoutTimer = setTimeout(() => resolve("timeout"), timeoutSeconds * 1_000);
       timeoutTimer.unref?.();
     });
     const result = await Promise.race([waitForTarget.then(() => "completed" as const), timeout]);
-    if (pollTimer) clearTimeout(pollTimer);
     if (timeoutTimer) clearTimeout(timeoutTimer);
+    if (checkCompletion) this.completionListeners.delete(checkCompletion);
     return { status: result, delegations: entries.map((entry) => this.snapshot(entry)) };
   }
 
@@ -627,7 +629,9 @@ export class DelegationCoordinator {
     }
     if (signal.aborted) return;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let offTurnEvents: (() => void) | undefined;
     let limitTimer: ReturnType<typeof setInterval> | undefined;
+    let turnsSeen = baselineTurns;
     const collection = new AbortController();
     let onAbort = () => {};
     const cancelled = new Promise<"cancelled">((resolve) => {
@@ -638,19 +642,26 @@ export class DelegationCoordinator {
       timeoutTimer = setTimeout(() => resolve("timeout"), timeoutMs);
       timeoutTimer.unref?.();
     });
-    // 看门狗：子代理自己也会按同一个上限收口（runtime 的 turn_end 钩子），这里兜底
-    // 「子代理没停」的情况，避免只能等 30 分钟兜底超时。
+    // 看门狗优先消费 worker 已经发出的 message_end 事件；不再每 500ms 拉取整份历史。
+    // 如果某个替身 host 没有事件订阅，collectReport 在空闲后仍会做一次权威对账。
     const turnLimit = new Promise<"turn_limit">((resolve) => {
       const maxTurns = limit;
       if (maxTurns === undefined) return;
-      limitTimer = setInterval(() => {
-        void this.assistantTurns(host)
-          .then((turns) => {
+      if (host.onEvent) {
+        offTurnEvents = host.onEvent((event) => {
+          const message = event.message;
+          if (event.type !== "message_end" || !message || typeof message !== "object" || (message as { role?: unknown }).role !== "assistant") return;
+          turnsSeen += 1;
+          if (turnsSeen - baselineTurns >= maxTurns) resolve("turn_limit");
+        });
+      } else {
+        limitTimer = setInterval(() => {
+          void this.assistantTurns(host).then((turns) => {
             if (turns - baselineTurns >= maxTurns) resolve("turn_limit");
-          })
-          .catch(() => undefined);
-      }, TURN_LIMIT_POLL_MS);
-      limitTimer.unref?.();
+          }).catch(() => undefined);
+        }, TURN_LIMIT_FALLBACK_POLL_MS);
+        limitTimer.unref?.();
+      }
     });
     try {
       const outcome = await Promise.race([
@@ -661,6 +672,7 @@ export class DelegationCoordinator {
       ]);
       clearTimeout(timeoutTimer);
       clearInterval(limitTimer);
+      offTurnEvents?.();
       if (signal.aborted) return;
       collection.abort();
       if (outcome === "turn_limit") {
@@ -694,6 +706,7 @@ export class DelegationCoordinator {
     } catch (error) {
       clearTimeout(timeoutTimer);
       clearInterval(limitTimer);
+      offTurnEvents?.();
       collection.abort();
       if (signal.aborted) return;
       const exit = host?.describeExit?.();
@@ -717,6 +730,7 @@ export class DelegationCoordinator {
     } finally {
       clearTimeout(timeoutTimer);
       clearInterval(limitTimer);
+      offTurnEvents?.();
       signal.removeEventListener("abort", onAbort);
       collection.abort();
     }
@@ -1013,6 +1027,7 @@ export class DelegationCoordinator {
     this.persist(entry);
     this.publish(entry);
     entry.resolveCompletion();
+    for (const listener of this.completionListeners) listener();
   }
 
   /** 是否具备模型回退条件：钉了模型、与父会话模型不同、且还没回退过。 */

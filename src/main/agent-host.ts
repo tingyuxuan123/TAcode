@@ -62,8 +62,14 @@ export class AgentHost {
   private static readonly STDERR_CAP = 200_000;
   /** 短期事件回放缓冲：snapshot 期间到达的事件按序号补齐，避免快照与实时流之间出现缺口。 */
   private static readonly REPLAY_CAP = 500;
+  /** 回放也按字节限额，避免单个超长工具输出撑大主进程内存。 */
+  private static readonly REPLAY_BYTES_CAP = 2 * 1024 * 1024;
   private seq = 0;
   private replayBuffer: AgentEvent[] = [];
+  private replaySizes: number[] = [];
+  private replayBytes = 0;
+  private replayFloorSeq = 0;
+  private readonly eventListeners = new Set<(event: AgentEvent) => void>();
   /** 最近一次 snapshot 应答时的事件序号；replay 从它之后开始。 */
   private snapshotSeq = 0;
   /** 启动时交给 worker 的凭据；stderr/错误文本落日志前先脱敏。 */
@@ -215,6 +221,16 @@ export class AgentHost {
     );
   }
 
+  /** snapshot 之后若缺口已经被有界缓冲淘汰，调用方必须重新取快照。 */
+  replayGap(afterSeq: number): boolean {
+    return afterSeq < this.replayFloorSeq;
+  }
+
+  onEvent(listener: (event: AgentEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
+  }
+
   /** 给事件附上所属会话 id 与运行句柄，供渲染层按活动会话路由并去重。 */
   private tagged(event: AgentEvent): AgentEvent {
     if (event.type === "extension_ui_request" && event.method === "setStatus" && event.statusKey === "tacode") this.capabilitiesReport = undefined;
@@ -247,8 +263,19 @@ export class AgentHost {
       this.pendingUi.set(next.id, { request: next, timer });
     }
     this.replayBuffer.push(next);
-    if (this.replayBuffer.length > AgentHost.REPLAY_CAP)
-      this.replayBuffer.splice(0, this.replayBuffer.length - AgentHost.REPLAY_CAP);
+    let eventBytes = 0;
+    try { eventBytes = Buffer.byteLength(JSON.stringify(next)); } catch { /* JSON-RPC events are serializable. */ }
+    this.replayBytes += eventBytes;
+    this.replaySizes.push(eventBytes);
+    while (this.replayBuffer.length > AgentHost.REPLAY_CAP || this.replayBytes > AgentHost.REPLAY_BYTES_CAP) {
+      const removed = this.replayBuffer.shift();
+      if (!removed) break;
+      this.replayBytes -= this.replaySizes.shift() ?? 0;
+      if (typeof removed.__seq === "number") this.replayFloorSeq = removed.__seq;
+    }
+    for (const listener of this.eventListeners) {
+      try { listener(next); } catch { /* observers must not break the RPC event stream. */ }
+    }
     return next;
   }
 
@@ -576,6 +603,7 @@ export class AgentHost {
     this.contextStats = new ContextStatsTracker();
     this.latestStats = undefined;
     this.cancelBrowserRequests();
+    this.resetBrowser?.();
     this.turnActive = false;
     // 停 host 也要放行等待者：否则「已退出的 worker 再 stop()」会走下面的早退分支，
     // 让 waitForIdle 的等待者永久挂起（delegate_stop / 超时收口路径都会踩到）。

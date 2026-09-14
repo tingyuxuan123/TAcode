@@ -188,7 +188,7 @@
 
   **实施结果（2026-09-14）。** 已显示当前会话的实际 Skills/MCP 数量、未生效、排队、重载和失败状态。Pi 在进程内缓存信任判断，首次信任只重建该会话 worker；普通编辑热重载。重载等待生成、审批和子任务结束，保留历史、当前模型与权限；真实 RPC/MCP 集成及桌面草稿/项目切换回归通过。
 
-- [ ] **UX-17 · 长时间使用后的资源回收**
+- [x] **UX-17 · 长时间使用后的资源回收**
 
   **代码确认，内存与耗电收益待测。** AgentManager 保留会话 worker，缺少空闲预算；命令队列 Map 保留已完成链，浏览器自动化的 session Map 在 reset 时清引用但未删除条目；回放缓存仅限 500 个事件，未限制总字节。macOS 关主窗口时还未关闭工作区 watcher。委派等待使用 25ms 轮询，轮数看门狗在配置 maxTurns 时每 500ms 拉取消息。
 
@@ -197,6 +197,10 @@
   **验收。** 顺序浏览/运行并结束 50 个会话后，空闲 worker、Map 条目和监听器数量回到约定范围；打开再关闭窗口不累加监听；无任务时减少定时唤醒；运行中、等待审批和仍有子任务的会话不被当作可回收空闲会话。
 
   **定位与风险。** [AgentManager](/Users/yfdl/project/TAcode/src/main/agent-manager.ts:65)、[浏览器会话状态](/Users/yfdl/project/TAcode/src/main/browser/automation.ts:53)、[关窗清理](/Users/yfdl/project/TAcode/src/main/index.ts:531)、[委派等待](/Users/yfdl/project/TAcode/src/main/delegation-coordinator.ts:327)。风险中等，先测长时间运行的资源曲线，避免把所有常驻缓存都视作泄漏。
+
+  **实施结果（2026-09-14）。** AgentManager 保留最多 8 个可回收的空闲 worker，按最近使用时间和 5 分钟 TTL 淘汰；活动会话、生成/审批/浏览器请求、子任务、能力重载及命令队列中的 host 均受保护，历史仍可按 JSONL 恢复。命令队列完成后删除自身条目，浏览器 runtime session 在没有工作标签或归属标签时回收，窗口销毁也清理空 session。AgentHost 回放增加 2 MiB 字节预算并在缺口溢出时重新取快照；子会话初始事件缓冲超过 1000 条或 2 MiB 时重读权威转录。委派等待改为完成事件通知，轮数看门狗对真实 AgentHost 消费 `message_end` 增量事件，仅无事件订阅的最小替身保留低频兜底轮询。
+
+  **验证结果。** 50 个顺序会话的生命周期测试确认空闲 worker 和 `startOptions` Map 收敛到最多 9 个（8 个空闲加当前选中会话），待处理 worker 在安全前不会被回收；队列条目、浏览器 session、回放缺口与委派完成/轮数回归均通过。全量 **132 文件 / 1053 测试通过**（2 workers），`pnpm typecheck` 与 `git diff --check` 通过。
 
 建议先完成 UX-01、UX-02，并穿插 UX-03、UX-09 的搜索语义修正、UX-10 这几项改动集中的工作。随后推进历史读取、启动和会话索引，再处理 checkpoint、多面板和停止路径。每次只交付能独立验证的变化；表中工期不能简单相加为排期，几项底层工作可以复用。
 

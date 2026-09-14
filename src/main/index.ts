@@ -1483,7 +1483,7 @@ function registerIpc(): void {
     agentActivities.acknowledge(runtimeId, rawVersion);
   });
   ipcMain.handle("agent:replay", (_event, runtimeId: string, afterSeq: number) =>
-    agentManager.replay(runtimeId, Number.isFinite(afterSeq) ? afterSeq : 0),
+    agentManager.replayWithResync(runtimeId, Number.isFinite(afterSeq) ? afterSeq : 0),
   );
   ipcMain.handle(
     "agent:command",

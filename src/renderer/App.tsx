@@ -1100,6 +1100,13 @@ export function App() {
           .then((missed) => {
             if (seq !== startSeq.current || !live.current || !missed.length) return;
             const before = eventSeqRef.current.get(file) ?? replaySeq;
+            const resync = missed.find((event) => event.type === "desktop_replay_snapshot");
+            if (resync && Array.isArray(resync.messages)) {
+              setMessages(normalizeMessages(resync.messages));
+              if (resync.stats && typeof resync.stats === "object") setStats(resync.stats as AgentSessionStats);
+              eventSeqRef.current.set(file, typeof resync.__seq === "number" ? resync.__seq : before);
+              return;
+            }
             const fresh = missed.filter(
               (event) => typeof event.__seq === "number" && event.__seq > before,
             );

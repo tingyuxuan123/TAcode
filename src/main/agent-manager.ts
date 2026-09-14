@@ -10,6 +10,12 @@ import type {
 import type { AgentHost } from "./agent-host";
 import type { CapabilityRuntimeStatus, RuntimeCapabilityReport } from "../shared/capabilities";
 
+/** 空闲 worker 的硬预算：已结束会话仍可从 JSONL 恢复，不必无限占用进程和内存。 */
+export const MAX_IDLE_WORKERS = 8;
+/** 长时间没有用户或后台活动的 worker 可提前回收；下次打开会按会话文件恢复。 */
+export const IDLE_WORKER_TTL_MS = 5 * 60_000;
+const IDLE_REAPER_INTERVAL_MS = 30_000;
+
 /** 从会话快照/命令结果里抽取底层会话文件路径。 */
 export function sessionFileFromUnknown(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || !("sessionFile" in value))
@@ -72,10 +78,15 @@ export class AgentManager {
   private readonly stopping = new Map<string, Promise<void>>();
   private readonly startOptions = new Map<string, AgentHostStartOptions>();
   private readonly capabilityReloads = new Map<string, Promise<CapabilityRuntimeStatus>>();
+  private readonly lastUsedAt = new Map<string, number>();
   private activeRuntimeId: string | undefined;
   private selection = 0;
+  private readonly idleReaper: NodeJS.Timeout;
 
-  constructor(private readonly options: AgentManagerOptions) {}
+  constructor(private readonly options: AgentManagerOptions) {
+    this.idleReaper = setInterval(() => { void this.reapIdle().catch(() => undefined); }, IDLE_REAPER_INTERVAL_MS);
+    this.idleReaper.unref?.();
+  }
 
   get active(): string | undefined {
     return this.activeRuntimeId;
@@ -120,6 +131,25 @@ export class AgentManager {
     return host ? host.replaySince(afterSeq) : [];
   }
 
+  /** 回放窗口溢出时取权威快照，避免把有界缓冲的缺口静默交给 renderer。 */
+  async replayWithResync(runtimeId: string | undefined, afterSeq: number): Promise<AgentEvent[]> {
+    const host = this.activeHost(runtimeId);
+    if (!host || !host.isRunning()) return [];
+    if (typeof host.replayGap !== "function" || !host.replayGap(afterSeq)) return host.replaySince(afterSeq);
+    const snapshot = await host.snapshot();
+    return [{
+      type: "desktop_replay_snapshot",
+      state: snapshot.state,
+      messages: snapshot.messages,
+      ...(snapshot.stats ? { stats: snapshot.stats } : {}),
+      ...(snapshot.skills ? { skills: snapshot.skills } : {}),
+      lastSeq: host.lastSeq,
+      __seq: host.lastSeq,
+      ...(host.runtimeId ? { __runtimeId: host.runtimeId } : {}),
+      ...(host.sessionKey ? { __sessionId: host.sessionKey } : {}),
+    }];
+  }
+
   async start(options: AgentHostStartOptions): Promise<AgentStartResult> {
     const selection = ++this.selection;
     const reloading = this.findBySession(options.sessionPath);
@@ -137,7 +167,7 @@ export class AgentManager {
       if (reused?.isRunning()) return this.snapshotOn(reused, selection);
       if (reused) this.removeHost(reused);
       return this.startOn(this.createHost(), options, selection);
-    });
+    }).then((result) => { void this.reapIdle().catch(() => undefined); return result; });
   }
 
   /** 复用已在运行的宿主：只取快照与缺口事件，不重启 worker。 */
@@ -147,10 +177,12 @@ export class AgentManager {
     const host = this.findRuntime(runtimeId);
     if (!host || !host.isRunning())
       return Promise.reject(new Error("Agent session is not running"));
+    this.touch(host);
     return this.snapshotOn(host, selection);
   }
 
   private async snapshotOn(host: AgentHost, selection: number): Promise<AgentStartResult> {
+    this.touch(host);
     await this.capabilityReloads.get(host.runtimeId);
     // 读取不能排在等待 UI 的 prompt 后，否则连恢复确认卡也会死锁。
     const snapshot = await host.snapshot();
@@ -173,10 +205,15 @@ export class AgentManager {
     if (closing) return closing;
     const host = this.activeHost(runtimeId);
     if (!host) return Promise.resolve();
+    const lastUsedAt = this.lastUsedAt.get(host.runtimeId) ?? Date.now();
     // 关闭不能排在尚未返回的命令后面；Host.stop 会拒绝那些未完成请求。
     this.removeHost(host);
     const job = Promise.all([this.stopDelegations(host), host.stop()]).then(() => undefined).catch((error) => {
-      if (host.isRunning()) { this.runtimes.set(host.runtimeId, host); this.reindex(host); }
+      if (host.isRunning()) {
+        this.runtimes.set(host.runtimeId, host);
+        this.lastUsedAt.set(host.runtimeId, lastUsedAt);
+        this.reindex(host);
+      }
       throw error;
     }).finally(() => { this.stopping.delete(host.runtimeId); });
     this.stopping.set(host.runtimeId, job);
@@ -190,6 +227,7 @@ export class AgentManager {
   ): Promise<T> {
     const host = this.activeHost(runtimeId);
     if (!host) return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
+    this.touch(host);
     if (!host.isRunning() && !this.capabilityReloads.has(host.runtimeId)) {
       this.removeHost(host);
       return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
@@ -230,6 +268,7 @@ export class AgentManager {
   ): Promise<void> {
     const host = this.activeHost(runtimeId);
     if (!host) return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
+    this.touch(host);
     // UI 应答是宿主正在等待的“带外”回复，必须绕过按 runtime 串行化的命令队列：
     // 触发这次询问的 prompt 命令可能仍挂在队列里（例如斜杠命令内部 await
     // ctx.ui.confirm），若把应答排在它后面就会互相等待死锁。
@@ -238,11 +277,15 @@ export class AgentManager {
 
   /** 退出/关窗时回收全部宿主，每个 host 只 stop 一次。 */
   async stopAll(): Promise<void> {
+    clearInterval(this.idleReaper);
     this.deactivate();
     const hosts = [...this.runtimes.values()];
     this.runtimes.clear();
     this.index.clear();
     this.startOptions.clear();
+    this.lastUsedAt.clear();
+    this.queues.clear();
+    this.capabilityReloads.clear();
     this.activeRuntimeId = undefined;
     await Promise.all([...this.stopping.values(), ...hosts.map((host) => Promise.all([this.stopDelegations(host), host.stop()]))].map((job) => job.catch(() => undefined)));
   }
@@ -261,12 +304,18 @@ export class AgentManager {
       return Boolean(session && this.options.hasDelegations?.(session));
     };
     this.runtimes.set(runtimeId, host);
+    this.lastUsedAt.set(runtimeId, Date.now());
     return host;
+  }
+
+  private touch(host: AgentHost): void {
+    this.lastUsedAt.set(host.runtimeId, Date.now());
   }
 
   private removeHost(host: AgentHost): void {
     this.runtimes.delete(host.runtimeId);
     this.startOptions.delete(host.runtimeId);
+    this.lastUsedAt.delete(host.runtimeId);
     for (const [key, id] of this.index)
       if (id === host.runtimeId) this.index.delete(key);
     if (this.activeRuntimeId === host.runtimeId) this.activeRuntimeId = undefined;
@@ -316,8 +365,39 @@ export class AgentManager {
   private enqueue<T>(key: string, action: () => Promise<T>): Promise<T> {
     const previous = this.queues.get(key) ?? Promise.resolve();
     const next = previous.then(action, action);
-    this.queues.set(key, next.catch(() => undefined));
-    return next;
+    let tracked: Promise<unknown>;
+    const finalized = next.then(
+      (value) => {
+        if (this.queues.get(key) === tracked) this.queues.delete(key);
+        return value;
+      },
+      (error) => {
+        if (this.queues.get(key) === tracked) this.queues.delete(key);
+        throw error;
+      },
+    );
+    tracked = finalized.catch(() => undefined);
+    this.queues.set(key, tracked);
+    return finalized;
+  }
+
+  /**
+   * 回收可恢复的空闲 worker。活动会话、生成中、等待审批/浏览器请求、有子任务、
+   * 能力重载和仍在命令队列中的 host 一律保留。先按数量收敛，再按 TTL 淘汰。
+   */
+  async reapIdle(now = Date.now()): Promise<number> {
+    const idle = [...this.runtimes.values()]
+      .filter((host) => host.runtimeId !== this.activeRuntimeId)
+      .filter((host) => host.isRunning() && !host.isInTurn() && !host.hasPendingWork)
+      .filter((host) => !this.hasDelegations(host))
+      .filter((host) => !host.capabilitiesScheduled && !host.requiresCapabilityRestart && !host.hasCapabilityChanges)
+      .filter((host) => !this.capabilityReloads.has(host.runtimeId) && !this.stopping.has(host.runtimeId))
+      .filter((host) => !this.queues.has(host.runtimeId))
+      .sort((left, right) => (this.lastUsedAt.get(left.runtimeId) ?? 0) - (this.lastUsedAt.get(right.runtimeId) ?? 0));
+    const evict = idle.filter((host, index) => index < Math.max(0, idle.length - MAX_IDLE_WORKERS)
+      || now - (this.lastUsedAt.get(host.runtimeId) ?? now) >= IDLE_WORKER_TTL_MS);
+    await Promise.all(evict.map((host) => this.stop(host.runtimeId).catch(() => undefined)));
+    return evict.length;
   }
 
   invalidateCapabilities(cwd?: string, trustChanged = false): void {
@@ -330,7 +410,12 @@ export class AgentManager {
 
   private canReloadCapabilities(host: AgentHost): boolean {
     const session = host.sessionKey ?? host.requestedSessionPath;
-    return !host.isInTurn() && !host.hasPendingWork && !(session && this.options.hasDelegations?.(session));
+    return !host.isInTurn() && !host.hasPendingWork && !this.hasDelegations(host);
+  }
+
+  private hasDelegations(host: AgentHost): boolean {
+    const session = host.sessionKey ?? host.requestedSessionPath;
+    return Boolean(session && this.options.hasDelegations?.(session));
   }
 
   /** No polling: settlement, resolved approvals and child completion retry a scheduled reload. */
