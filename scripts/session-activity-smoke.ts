@@ -15,6 +15,7 @@ import { WorkspaceWatchers } from "../src/main/workspace-watcher";
 import { readWorkspacePreview } from "../src/main/workspace-preview";
 import { testFilePreview, type PreviewSmokeControls } from "./file-preview-smoke";
 import { createPanelFixture, testPanelPerformance } from "./panel-performance-smoke";
+import { seedSearchHistory, testSearch } from "./search-smoke";
 import { createLargeFixture, testLargeContent } from "./large-content-smoke";
 import { testStopping, type StopSmokeControls } from "./stop-smoke";
 import { initializeTacodeHome } from "../src/runtime/home";
@@ -54,6 +55,8 @@ async function smoke() {
   const startupSmoke = process.env.TACODE_STARTUP_SMOKE === "1";
   const listSmoke = process.env.TACODE_SESSION_LIST_SMOKE === "1";
   const filesSmoke = process.env.TACODE_FILES_SMOKE === "1";
+  const searchSmoke = process.env.TACODE_SEARCH_SMOKE === "1";
+  const searchControls = { failEarlier: true };
   const largeSmoke = process.env.TACODE_LARGE_SMOKE === "1";
   const largeFixture = largeSmoke ? createLargeFixture() : undefined;
   const previewSmoke = process.env.TACODE_PREVIEW_SMOKE === "1";
@@ -82,10 +85,11 @@ async function smoke() {
   const activity = new AgentActivityStore((value) => main?.webContents.send("agent:activity", value));
   const now = new Date().toISOString();
   const sessionDirectory = startupSmoke || listSmoke ? path.join(root, "home", "sessions") : project;
-  const sessions: SessionSummary[] = (startupSmoke ? Array.from({ length: startupCount }, (_, i) => String(i)) : ["A", "B"]).map((name) => ({
+  const sessions: SessionSummary[] = (startupSmoke ? Array.from({ length: startupCount }, (_, i) => String(i)) : searchSmoke ? ["A", "B", ...Array.from({ length: 998 }, (_, i) => `S${i}`)] : ["A", "B"]).map((name) => ({
     id: name, title: `会话 ${name}`, path: path.join(sessionDirectory, `${name}.jsonl`), storagePath: path.join(sessionDirectory, `${name}.jsonl`),
     cwd: project, createdAt: now, updatedAt: now, messageCount: 2, pinned: false, archived: false,
   }));
+  if (searchSmoke) { sessions[1].title = "会话 A"; sessions[1].cwd = path.join(project, "副项目"); }
   const panelFixture = panelsSmoke ? createPanelFixture(project, sessions[0].path) : undefined;
   const transcript = (file: string) => (largeFixture && file === sessions[0].path ? largeFixture.messages : undefined) ?? panelFixture?.messages.get(file) ?? [
     { role: "user", content: [{ type: "text", text: `${path.basename(file)} 的问题` }], timestamp: Date.parse(now) + 1 },
@@ -203,7 +207,7 @@ async function smoke() {
     ipcMain.handle("providers:defaults", () => ({ defaultProviderId: null, defaultModelId: null }));
     ipcMain.handle("vision:config", () => ({ profiles: [], activeProfileId: "" }));
     ipcMain.handle("app:log-diagnostic", () => {});
-    ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }]);
+    ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }, ...(searchSmoke ? [{ path: path.join(project, "副项目"), name: "副项目", updatedAt: now }] : [])]);
     ipcMain.handle("workspace:list", (_event, cwd, refresh) => {
       if (filesSmoke || previewSmoke || largeSmoke) {
         fileListCalls++;
@@ -239,7 +243,8 @@ async function smoke() {
     ipcMain.handle("sessions:maintain", () => startupMaintenance.run());
     ipcMain.handle("sessions:read", async (_event, file, options) => {
       if (file === delayedHistory) await new Promise<void>((resolve) => { releaseHistory = resolve; });
-      return historySmoke ? readSessionTranscript(project, file, options) : { sessionPath: file, messages: transcript(file), totalMessages: 2, truncated: false };
+      if (searchSmoke && options?.before && searchControls.failEarlier) throw new Error("fixture history search read failed");
+      return historySmoke || searchSmoke ? readSessionTranscript(project, file, options) : { sessionPath: file, messages: transcript(file), totalMessages: 2, truncated: false };
     });
     ipcMain.handle("sessions:rename", async (_event, id, title) => {
       await mutationBarrier();
@@ -301,13 +306,27 @@ async function smoke() {
     main.webContents.on("console-message", (_event, level, message) => { if (level >= 3) rendererErrors.push(`${stage}: ${message}`); });
     main.webContents.on("render-process-gone", (_event, details) => { console.error("Fixture renderer exited", details); app.exit(1); });
     // 活动/输入回归从已有 worker 开始；纯阅读回归单独验证零 worker。
-    if (historySmoke) {
+    if (searchSmoke) {
+      controls.configured = false;
+      await seedSearchHistory(sessions);
+    } else if (historySmoke) {
       controls.configured = false;
       for (const session of sessions) await writeTranscript(session.path, session.id === "A" ? 460 : 2);
     } else if (!startupSmoke && !listSmoke) for (const session of sessions) await manager.start({ cwd: project, sessionPath: session.path, provider: "openai", permission: "auto", sandbox: "read-only", serviceKey: "fixture:1" });
     manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (searchSmoke) {
+      stage = "session and conversation search";
+      activity.observe({ type: "agent_start", __runtimeId: "search-running", __sessionId: sessions[2].path });
+      activity.observe({ type: "agent_start", __runtimeId: "search-waiting", __sessionId: sessions[3].path });
+      activity.observe({ type: "extension_ui_request", __runtimeId: "search-waiting", __sessionId: sessions[3].path, id: "search-confirm", method: "confirm", title: "等待确认" });
+      activity.fail("search-failed", sessions[4].path, "fixture failure", true);
+      await testSearch(main, searchControls, screenshot);
+      assert.equal(manager.list().length, 0);
+      assert.deepEqual(rendererErrors.filter(message => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      return;
+    }
     if (largeSmoke && largeFixture) {
       stage = "large content performance";
       await testLargeContent(main, project, largeFixture, event => emit(manager.findBySession(sessions[0].path)!, event), select, screenshot);
@@ -460,7 +479,10 @@ async function smoke() {
       console.log("STARTUP_RESULT " + JSON.stringify({ mode: startupBaseline ? "blocking" : "deferred", sessions: startupCount, windowShownMs, sidebarReadyMs, composerReadyMs, inputMs, organizedMs: performance.now() - startupAt }));
       return;
     }
-    if (historySmoke) {
+    if (searchSmoke) {
+      controls.configured = false;
+      await seedSearchHistory(sessions);
+    } else if (historySmoke) {
       stage = "read histories without model configuration or workers";
       await wait(() => evaluate("document.querySelectorAll('.home-recent').length === 2"));
       await evaluate("document.querySelector('.home-recent').click()");

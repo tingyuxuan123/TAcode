@@ -67,7 +67,7 @@
   {
     "id": "UX-14",
     "description": "会话检索与对话内查找。验收：1000 个会话中能按标题和项目缩小范围；搜索到当前视口之外的消息后可定位、前后跳转；中文关键词和同名会话有路径或摘要帮助识别；搜索不会启动对应 Agent。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-14。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "UX-15",

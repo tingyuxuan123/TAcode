@@ -28,13 +28,13 @@ export interface MessageListItem {
 
 export interface MessageListHandle {
   /**
-   * 跳到某个锚点所在的条目；该条目可能尚未挂载。
+   * 跳到锚点或条目 key 所在的条目；该条目可能尚未挂载。
    *
    * 目标条目之前从未挂载过时，第一跳用的是估算高度；条目挂载并测量后，
    * 估算误差会落在起始偏移上，所以再补两跳把位置收敛，
    * 最后在测量稳定时回调 `onSettled`（调用方用它重新取样滚动锚点）。
    */
-  scrollToAnchor(anchor: string, options?: { smooth?: boolean; onSettled?: () => void }): void;
+  scrollToAnchor(anchor: string, options?: { smooth?: boolean; offset?: number; onSettled?: () => void }): void;
   /** 当前阅读位置对应的锚点：最后一条已滚过顶部 `offset` 像素的提问轮。 */
   anchorAt(offset?: number): string | undefined;
 }
@@ -85,11 +85,12 @@ function buildCacheSnapshot(items: MessageListItem[], heightKey: (item: MessageL
  * 流式每帧只重建最后一两条的条目对象（见 App 的 listItems 缓存），
  * 视口里其余历史条目在这里被挡住，不再产生每帧的元素 diff。
  */
-const MemoItem = memo(function MemoItem({ item, index, first, last, recordHeight }: {
+const MemoItem = memo(function MemoItem({ item, index, first, last, matched, recordHeight }: {
   item: MessageListItem;
   index: number;
   first: boolean;
   last: boolean;
+  matched: boolean;
   /** 记录本条目实测高度的回调（含会话隔离，见 MessageList）。 */
   recordHeight(item: MessageListItem, node: HTMLElement): void;
 }) {
@@ -106,9 +107,10 @@ const MemoItem = memo(function MemoItem({ item, index, first, last, recordHeight
   const classes = ["message-item"];
   if (first) classes.push("first");
   if (last) classes.push("last");
-  return <div className={classes.join(" ")} data-index={index} ref={nodeRef}>{item.render()}</div>;
+  return <div className={classes.join(" ")} data-index={index} data-find-match={matched || undefined} ref={nodeRef}>{item.render()}</div>;
 }, (previous, next) =>
   previous.item === next.item && previous.index === next.index
+  && previous.matched === next.matched
   && previous.first === next.first && previous.last === next.last
   && previous.recordHeight === next.recordHeight);
 
@@ -125,8 +127,11 @@ export const MessageList = forwardRef<MessageListHandle, {
    * 条目 key 可能与别的会话撞车（消息 id 在不同会话里可重复），靠它隔开。
    */
   cacheKey?: string;
-}>(function MessageList({ items, scrollerRef, contentRef, progressActive = false, bufferSize = 1200, cacheKey = "" }, ref) {
+  findKey?: string;
+}>(function MessageList({ items, scrollerRef, contentRef, progressActive = false, bufferSize = 1200, cacheKey = "", findKey }, ref) {
   const virtualizer = useRef<VirtualizerHandle>(null);
+  const cancelNavigation = useRef<() => void>(() => {});
+  useEffect(() => () => cancelNavigation.current(), [cacheKey]);
   const previousItems = useRef(items);
   const prepended = items.length > previousItems.current.length && Boolean(previousItems.current.length)
     && items[items.length - previousItems.current.length]?.key === previousItems.current[0]?.key;
@@ -152,12 +157,13 @@ export const MessageList = forwardRef<MessageListHandle, {
 
   useImperativeHandle(ref, () => ({
     scrollToAnchor(anchor, options = {}) {
-      const index = items.findIndex((item) => item.anchor === anchor);
+      cancelNavigation.current();
+      const index = items.findIndex((item) => item.anchor === anchor || item.key === anchor);
       const box = scrollerRef.current;
       const handle = virtualizer.current;
       if (index < 0 || !box || !handle) return;
-      const { smooth = true, onSettled } = options;
-      handle.scrollToIndex(index, { align: "start", smooth });
+      const { smooth = true, offset = 0, onSettled } = options;
+      handle.scrollToIndex(index, { align: "start", smooth, offset });
 
       // virtua 按自己记录的条目偏移滚动；目标条目此前没挂载过时偏移是估算值，
       // 挂载测量后起始偏移会被修正，落点会差出一截。所以滚动到位后再按真实 DOM
@@ -168,11 +174,13 @@ export const MessageList = forwardRef<MessageListHandle, {
       let lastCorrection = 0;
       let corrections = 0;
       let settled = false;
+      let frame = 0;
       const touch = () => { lastActivity = performance.now(); };
+      const cancel = () => { settled = true; cancelAnimationFrame(frame); box.removeEventListener("scroll", touch); };
+      cancelNavigation.current = cancel;
       const finish = () => {
         if (settled) return;
-        settled = true;
-        box.removeEventListener("scroll", touch);
+        cancel();
         onSettled?.();
       };
       box.addEventListener("scroll", touch, { passive: true });
@@ -180,7 +188,7 @@ export const MessageList = forwardRef<MessageListHandle, {
         if (settled) return;
         const node = box.querySelector<HTMLElement>(`.message-item[data-index="${index}"]`);
         const delta = node
-          ? node.getBoundingClientRect().top - box.getBoundingClientRect().top
+          ? node.getBoundingClientRect().top - box.getBoundingClientRect().top + offset
           : Number.POSITIVE_INFINITY;
         const idle = performance.now() - lastActivity > 120;
         if (Math.abs(delta) <= 1) {
@@ -195,14 +203,14 @@ export const MessageList = forwardRef<MessageListHandle, {
           corrections += 1;
           lastCorrection = performance.now();
           stable = 0;
-          handle.scrollToIndex(index, { align: "start", smooth: false });
+          handle.scrollToIndex(index, { align: "start", smooth: false, offset });
           lastActivity = lastCorrection;
         }
         frames += 1;
-        if (frames < 240 && (frames < 120 || corrections < 8)) requestAnimationFrame(tick);
+        if (frames < 240 && (frames < 120 || corrections < 8)) frame = requestAnimationFrame(tick);
         else finish();
       };
-      requestAnimationFrame(tick);
+      frame = requestAnimationFrame(tick);
     },
     anchorAt(offset = 160) {
       const box = scrollerRef.current;
@@ -226,9 +234,10 @@ export const MessageList = forwardRef<MessageListHandle, {
       index={index}
       first={index === 0}
       last={index === items.length - 1}
+      matched={item.key === findKey}
       recordHeight={recordHeight}
     />
-  ), [items.length, recordHeight]);
+  ), [items.length, recordHeight, findKey]);
 
   return (
     <div className={progressActive ? "messages has-progress" : "messages"} ref={contentRef}>

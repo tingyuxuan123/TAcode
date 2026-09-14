@@ -9364,3 +9364,22 @@ kbd {
 .stop-notice { display: flex; align-items: center; gap: 12px; margin: 0 0 8px; padding: 10px 14px; color: var(--ink-2); background: var(--inset); border: 1px solid var(--line); border-radius: 10px; font-size: calc(12px * var(--ui-font-scale)); }
 .stop-notice span { flex: 1; }
 .stop-notice button { flex: none; padding: 5px 9px; color: var(--red); border: 1px solid var(--line); border-radius: 6px; }
+
+.sidebar-search { display: grid; gap: 6px; padding: 4px 10px 12px; }
+.sidebar-search input, .sidebar-search select { min-width: 0; width: 100%; padding: 7px 9px; background: var(--inset); border: 1px solid var(--line); border-radius: 7px; color: var(--ink); font-size: 12px; }
+.sidebar.is-collapsed .sidebar-search { display: none; }
+.session-search-context { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--ink-3); }
+.chat-find-trigger { display: flex; flex: none; padding: 6px; border-radius: 6px; color: var(--ink-3); -webkit-app-region: no-drag; }
+.chat-find-trigger:hover { color: var(--ink); background: var(--hover); }
+.conversation-find { flex: none; margin: 6px 24px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); z-index: 2; }
+.conversation-find-controls { display: flex; align-items: center; gap: 6px; }
+.conversation-find input { flex: 1; min-width: 0; padding: 5px 6px; font-size: 13px; background: var(--inset); border: 1px solid var(--line); border-radius: 5px; }
+.conversation-find input:focus-visible { outline: 1px solid var(--ink-2); outline-offset: 1px; }
+.conversation-find-controls > span { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.conversation-find button { flex: none; display: inline-flex; padding: 4px; color: var(--ink-2); border-radius: 5px; }
+.conversation-find button:hover { background: var(--hover); }
+.conversation-find p { margin: 6px 4px 0; font-size: 12px; color: var(--ink-2); }
+.conversation-find [role=alert] { color: var(--red); }
+.conversation-find-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-find mark { background: var(--accent-tint); color: var(--ink); font-weight: 600; }
+.message-item[data-find-match=true] { outline: 1px solid var(--line-strong); outline-offset: 6px; border-radius: 6px; }

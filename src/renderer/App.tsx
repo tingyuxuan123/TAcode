@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from "react-dom";
 import { latestContextStats } from "./context-stats";
 import { SessionListLoader } from "./session-list-loader";
+import { ConversationFind } from "./conversation-find";
+import { matchesSession, type SessionFilter, type ConversationMatch } from "./session-search";
 import type {
   AgentSessionStats,
   AgentSessionActivity,
@@ -93,7 +95,7 @@ import { createStreamScheduler } from "./stream-scheduler";
 import { useFollowScroll } from "./use-follow-scroll";
 import { useAgentActivities } from "./use-agent-activities";
 import { composerDrafts, draftScope } from "./composer-drafts";
-import { createImeGuard } from "./ime";
+import { createImeGuard, isImeKey } from "./ime";
 import { SessionActivityError, SessionActivityIndicator } from "./session-activity";
 import { mergeHistoryMessages } from "./session-history";
 import logo from "./logo.svg";
@@ -149,6 +151,7 @@ function MoreIcon() {
 
 export function SessionRow({
   session,
+  showContext,
   activity,
   active,
   running,
@@ -163,6 +166,7 @@ export function SessionRow({
   onRemove,
 }: {
   session: SessionSummary;
+  showContext?: boolean;
   activity?: AgentSessionActivity;
   active: boolean;
   running: boolean;
@@ -246,7 +250,7 @@ export function SessionRow({
         <button
           type="button"
           className="session-row"
-          title={session.sourceDelegationId ? `${session.delegationRole ?? "subagent"}: ${session.title || t("common.unnamed")}` : session.title || t("common.unnamed")}
+          title={`${session.title || t("common.unnamed")}\n${session.cwd}\n${session.path}${session.preview ? `\n${session.preview}` : ""}`}
           aria-label={session.sourceDelegationId ? `${session.delegationRole ?? "subagent"}: ${session.title || t("common.unnamed")}` : session.title || t("common.unnamed")}
           aria-current={active ? "page" : undefined}
           onClick={onOpen}
@@ -257,7 +261,7 @@ export function SessionRow({
             <span className="session-running" title={t("nav.sessionRunning")} aria-label={t("nav.sessionRunning")}></span>
           )}
           {session.sourceDelegationId && !sessionIsRunning && <Icon path="M4 5h16v14H4zM8 9h8M8 13h5" size={12} />}
-          <span className="sidebar-full-label">{session.sourceDelegationId ? `${session.delegationRole ?? "subagent"} · ` : ""}{session.title || t("common.unnamed")}</span>
+          <span className="sidebar-full-label">{session.sourceDelegationId ? `${session.delegationRole ?? "subagent"} · ` : ""}{session.title || t("common.unnamed")}{showContext && <small className="session-search-context">{session.preview || baseName(session.path)} · {relativeTime(session.updatedAt, t)}</small>}</span>
           <span className="sidebar-short-label" aria-hidden="true">{Array.from(session.title.trim() || t("common.unnamed")).slice(0, 2).join("")}</span>
         </button>
       )}
@@ -496,6 +500,25 @@ export function App() {
   const runtimeServiceRef = useRef("");
   const [workspace, setWorkspace] = useState<string>();
   const [activeSession, setActiveSession] = useState<string>();
+  const [sessionQuery, setSessionQuery] = useState("");
+  const [sessionFilter, setSessionFilter] = useState<SessionFilter>("all");
+  const [findOpen, setFindOpen] = useState(false);
+  const [findMessage, setFindMessage] = useState<string>();
+  const findButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => { setFindOpen(false); setFindMessage(undefined); }, [activeSession]);
+  const closeFind = useCallback(() => { setFindOpen(false); setFindMessage(undefined); findButton.current?.focus(); }, []);
+  useEffect(() => {
+    if (!activeSession) return;
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f" || isImeKey(event)) return;
+      if ((event.target as Element)?.closest?.('[aria-modal=true], .file-panel, .browser-panel, .side-chat-panel, .child-session-panel')) return;
+      event.preventDefault();
+      setFindOpen(true);
+      document.querySelector<HTMLInputElement>(".conversation-find input")?.focus();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [activeSession]);
   const [model, setModel] = useState("");
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const modelSwitchBusy = useRef(false);
@@ -511,6 +534,7 @@ export function App() {
   const historyRaw = useRef<unknown[]>([]);
   const historySession = useRef<string | undefined>(undefined);
   const historyStorage = useRef<string | undefined>(undefined);
+  const historyRead = useRef<{ seq: number; cursor: string } | undefined>(undefined);
   const displayMessages = useMemo(() => reconcileDelegationMessages(messages, delegationRecords), [messages, delegationRecords]);
   const [stats, setStats] = useState<AgentSessionStats>();
   const [promptFill, setPromptFill] = useState({ text: "", token: 0 });
@@ -800,6 +824,18 @@ export function App() {
     }
     return [...byPath.values()];
   }, [sessions, workspaces]);
+  const filteringSessions = Boolean(sessionQuery.trim()) || sessionFilter !== "all";
+  const visibleProjects = useMemo(() => filteringSessions ? projects.map(project => ({
+    ...project, sessions: project.sessions.filter(session => matchesSession(session, sessionQuery, sessionFilter, activities.get(session.path), runningSessionIds.has(session.path), project.item.name, Boolean(session.sourceDelegationId && delegationRecords.get(session.sourceDelegationId)?.uiRequest))),
+  })).filter(project => project.sessions.length > 0) : projects, [projects, filteringSessions, sessionQuery, sessionFilter, activities, runningSessionIds, delegationRecords]);
+  const findGroup = findMessage ? groups.find(group => group.type === "user" ? group.message.id === findMessage : group.messages.some(message => message.id === findMessage)) : undefined;
+  const navigateMatch = useCallback((match: ConversationMatch) => {
+    const group = groups.find(group => group.type === "user" ? group.message.id === match.id : group.messages.some(message => message.id === match.id));
+    if (!group) return;
+    setFindMessage(match.id);
+    follow.pause();
+    messageList.current?.scrollToAnchor(group.id, { smooth: false, offset: -40, onSettled: follow.reanchor });
+  }, [groups, follow.pause, follow.reanchor]);
 
   const refreshAgentSkills = useCallback(async (cwd = workspace) => {
     const seq = startSeq.current;
@@ -1221,14 +1257,17 @@ export function App() {
     void startAgent(session.cwd, session.path, true, false, permission, undefined, session.storagePath);
   }, [activeSession, loading, messages.length, permission, startAgent]);
 
-  const loadEarlier = useCallback(async () => {
+  const loadEarlier = useCallback(async (limit = 100) => {
     if (!activeSession || !history?.nextCursor || historyBusy) return;
     const seq = startSeq.current;
+    if (historyRead.current?.seq === seq && historyRead.current.cursor === history.nextCursor) return;
+    const reading = { seq, cursor: history.nextCursor };
+    historyRead.current = reading;
     setHistoryBusy(true);
     setHistoryError(undefined);
     try {
       const page = await window.harness.sessions.read(activeSession, {
-        before: history.nextCursor, limit: 100, strict: true,
+        before: history.nextCursor, limit, strict: true,
         storagePath: sessions.find((session) => isSameSession(session, activeSession))?.storagePath,
       });
       if (seq !== startSeq.current) return;
@@ -1240,6 +1279,7 @@ export function App() {
     } catch (error) {
       if (seq === startSeq.current) setHistoryError(friendlyAgentError(error));
     } finally {
+      if (historyRead.current === reading) historyRead.current = undefined;
       if (seq === startSeq.current) setHistoryBusy(false);
     }
   }, [activeSession, history, historyBusy, sessions, follow.reanchor]);
@@ -2237,7 +2277,14 @@ export function App() {
           />
         )}
       >
+        <div className="sidebar-search">
+          <input type="search" value={sessionQuery} maxLength={500} onChange={event => setSessionQuery(event.target.value)} aria-label={t("find.sessions")} placeholder={t("find.sessions")} />
+          <select value={sessionFilter} onChange={event => setSessionFilter(event.target.value as SessionFilter)} aria-label={t("find.status")}>
+            {(["all", "running", "waiting", "failed"] as const).map(status => <option key={status} value={status}>{t(`find.status.${status}`)}</option>)}
+          </select>
+        </div>
         <div className="section-label">{t("nav.sectionProjects")}</div>
+        {filteringSessions && visibleProjects.length === 0 && <p className="sidebar-empty">{t("find.noSessions")}</p>}
         {maintenance && maintenance.state !== "ready" && (
           <div className="session-index-status" role="status">
             <span>{t(maintenance.state === "failed" ? "chat.historyMaintenanceFailed" : "chat.historyMaintenance")}</span>
@@ -2247,8 +2294,8 @@ export function App() {
           </div>
         )}
         {projects.length === 0 && <p className="sidebar-empty">{t("nav.noProjects")}</p>}
-        {projects.map(({ item, sessions: threads }) => {
-          const open = openProjects[item.path] === true;
+        {visibleProjects.map(({ item, sessions: threads }) => {
+          const open = filteringSessions || openProjects[item.path] === true;
           return (
             <div key={item.path} className={open ? "project open" : "project"}>
               <div
@@ -2301,11 +2348,12 @@ export function App() {
                       isActive: (item) => isSameSession(item, activeSession),
                       isParentActive: () => isSameSession(session, activeSession),
                     });
-                    const expanded = isCurrentBranch ? (railOpen[session.id] ?? true) : false;
+                    const expanded = filteringSessions || (isCurrentBranch ? (railOpen[session.id] ?? true) : false);
                     return (
                       <div key={session.id} className={expanded && children.length > 0 ? "session-branch open" : "session-branch"}>
                         <SessionRow
                           session={session}
+                          showContext={filteringSessions}
                           activity={activities.get(session.path)}
                           active={isSameSession(session, activeSession)}
                           running={runningSessionIds.has(session.path)}
@@ -2324,6 +2372,7 @@ export function App() {
                               <SessionRow
                                 key={child.id}
                                 session={child}
+                                showContext={filteringSessions}
                                 activity={activities.get(child.path)}
                                 active={isSameSession(child, activeSession)}
                                 running={runningSessionIds.has(child.path)}
@@ -2367,11 +2416,12 @@ export function App() {
           </button>
         )}
         composer={home ? undefined : composer}
-        nav={<TurnNav items={anchors} onJump={(id) => {
+        nav={<><button ref={findButton} type="button" className="chat-find-trigger" aria-label={t("find.title")} title={t("find.shortcut")} onClick={() => setFindOpen(value => !value)}><Icon path="M21 21l-5-5M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14" size={16} /></button><TurnNav items={anchors} onJump={(id) => {
           // 跳转是一次性改变滚动位置：等窗口化列表把目标条目挂载、测量完再重新取样
           // 滚动锚点，避免随后按旧锚点补偿把这次跳转拉回（见 use-follow-scroll 的 reanchor）。
+          follow.pause();
           messageList.current?.scrollToAnchor(id, { onSettled: follow.reanchor });
-        }} />}
+        }} /></>}
         inspect={workspace || browserPanels.tabs.some((tab) => tab.type === "skills" || tab.type === "mcp") ? (
           <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace} onUsePrompt={fillPrompt}
             sideChatProps={{
@@ -2400,6 +2450,7 @@ export function App() {
           />
         ) : undefined}
       >
+        {findOpen && activeSession && <ConversationFind key={activeSession} messages={displayMessages} hasEarlier={Boolean(history?.nextCursor)} loading={historyBusy || loading} error={historyError} onEarlier={() => { if (history?.nextCursor) void loadEarlier(1000); else if (historyError) void startAgent(workspace, activeSession, true, false, permission, undefined, sessions.find(session => isSameSession(session, activeSession))?.storagePath); }} onNavigate={navigateMatch} onClose={closeFind} />}
         <div
           className={home ? "conversation home" : "conversation"}
           ref={setScroller}
@@ -2476,6 +2527,7 @@ export function App() {
             <MessageList
               ref={messageList}
               items={listItems}
+              findKey={findOpen ? findGroup?.id : undefined}
               scrollerRef={scroller}
               contentRef={follow.contentRef}
               progressActive={progressTasks.length > 0}

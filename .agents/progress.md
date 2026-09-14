@@ -1156,3 +1156,12 @@
 - 边界：轻量大文件模式保留全文、取消语法高亮与行号，并非逐行虚拟化；浏览器全文排版/查找仍有长任务。ResizeObserver 警告定位在虚拟行测量/消息高度变化附近，仍存在；没有修改全局 observer 或宣称已修复。
 - 文件：renderer/code-budget.ts、codeblock.tsx、file-preview.tsx、stream-blocks.ts、ui.tsx、App.tsx、prompt-toolbar.tsx；i18n、测试、large-content-smoke.ts 与性能文档。
 - 下一项：UX-14 会话标题/项目/状态筛选，当前对话全文查找和定位。整份目标继续 active。
+
+## 2026-09-14：UX-14 会话检索与对话内查找
+
+- [x] 侧栏按标题、项目名/路径、摘要检索，支持运行中/待处理/失败筛选；同名会话显示项目与文件/时间提示，工具提示给出完整路径。委派等待确认也进入待处理筛选。
+- [x] 当前对话支持入口按钮、⌘/Ctrl+F、Enter/Shift+Enter 前后消息、Escape 和焦点返回；查询包含正文、思考、工具输出与参数。按消息计数，每条展示首个匹配上下文，折叠内容的来源在搜索栏注明。
+- [x] 查询按需通过只读分页加载更早历史，沿用完整分支/游标与请求版本保护；加载/失败不冒充无匹配，支持重试。按组 key 定位未挂载的用户/助手消息，留出顶部渐隐区；后续跳转和卸载取消旧滚动校正。
+- 验证：**129 文件 / 1044 测试通过**、typecheck、diff check 通过。`TACODE_SEARCH_SMOKE=1` 覆盖 1000 会话、同名标题/项目检索、三种状态、2020 条真实 JSONL 分页、失败重试、中文离屏匹配、快速前后定位、IME 与焦点，worker 数保持 0；已查看 ux-14/conversation-find.png、会话截图另存 session-search.png。
+- 文件：renderer/session-search.ts、conversation-find.tsx、App.tsx、message-list.tsx、use-follow-scroll.ts、styles.css；i18n、测试、search-smoke.ts。
+- 下一项：UX-15 设置未保存修改保护与统一弹窗焦点、Tab/Escape、嵌套确认。整份目标继续 active。

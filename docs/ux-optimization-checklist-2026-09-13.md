@@ -156,7 +156,7 @@
 
   **定位与风险。** [HighlightedFileCode](/Users/yfdl/project/TAcode/src/renderer/codeblock.tsx:287)、[同步高亮](/Users/yfdl/project/TAcode/src/renderer/shiki.ts:170)、[Markdown](/Users/yfdl/project/TAcode/src/renderer/ui.tsx:1291)、[历史归并入口](/Users/yfdl/project/TAcode/src/renderer/App.tsx:684)。风险中等，需兼顾高亮语义、选择复制与滚动锚点。
 
-- [ ] **UX-14 · 会话检索与对话内查找**
+- [x] **UX-14 · 会话检索与对话内查找**
 
   **产品建议。** 当前主会话入口围绕项目分组、置顶和标题展开；浏览器面板有页内查找，聊天历史尚缺相应检索入口。随着使用时间增长，仅提高列表加载速度不能解决“找不到之前讨论过什么”。
 

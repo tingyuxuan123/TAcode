@@ -62,6 +62,13 @@ export function useFollowScroll(scope: string, enabled = true) {
    * 如果还按跳转前的锚点补偿，就会把跳转拉回去；跳转后立刻调用这个重新取样。
    */
   const reanchor = useCallback(() => { measureAnchor(); }, [measureAnchor]);
+  const pause = useCallback(() => {
+    cancel();
+    following.current = false;
+    anchor.current = undefined;
+    lastAssigned.current = undefined;
+    setAtBottom(false);
+  }, [cancel]);
 
   const followLatest = useCallback(() => {
     if (!viewport || !enabled) return;
@@ -192,5 +199,5 @@ export function useFollowScroll(scope: string, enabled = true) {
     };
   }, [scope, enabled, viewport, content, capture, cancel, followLatest]);
 
-  return { viewportRef: setViewport, contentRef: setContent, atBottom, following, followLatest, reanchor };
+  return { viewportRef: setViewport, contentRef: setContent, atBottom, following, followLatest, reanchor, pause };
 }
