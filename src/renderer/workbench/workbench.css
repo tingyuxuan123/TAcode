@@ -1,5 +1,5 @@
 /* Screenshot-matched file/review surfaces. Tokens stay inside this region. */
-.code-workbench {
+.code-workbench, .file-edit-dialog {
   --workbench-bg: #fff;
   --workbench-ink: #202123;
   --workbench-secondary: #6f7174;
@@ -14,6 +14,8 @@
   --workbench-deleted-bg: #ffebe9;
   --workbench-sans: "Inter Variable", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --workbench-mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace;
+}
+.code-workbench {
   color: var(--workbench-ink);
   background: var(--workbench-bg);
   font: 13px/1.5 var(--workbench-sans);
@@ -43,8 +45,8 @@
   --workbench-deleted-bg: #45282a;
   color-scheme: dark;
 }
-.code-workbench, .code-workbench * { box-sizing: border-box; }
-.code-workbench button, .code-workbench input, .code-workbench select { font: inherit; letter-spacing: inherit; }
+.code-workbench, .code-workbench *, .file-edit-dialog, .file-edit-dialog * { box-sizing: border-box; }
+.code-workbench button, .code-workbench input, .code-workbench select, .file-edit-dialog button, .file-edit-dialog input { font: inherit; letter-spacing: inherit; }
 .code-workbench button, .code-workbench select { -webkit-app-region: no-drag; }
 .code-workbench button:focus-visible, .code-workbench select:focus-visible, .workbench-tree-row:focus-visible, .workbench-divider:focus-visible {
   outline: 2px solid var(--workbench-secondary); outline-offset: -2px;
@@ -191,3 +193,16 @@
   color: var(--workbench-muted);
 }
 .file-document-notice button, .file-tree-notice button { flex-shrink: 0; }
+.file-document-notice > span { min-width: 0; }
+.file-edit-dialog { width: min(560px, calc(100vw - 32px)); }
+.file-edit-dialog .workbench-dialog-actions { flex-wrap: wrap; }
+.file-edit-dialog p, .file-edit-dialog code { overflow-wrap: anywhere; }
+.file-edit-dialog .file-edit-save { background: var(--workbench-ink); border-color: var(--workbench-ink); color: var(--workbench-bg); }
+.file-edit-dialog .file-edit-save:hover { background: var(--workbench-ink); opacity: .9; }
+.file-edit-dialog [role="alert"] { color: var(--workbench-red); white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-conflict-dialog { width: min(1100px, calc(100vw - 32px)); }
+.file-conflict-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.file-conflict-columns section { display: flex; flex-direction: column; height: min(420px, 50vh); min-height: 160px; min-width: 0; }
+.file-conflict-columns h3 { flex: none; font-size: 13px; margin: 0 0 8px; }
+.file-conflict-columns .workbench-code-editor { flex: 1; min-height: 0; border: 1px solid var(--workbench-border); }
+@media (max-width: 680px) { .file-conflict-columns { grid-template-columns: minmax(0, 1fr); } .file-conflict-columns section { height: 24vh; } }

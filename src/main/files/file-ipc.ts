@@ -3,6 +3,7 @@ import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { DirectoryRequest, DocumentReadRequest, DocumentWriteRequest, FileSearchRequest, FileSubscribeRequest, ProjectPath } from "../../shared/files";
 import { fileFailure, ProjectFileError, relativeFilePath } from "./file-path";
 import { FileService, type FileServiceOptions } from "./file-service";
+import { FileDrafts, parseFileDraft } from "./file-drafts";
 
 function record(raw: unknown): Record<string, unknown> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ProjectFileError("invalidRequest", "Invalid file request");
@@ -33,8 +34,9 @@ function directoryRequest(raw: unknown): DirectoryRequest {
   }
   return request;
 }
-export function registerFileIpc(options: FileServiceOptions & { host(): WebContents | undefined }) {
+export function registerFileIpc(options: FileServiceOptions & { host(): WebContents | undefined; draftRoot?: string }) {
   const service = new FileService(options);
+  const drafts = options.draftRoot ? new FileDrafts(options.draftRoot, service.paths) : undefined;
   const owners = new Map<number, { generation: number; cleanup(): void }>();
   const authorize = (event: IpcMainInvokeEvent) => {
     const host = event.sender;
@@ -81,6 +83,15 @@ export function registerFileIpc(options: FileServiceOptions & { host(): WebConte
     if (typeof value.content !== "string" || typeof value.expectedVersion !== "string") throw new ProjectFileError("invalidRequest", "Invalid document write");
     return service.writeDocument({ ...parseProjectPath(raw), content: value.content, expectedVersion: value.expectedVersion } satisfies DocumentWriteRequest, active);
   });
+  handle("files:read-drafts", async (_host, raw) => ({ kind: "drafts", drafts: drafts ? await drafts.list(parseProjectPath(raw, true)) : [] }));
+  handle("files:write-draft", async (_host, raw, active) => {
+    if (!drafts) throw new ProjectFileError("failed", "Recovery storage is unavailable");
+    await drafts.write(parseFileDraft(raw), active); return { kind: "checkpointed" };
+  });
+  handle("files:remove-draft", async (_host, raw, active) => {
+    if (!drafts) throw new ProjectFileError("failed", "Recovery storage is unavailable");
+    await drafts.remove(parseProjectPath(raw), active); return { kind: "checkpointed" };
+  });
   handle("files:preview-url", (_host, raw) => service.previewUrl(parseProjectPath(raw)));
   handle("files:subscribe", (host, raw) => {
     const value = record(raw);
@@ -89,7 +100,7 @@ export function registerFileIpc(options: FileServiceOptions & { host(): WebConte
     return service.subscriptions.subscribe(host.id, request, (update) => { if (!host.isDestroyed()) host.send("files:update", update); });
   });
   handle("files:unsubscribe", (host, raw) => service.subscriptions.unsubscribe(host.id, fileSubscriptionId(raw)));
-  return { service, idle: () => service.idle(), dispose: () => {
+  return { service, drafts, idle: async () => { await service.idle(); await drafts?.idle(); }, dispose: () => {
     service.close(); for (const entry of owners.values()) entry.cleanup(); for (const channel of channels) ipcMain.removeHandler(channel);
   } };
 }

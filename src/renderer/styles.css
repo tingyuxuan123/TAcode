@@ -9360,3 +9360,4 @@ kbd {
 .inspect-tab.is-drop-target { box-shadow: inset 2px 0 var(--ink); }
 .file-tab-menu { width: 220px; }
 .file-tab-menu .panel-add-item:disabled { opacity: .45; cursor: default; }
+.file-tab-dirty { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--ink); }

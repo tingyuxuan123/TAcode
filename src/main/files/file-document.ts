@@ -103,6 +103,8 @@ export class FileDocuments {
       if (!current.metadata.writable) throw new ProjectFileError("readOnly", "This document is read-only");
       assertActive();
     } });
-    return this.read(request);
+    const saved = await this.read(request);
+    if (saved.content !== text) throw new ProjectFileError("conflict", "Document changed immediately after saving; your local text was retained");
+    return saved;
   }
 }

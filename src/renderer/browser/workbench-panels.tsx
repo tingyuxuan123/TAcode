@@ -14,6 +14,8 @@ import type { useBrowserPanels } from "./use-browser-panels";
 import { SkillsPanel } from "../capabilities/skills-panel";
 import { McpPanel } from "../capabilities/mcp-panel";
 import "../capabilities/capabilities.css";
+import { useFileEditing } from "../workbench/file-editing";
+import { fileDocuments } from "../workbench/file-document-store";
 
 /** 侧边聊天是声明式临时会话：关闭有破坏性确认，「不再询问」记在 localStorage。 */
 const SIDE_CHAT_DONT_ASK_KEY = "sidechat:close-dont-ask";
@@ -51,6 +53,7 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
   onOpenFile?(path: string, options?: { preview?: boolean; literal?: boolean }): void;
 }) {
   const { t } = useI18n();
+  const editing = useFileEditing();
   const { active, dispatch, openPanel, openBrowser, openSideChat, closePanel, selectPanel } = panels;
   // 标签栏只显示当前主会话上下文的标签（侧边聊天、子会话标签跟会话走）；其他会话的实例保持挂载（display:none），切回即原样恢复。
   const tabs = visiblePanelTabs(panels);
@@ -70,6 +73,10 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
   const requestClosePanel = (id: string) => {
     if (dirtyCapabilities[id]) { setPendingCapabilityClose(id); return; }
     const tab = tabs.find((item) => item.id === id);
+    if (tab?.type === "file" && tab.workspace) {
+      void editing.confirm(tab.workspace, [tab.path]).then((allow) => { if (allow) closePanel(id); }).catch((error) => onError(String(error)));
+      return;
+    }
     if (tab?.type === "side-chat" && !readSideChatDontAskClose()) {
       setDontAskClose(false);
       setPendingSideChatClose(tab);
@@ -137,7 +144,7 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
         : tab.type === "child-session"
           ? { id: tab.id, label: childSessionPanelLabel(tab.info, t("delegate.detailChildSession"), t("subagent.awaitingInput")), title: tab.info.sessionPath ?? tab.info.task ?? "" }
           : tab.type === "file"
-            ? { id: tab.id, label: filePanelLabel(tab.path), title: [tab.workspace, tab.path].filter(Boolean).join("/"), preview: Boolean(tab.preview), reorderable: true }
+            ? { id: tab.id, label: filePanelLabel(tab.path), title: [tab.workspace, tab.path].filter(Boolean).join("/"), preview: Boolean(tab.preview), reorderable: true, dirty: Boolean(tab.workspace && fileDocuments().snapshot(tab.workspace, tab.path).dirty) }
             : { id: tab.id, label: browserPanelLabel(tab.page, t("browser.newTab")), title: [tab.page?.title, tab.page?.url].filter(Boolean).join("\n") })}
       active={active}
       onSelect={selectPanel}
@@ -149,7 +156,10 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
         return [
           ...(tab.preview ? [{ label: t("fileView.pin"), icon: <Pin size={14} />, run: () => dispatch({ type: "pin-file", id }) }] : []),
           { label: t("panel.closeTab"), icon: <X size={14} />, run: () => requestClosePanel(id) },
-          { label: t("fileView.closeOthers"), icon: <X size={14} />, run: () => dispatch({ type: "close-other-files", id }) },
+          { label: t("fileView.closeOthers"), icon: <X size={14} />, run: () => {
+            const other = tabs.filter((item) => item.type === "file" && item.id !== id).map((item) => item.type === "file" ? item.path : "");
+            void editing.confirm(tab.workspace, other).then((allow) => { if (allow) dispatch({ type: "close-other-files", id }); }).catch((error) => onError(String(error)));
+          } },
           { label: t("fileView.moveLeft"), icon: <ArrowLeft size={14} />, disabled: index === 0, run: () => { if (tabs[index - 1]) dispatch({ type: "reorder", id, before: tabs[index - 1].id }); } },
           { label: t("fileView.moveRight"), icon: <ArrowRight size={14} />, disabled: index === tabs.length - 1, run: () => { if (tabs[index + 1]) dispatch({ type: "reorder", id, before: tabs[index + 1].id, after: true }); } },
         ];

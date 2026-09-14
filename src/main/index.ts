@@ -69,6 +69,7 @@ import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { registerCapabilitiesIpc } from "./capabilities-ipc";
 import { registerGitIpc } from "./git/git-ipc";
 import { registerFileIpc } from "./files/file-ipc";
+import { WindowCloseGuard } from "./window-close-guard";
 import { ProjectPreviewRegistry } from "./files/preview-registry";
 import { ProjectFilePaths } from "./files/file-path";
 import { serveProjectPreview } from "./files/preview-server";
@@ -530,6 +531,7 @@ async function checkForUpdates(manual = false): Promise<void> {
   }
 }
 
+let windowCloseGuard: WindowCloseGuard | undefined;
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -567,6 +569,7 @@ function createWindow(): void {
     void historyMaintenance.run();
     void checkForUpdates();
   });
+  windowCloseGuard = new WindowCloseGuard(mainWindow);
   // Fullscreen hides the macOS traffic lights, so the renderer must stop reserving room for them.
   const reportFullscreen = () =>
     sendAppCommand(
@@ -576,6 +579,7 @@ function createWindow(): void {
   mainWindow.on("leave-full-screen", reportFullscreen);
   mainWindow.webContents.on("did-finish-load", reportFullscreen);
   mainWindow.on("closed", () => {
+    windowCloseGuard = undefined;
     mainWindow = undefined;
     workspaceWatchers.close();
     workspaceFiles.clear();
@@ -647,6 +651,7 @@ let gitIpc: ReturnType<typeof registerGitIpc> | undefined;
 let fileIpc: ReturnType<typeof registerFileIpc> | undefined;
 function registerIpc(): void {
   fileIpc = registerFileIpc({
+    draftRoot: path.join(userDataPath, "file-drafts"),
     host: () => mainWindow?.webContents,
     resolveProject: (root) => resolveInWorkspace(".", root),
     index: workspaceFiles,
@@ -2249,25 +2254,23 @@ app.on("window-all-closed", () => {
 });
 
 let quitting = false;
+let checkingQuit = false;
 app.on("before-quit", (event) => {
   if (quitting) return;
   // Always wait for stop on quit (Cmd+Q / Dock → Quit). macOS Seatbelt shells
   // are detached; skipping this leaves orphan `sh -lc` / find / rg processes.
   event.preventDefault();
-  quitting = true;
-  workspaceWatchers.close();
-  gitIpc?.dispose();
-  fileIpc?.dispose();
-  closeAllBrowserPopups();
-  closeAllDetachedBrowserWindows();
-  Promise.all([
-    historyMaintenance.cancel(),
-    gitIpc?.idle() ?? Promise.resolve(),
-    fileIpc?.idle() ?? Promise.resolve(),
-    agentManager.stopAll(),
-    delegationCoordinator?.close() ?? Promise.resolve(),
-  ])
-    .catch(() => undefined)
-    .then(() => sessionIndex.close())
-    .finally(() => app.exit(0));
+  if (checkingQuit) return;
+  checkingQuit = true;
+  void (windowCloseGuard?.request("quit") ?? Promise.resolve(true)).then((allow) => {
+    checkingQuit = false;
+    if (!allow) return;
+    quitting = true;
+    workspaceWatchers.close(); gitIpc?.dispose(); fileIpc?.dispose();
+    closeAllBrowserPopups(); closeAllDetachedBrowserWindows();
+    return Promise.all([
+      historyMaintenance.cancel(), gitIpc?.idle() ?? Promise.resolve(), fileIpc?.idle() ?? Promise.resolve(),
+      agentManager.stopAll(), delegationCoordinator?.close() ?? Promise.resolve(),
+    ]).catch(() => undefined).then(() => sessionIndex.close()).finally(() => app.exit(0));
+  });
 });

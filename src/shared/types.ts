@@ -299,6 +299,9 @@ export interface DesktopApi {
     minimize(): Promise<void>;
     toggleMaximize(): Promise<void>;
     close(): Promise<void>;
+    setCloseGuardReady(ready: boolean): void;
+    onCloseRequest(listener: (request: { id: string; action: "close" | "quit" }) => void): () => void;
+    answerCloseRequest(id: string, allow: boolean): void;
   };
   workspace: {
     choose(): Promise<string | null>;

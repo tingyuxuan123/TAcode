@@ -287,7 +287,7 @@ async function smoke() {
     main.webContents.on("console-message", (_event, level, message) => { if (level >= 3) rendererErrors.push(`${stage}: ${message}`); });
     main.webContents.on("render-process-gone", (_event, details) => { console.error("Fixture renderer exited", details); app.exit(1); });
     const resolveProject = async (cwd: string) => { if (cwd !== project) throw new Error("Unknown fixture project"); return project; };
-    fileRegistration = registerFileIpc({ host: () => main?.webContents, index: fileIndex, resolveProject, watchProject: (cwd) => { if (workspaceWatchers.watch(cwd)) fileIndex.changed(cwd); } });
+    fileRegistration = registerFileIpc({ host: () => main?.webContents, index: fileIndex, resolveProject, draftRoot: path.join(root, "file-drafts"), watchProject: (cwd) => { if (workspaceWatchers.watch(cwd)) fileIndex.changed(cwd); } });
     gitRegistration = registerGitIpc({ host: () => main?.webContents, resolveProject, recoveryRoot: path.join(root, "recovery") });
     const readDocument = fileRegistration.service.readDocument.bind(fileRegistration.service);
     fileRegistration.service.readDocument = async (request) => {

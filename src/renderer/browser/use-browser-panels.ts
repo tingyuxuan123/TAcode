@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef } from "react";
 import {
   createBrowserPanel,
   createBrowserPanelId,
@@ -10,10 +10,13 @@ import {
   type FilePanelTab,
 } from "./panel-state";
 import { fileScope, projectFilePath, readFileTabs, writeFileTabs } from "../workbench/file-view-state";
+import { fileDocuments, useFileDirtyKeys } from "../workbench/file-document-store";
 
 /** 主窗口统一管理网页标签；独立窗口仍由 BrowserPanel 管理内部标签。 */
 export function useBrowserPanels(workspace?: string, sourceSession?: string) {
   const [state, dispatch] = useReducer(panelReducer, initialPanelState);
+  const stateRef = useRef(state); stateRef.current = state;
+  const dirtyKeys = useFileDirtyKeys();
   const scope = fileScope(workspace, sourceSession);
   useLayoutEffect(() => {
     const saved = readFileTabs(scope);
@@ -22,6 +25,18 @@ export function useBrowserPanels(workspace?: string, sourceSession?: string) {
       id: filePanelId(tab.path, workspace, scope), type: "file", path: tab.path, workspace, scope, preview: tab.preview,
     })) : [] });
   }, [scope, workspace, sourceSession]);
+  useEffect(() => {
+    if (!workspace) return;
+    let active = true;
+    void fileDocuments().loadDrafts(workspace).then(() => {
+      if (!active) return;
+      for (const file of fileDocuments().dirty(workspace)) dispatch({ type: "open-file", path: file.path, workspace, preview: false, activate: false });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [workspace, scope]);
+  useLayoutEffect(() => {
+    for (const tab of state.tabs) if (tab.type === "file" && tab.preview && tab.workspace && fileDocuments().snapshot(tab.workspace, tab.path).dirty) dispatch({ type: "pin-file", id: tab.id });
+  }, [dirtyKeys, state.tabs]);
   useEffect(() => {
     if (state.filesScope !== scope) return;
     const files = state.tabs.filter((tab): tab is FilePanelTab => tab.type === "file" && tab.scope === scope);
@@ -49,6 +64,7 @@ export function useBrowserPanels(workspace?: string, sourceSession?: string) {
   const openFile = useCallback((path: string, options?: { preview?: boolean; literal?: boolean }) => {
     if (!workspace) return;
     const target = projectFilePath(path, workspace, window.harness.platform, options?.literal);
+    for (const tab of stateRef.current.tabs) if (tab.type === "file" && tab.preview && tab.workspace === workspace && fileDocuments().snapshot(workspace, tab.path).dirty) dispatch({ type: "pin-file", id: tab.id });
     dispatch({ type: "open-file", ...target, workspace, preview: options?.preview ?? true });
   }, [workspace]);
   const openFiles = useCallback((path?: string) => dispatch({ type: "open-files", ...(path ? { path } : {}) }), []);

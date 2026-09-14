@@ -1,5 +1,5 @@
 import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
-import { Compartment, EditorSelection, EditorState, Transaction } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, Text, Transaction } from "@codemirror/state";
 import { EditorView, drawSelection, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, LanguageDescription, bracketMatching, foldGutter, indentOnInput, syntaxHighlighting } from "@codemirror/language";
@@ -106,7 +106,7 @@ export function CodeEditor({ documentId, path, value, readOnly = false, wrap = t
   callbacks.current = { onChange, onSave, onPositionChange };
   const initial = useRef({ value, readOnly, wrap, colorScheme, locale });
   initial.current = { value, readOnly, wrap, colorScheme, locale };
-  const compartments = useRef({ language: new Compartment(), writable: new Compartment(), wrapping: new Compartment(), syntax: new Compartment(), phrases: new Compartment() });
+  const compartments = useRef({ language: new Compartment(), writable: new Compartment(), wrapping: new Compartment(), syntax: new Compartment(), phrases: new Compartment(), lineEnding: new Compartment() });
   const reveal = (target: SourceLocation) => {
     const editor = view.current;
     if (!editor) return;
@@ -127,7 +127,7 @@ export function CodeEditor({ documentId, path, value, readOnly = false, wrap = t
     let initialized = false;
     const editor = new EditorView({
       parent: host.current,
-      state: EditorState.create({ doc: config.value, extensions: [
+      state: EditorState.create({ doc: Text.of(config.value.split(/\r\n|\n/)), extensions: [
         lineNumbers(), highlightActiveLineGutter(), history(), drawSelection(), indentOnInput(), bracketMatching(), foldGutter(), highlightSelectionMatches(),
         keymap.of([{ key: "Mod-s", run: () => { callbacks.current.onSave?.(); return true; } }, { key: "Mod-g", run: gotoLine }, indentWithTab, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         theme,
@@ -136,7 +136,7 @@ export function CodeEditor({ documentId, path, value, readOnly = false, wrap = t
         parts.syntax.of(syntaxHighlighting(config.colorScheme === "dark" ? darkSyntax : syntax)),
         parts.phrases.of(EditorState.phrases.of(config.locale === "zh" ? chinesePhrases : {})),
         parts.language.of([]),
-        EditorState.lineSeparator.of(config.value.includes("\r\n") ? "\r\n" : "\n"),
+        parts.lineEnding.of(EditorState.lineSeparator.of(config.value.includes("\r\n") ? "\r\n" : "\n")),
         EditorView.contentAttributes.of({ "aria-label": path, spellcheck: "false" }),
         EditorView.scrollHandler.of((editor) => {
           const restoration = scrollRestorations.get(editor);
@@ -177,7 +177,9 @@ export function CodeEditor({ documentId, path, value, readOnly = false, wrap = t
     if (!editor || editor.state.sliceDoc() === value) return;
     pendingScroll.current?.();
     const top = editor.scrollDOM.scrollTop; const left = editor.scrollDOM.scrollLeft; const selection = editor.state.selection.main;
-    editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value }, annotations: [Transaction.remote.of(true), Transaction.addToHistory.of(false)] });
+    editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: Text.of(value.split(/\r\n|\n/)) },
+      effects: compartments.current.lineEnding.reconfigure(EditorState.lineSeparator.of(value.includes("\r\n") ? "\r\n" : "\n")),
+      annotations: [Transaction.remote.of(true), Transaction.addToHistory.of(false)] });
     editor.dispatch({ selection: EditorSelection.single(Math.min(editor.state.doc.length, selection.from), Math.min(editor.state.doc.length, selection.to)) });
     const cancelRestore = restoreScroll(editor, top, left);
     pendingScroll.current = cancelRestore;

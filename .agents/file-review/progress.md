@@ -76,3 +76,17 @@
 - 修复 CodeMirror 整段替换后的测量/滚动补偿和隐藏文档更新写入零位置；原生验收保持精确像素/选区断言。对齐既有工作台转录/报告与草稿 fillToken 夹具，文件索引监听用例先观察真实通知；另修复 backdrop-filter 下极窄 Composer 菜单坐标，边界断言未放宽。
 - 验证：最终 **137 文件 / 1157 用例**（`pnpm test --reporter=dot --maxWorkers=1`）、typecheck、build、diff check 通过。新共享文档/状态/标签定向 **4 文件 / 41 用例**、生产文件工作台 **7 阶段**、文件组件 **5 阶段**、生产 Git **23 阶段**、完整工作台/消息列表、真实 App 文件索引与文档、BrowserPanel/live reload/resize 回归通过。工作台刷新 **43.0 ms**、App 文档刷新 **175.6 ms**；工作台网络/renderer 错误为 0，关窗后文件及 Git 资源计数为 0。详见 `docs/file-review-fr-07.md` 和 `docs/file-review-reference/fr-07-result.json`，中英文最终截图已保存并检查。
 - 本阶段生产文档只读；下一项 **FR-08：编辑、保存、版本冲突和未保存内容保护**。专项 **7/15**，完整目标保持 active。原工作区及另一运行任务未修改、切换或重置，既有 UX passes 未改。
+
+## 2026-09-14 FR-08 开始
+
+- 在独立工作树接入共享编辑状态、真实版本保存和应用恢复目录。关闭标签/切项目/退出采用保存、放弃、取消；外部更新和保存期间的新输入不得覆盖未保存文字。
+- 验收范围包括 BOM/CRLF/权限、查找替换/撤销重做/定位/换行、保存失败/冲突、重启恢复和真实 Electron 生命周期。FR-08 passes 保持 false，本轮不开始 FR-09。
+
+## 2026-09-14 FR-08 完成
+
+- 生产 CodeMirror 接入共享文档编辑、版本校验和原子保存，保留 BOM/CRLF/mode；真实查找替换、定位、撤销重做、换行和保存可用。外部变化保留本地草稿，比较捕获的磁盘版本并拒绝过期覆盖；修复保存期间新输入及撤销到旧基线、外部 CRLF 转 LF 的竞态。
+- 新增 `src/main/files/file-drafts.ts`、`src/main/window-close-guard.ts`、`src/renderer/workbench/file-editing.tsx` 及回归，扩展 shared/preload/生产 App、共享文档、标签和文件面板。恢复记录按项目/路径隔离且原子持久化；关闭单个/其他文件、切项目、重载、关窗及退出支持保存/放弃/取消，正常离开可保留并等待备份，完整独立进程重启恢复准确文字。
+- 最终全量 **139 文件 / 1170 用例**（`pnpm test --reporter=dot --maxWorkers=1`）、typecheck、build、最终 renderer 构建及 diff check 通过；恢复/关窗/文档定向 **18 用例**通过。新增 `test:file-editing` 两个独立 Electron 进程 **12 阶段**、`test:file-editing-app` 完整未替换生产 main/preload/App **3 阶段**通过，均自然退出码 0，恢复文字与磁盘隔离由父进程核对。
+- 文件工作台 **7 阶段**、文件组件 **5 阶段**、生产 Git **23 阶段**、BrowserPanel/live reload/resize、完整工作台/消息列表、真实 App 文档及深层/201/8000+ 文件检索回归通过。工作台刷新 **129.8 ms**、App 文档 **167.4 ms**、Git **334/335 ms**；专项网络/renderer 错误和关窗后文件/Git 资源为 0。证据见 `docs/file-review-fr-08.md` 和 `docs/file-review-reference/fr-08-*.json`，中英文窄窗冲突、生产退出及重启恢复截图已检查。
+- 正常离开等待备份；强制结束或断电仍可能丢失尚未进入 200 ms 合批的最后输入，无自动三方合并。Windows、整体性能与分支整合留待 FR-15；既有 FR-07 证据和 UX 清单保持原样。
+- 专项 **8/15**；下一条仅 **FR-09：文件管理与外部打开**，本轮未开始。提交仍在 `.worktrees/file-review-workbench` / `codex/file-review-workbench` 隔离分支，未合并；原工作区及另一运行任务未修改、切换、重置或停止，完整目标保持 active。

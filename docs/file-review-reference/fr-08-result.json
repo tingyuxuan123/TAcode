@@ -1,0 +1,55 @@
+{
+  "date": "2026-09-14T10:14:49.604Z",
+  "phases": [
+    {
+      "phase": "initial",
+      "stages": [
+        "Native edit/newline, undo/redo and Mod-S write real UTF-8 text while preserving BOM, CRLF and permissions",
+        "Production editor Find/Replace and goto-line shortcuts operate on the actual text",
+        "Save failure retains changes; input during a held real save remains dirty and saves against the new disk version",
+        "External writes preserve local text; comparison shows exact versions and refuses an outdated overwrite",
+        "Deleted files retain editable recovery text; explicit use-disk resolution discards only by user choice",
+        "Closing an unsaved file supports Escape cancellation and save-before-close",
+        "Close-other-files cancellation and save protect the selected dirty tab and write only the closing files",
+        "Project switch cancellation, durable keep, recovery failure blocking and identical-path project isolation",
+        "Partial large files stay read-only; native renderer reload checkpoints and restores unsaved text",
+        "Quit waits for the exact unsaved recovery checkpoint before the first Electron process exits"
+      ],
+      "errors": [],
+      "network": [],
+      "resources": {
+        "subscriptions": 0,
+        "roots": 0,
+        "reads": 0
+      },
+      "git": {
+        "projects": 0,
+        "subscriptions": 0,
+        "reads": 0
+      },
+      "artifacts": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-editing-artifacts-CB4ovS"
+    },
+    {
+      "phase": "restart",
+      "stages": [
+        "A separate Electron process restores exact unsaved text, base version, pinned tab and disk isolation",
+        "Native close cancellation and explicit discard remove recovery without writing disk"
+      ],
+      "errors": [],
+      "network": [],
+      "resources": {
+        "subscriptions": 0,
+        "roots": 0,
+        "reads": 0
+      },
+      "git": {
+        "projects": 0,
+        "subscriptions": 0,
+        "reads": 0
+      },
+      "artifacts": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-editing-artifacts-CB4ovS"
+    }
+  ],
+  "artifacts": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-editing-artifacts-CB4ovS",
+  "boundary": "Two separate offline Electron processes using production preload/files IPC, native Chromium keyboard/mouse, real APFS files and durable application recovery records."
+}

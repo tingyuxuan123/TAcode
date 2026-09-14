@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FileDocument, FilesApi, FileUpdate, ProjectPath } from "../../shared/files";
+import type { DocumentWriteRequest, DocumentWriteResult, FileDocument, FileDraft, FileDraftWriteRequest, FilesApi, FileUpdate, ProjectPath } from "../../shared/files";
 import { FileDocumentStore } from "./file-document-store";
 
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; };
@@ -7,13 +7,18 @@ const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
 function document(request: ProjectPath, content: string): FileDocument {
   return { ...request, kind: "document", status: "text", content, version: content, metadata: { size: content.length, readBytes: content.length, mode: 420, bom: false, lineEnding: "lf", writable: true, encoding: "utf8", offset: 0 } };
 }
-function fixture() {
+function fixture(persist = false) {
   const listeners = new Set<(update: FileUpdate) => void>(); let id = 0;
-  const api = { readDocument: vi.fn(async (request: ProjectPath) => document(request, request.projectRoot)), subscribe: vi.fn(async () => ({ mode: "native" as const })), unsubscribe: vi.fn(async (_id: string) => {}),
+  const api = { readDocument: vi.fn(async (request: ProjectPath) => document(request, request.projectRoot)), writeDocument: vi.fn(async (request: DocumentWriteRequest): Promise<DocumentWriteResult> => ({ kind: "saved", document: document(request, request.content) })),
+    subscribe: vi.fn(async () => ({ mode: "native" as const })), unsubscribe: vi.fn(async (_id: string) => {}),
     onUpdate: (listener: (update: FileUpdate) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
-  const store = new FileDocumentStore(api as unknown as FilesApi, () => `subscription-${++id}`);
+  const saved = new Map<string, FileDraft>();
+  const draftApi = { readDrafts: vi.fn(async ({ projectRoot }: ProjectPath) => ({ kind: "drafts" as const, drafts: [...saved.values()].filter((draft) => draft.projectRoot === projectRoot) })),
+    writeDraft: vi.fn(async (draft: FileDraftWriteRequest) => { saved.set(JSON.stringify([draft.projectRoot, draft.path]), { ...draft, updatedAt: Date.now() }); return { kind: "checkpointed" as const }; }),
+    removeDraft: vi.fn(async (request: ProjectPath) => { saved.delete(JSON.stringify([request.projectRoot, request.path])); return { kind: "checkpointed" as const }; }) };
+  const store = new FileDocumentStore(api as unknown as FilesApi, () => `subscription-${++id}`, persist ? draftApi : undefined);
   const send = (sequence: number, extra: Partial<FileUpdate> = {}) => { for (const listener of listeners) listener({ projectRoot: "/a", path: "same.txt", subscriptionId: "subscription-1", sequence, kind: "changed", ...extra }); };
-  return { api, store, listeners, send };
+  return { api, store, listeners, send, draftApi, saved };
 }
 describe("project disk documents", () => {
   it("shares one read and native subscription across two session views, releasing only after both leave", async () => {
@@ -48,5 +53,52 @@ describe("project disk documents", () => {
     api.readDocument.mockRejectedValueOnce(new Error("read failure")); send(1); await tick();
     expect(store.snapshot("/a", "same.txt")).toMatchObject({ loading: false, error: { message: "read failure" }, document: { content: "/a" } });
     close(); const again = store.connect("/a", "same.txt"); await tick(); expect(store.snapshot("/a", "same.txt").error).toBeUndefined(); again();
+  });
+  it("keeps dirty text and its original base across external updates and saves an explicitly chosen version", async () => {
+    const { store, api, send } = fixture(); const close = store.connect("/a", "same.txt"); await tick();
+    store.edit("/a", "same.txt", "local"); api.readDocument.mockResolvedValue(document({ projectRoot: "/a", path: "same.txt" }, "external")); send(1); await tick();
+    expect(store.snapshot("/a", "same.txt")).toMatchObject({ document: { content: "external" }, draft: { content: "local", baseContent: "/a", baseVersion: "/a" }, dirty: true });
+    expect(await store.save("/a", "same.txt")).toBe(false); expect(api.writeDocument).not.toHaveBeenCalled();
+    expect(await store.save("/a", "same.txt", "external")).toBe(true); expect(api.writeDocument).toHaveBeenCalledWith({ projectRoot: "/a", path: "same.txt", content: "local", expectedVersion: "external" });
+    expect(store.snapshot("/a", "same.txt").dirty).toBe(false); close();
+  });
+  it("coalesces a pending save and retains newer edits using the saved disk version as their base", async () => {
+    const { store, api, send } = fixture(true); await store.loadDrafts("/a"); const close = store.connect("/a", "same.txt"); await vi.waitFor(() => expect(store.snapshot("/a", "same.txt").loading).toBe(false));
+    const write = deferred<DocumentWriteResult>(); api.writeDocument.mockImplementationOnce(() => write.promise); store.edit("/a", "same.txt", "submitted");
+    const save = store.save("/a", "same.txt"); expect(store.save("/a", "same.txt")).toBe(save); await tick();
+    store.edit("/a", "same.txt", "newer input"); send(1); expect(api.readDocument).toHaveBeenCalledTimes(1);
+    api.readDocument.mockResolvedValue(document({ projectRoot: "/a", path: "same.txt" }, "submitted"));
+    write.resolve({ kind: "saved", document: document({ projectRoot: "/a", path: "same.txt" }, "submitted") }); expect(await save).toBe(true); await tick();
+    expect(store.snapshot("/a", "same.txt")).toMatchObject({ draft: { content: "newer input", baseContent: "submitted", baseVersion: "submitted" }, dirty: true, saving: false });
+    await store.flush(); close();
+  });
+  it("retains failed saves, writes exact recovery text, and restores it in another store instance", async () => {
+    const { store, api, draftApi, saved } = fixture(true); await store.loadDrafts("/a"); const close = store.connect("/a", "same.txt"); await vi.waitFor(() => expect(store.snapshot("/a", "same.txt").loading).toBe(false));
+    store.edit("/a", "same.txt", "未保存\r\n文字"); api.writeDocument.mockRejectedValueOnce(new Error("permission denied"));
+    expect(await store.save("/a", "same.txt")).toBe(false); expect(store.snapshot("/a", "same.txt").draft?.content).toBe("未保存\r\n文字");
+    await store.flush(); expect(saved.size).toBe(1); close();
+    const reopened = new FileDocumentStore(api as unknown as FilesApi, () => "reopened", draftApi); await reopened.loadDrafts("/a");
+    expect(reopened.snapshot("/a", "same.txt")).toMatchObject({ dirty: true, restored: true, draft: { content: "未保存\r\n文字", baseVersion: "/a" } });
+    await reopened.discard("/a", "same.txt"); expect(saved.size).toBe(0);
+  });
+  it("retains undo to the old disk baseline while a save is pending", async () => {
+    const { store, api, saved } = fixture(true); await store.loadDrafts("/a"); const close = store.connect("/a", "same.txt");
+    await vi.waitFor(() => expect(store.snapshot("/a", "same.txt").loading).toBe(false));
+    const write = deferred<DocumentWriteResult>(); api.writeDocument.mockImplementationOnce(() => write.promise);
+    store.edit("/a", "same.txt", "submitted"); const save = store.save("/a", "same.txt"); await tick();
+    store.edit("/a", "same.txt", "/a"); expect(store.snapshot("/a", "same.txt").dirty).toBe(false);
+    write.resolve({ kind: "saved", document: document({ projectRoot: "/a", path: "same.txt" }, "submitted") });
+    expect(await save).toBe(true);
+    expect(store.snapshot("/a", "same.txt")).toMatchObject({ document: { content: "submitted" }, draft: { content: "/a", baseContent: "submitted", baseVersion: "submitted" }, dirty: true });
+    expect([...saved.values()][0]?.content).toBe("/a"); await store.discard("/a", "same.txt"); close();
+  });
+  it("never deletes recovery records after a failed restore and reports failed checkpoints", async () => {
+    const { store, draftApi } = fixture(true); draftApi.readDrafts.mockRejectedValueOnce(new Error("damaged recovery"));
+    const close = store.connect("/a", "same.txt"); await vi.waitFor(() => expect(store.snapshot("/a", "same.txt").recoveryError).toBeDefined());
+    store.edit("/a", "same.txt", "should be blocked"); await store.flush(); expect(draftApi.removeDraft).not.toHaveBeenCalled(); expect(store.snapshot("/a", "same.txt").dirty).toBe(false);
+    store.refresh("/a", "same.txt"); await vi.waitFor(() => expect(store.snapshot("/a", "same.txt").recoveryError).toBeUndefined());
+    store.edit("/a", "same.txt", "protected text"); draftApi.writeDraft.mockRejectedValueOnce(new Error("disk full")); await expect(store.flush()).rejects.toThrow("disk full");
+    expect(store.snapshot("/a", "same.txt")).toMatchObject({ dirty: true, draft: { content: "protected text" }, draftError: { message: "disk full" } });
+    await store.flush(); close();
   });
 });

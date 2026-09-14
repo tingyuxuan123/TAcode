@@ -5,6 +5,7 @@ import { applyTypography, readStoredTypography } from "../shared/typography";
 import { App } from "./App";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { LocaleProvider } from "./i18n";
+import { FileEditingProvider } from "./workbench/file-editing";
 // Bundled so Windows/Linux render the same Latin text as macOS instead of thin Segoe UI.
 import "@fontsource-variable/inter/wght.css";
 import "katex/dist/katex.min.css";
@@ -17,7 +18,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <LocaleProvider>
       <ErrorBoundary>
-        <App />
+        <FileEditingProvider><App /></FileEditingProvider>
       </ErrorBoundary>
     </LocaleProvider>
   </StrictMode>,

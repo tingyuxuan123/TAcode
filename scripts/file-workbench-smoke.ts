@@ -36,7 +36,7 @@ async function smoke() {
   const index = new WorkspaceFileIndex(); let closing = false;
   const watchers = new WorkspaceWatchers((root, paths) => { if (paths) for (const value of paths) index.changed(root, value); else index.changed(root); if (!closing && !window.isDestroyed()) window.webContents.send("workspace:changed", { root, paths }); });
   const resolveProject = async (root: string) => { if (root !== a && root !== b) throw new Error("Unknown project"); return root; };
-  const files = registerFileIpc({ host: () => window.webContents, index, resolveProject, watchProject: (root) => { if (watchers.watch(root)) index.changed(root); } });
+  const files = registerFileIpc({ host: () => window.webContents, index, resolveProject, draftRoot: path.join(directory, "file-drafts"), watchProject: (root) => { if (watchers.watch(root)) index.changed(root); } });
   const review = registerGitIpc({ host: () => window.webContents, resolveProject, recoveryRoot: path.join(directory, "recovery") });
   const reads: Array<{ root: string; path: string }> = []; const readDocument = files.service.readDocument.bind(files.service);
   files.service.readDocument = (request) => { reads.push({ root: request.projectRoot, path: request.path }); return readDocument(request); };
@@ -169,8 +169,8 @@ async function smoke() {
     assert.equal(files.service.subscriptions.stats().subscriptions, 0); assert.equal(files.service.subscriptions.stats().roots, 0); assert.equal(review.service.stats().subscriptions, 0);
     record("Close other files preserves tool panels; English/narrow layout, hidden pause/reactivation and owner cleanup");
     assert.deepEqual(network, []); assert.deepEqual(errors, []);
-    const result = { date: new Date().toISOString(), platform: platform(), os: release(), stages, refreshMs, errors, network, resources: files.service.subscriptions.stats(), git: review.service.stats(), artifacts, boundary: "Production preload/files+Git IPC and WorkbenchPanels with native Chromium mouse/keyboard; temporary APFS projects. Text remains read-only pending FR-08." };
-    await fs.writeFile(path.join(artifacts, "result.json"), JSON.stringify(result, null, 2) + "\n"); await fs.writeFile(path.resolve("docs/file-review-reference/fr-07-result.json"), JSON.stringify(result, null, 2) + "\n");
+    const result = { date: new Date().toISOString(), platform: platform(), os: release(), stages, refreshMs, errors, network, resources: files.service.subscriptions.stats(), git: review.service.stats(), artifacts, boundary: "Production preload/files+Git IPC and WorkbenchPanels with native Chromium mouse/keyboard; temporary APFS projects." };
+    await fs.writeFile(path.join(artifacts, "result.json"), JSON.stringify(result, null, 2) + "\n"); await fs.writeFile(path.resolve(process.env.TACODE_FILE_WORKBENCH_REPORT ?? "docs/file-review-reference/fr-07-result.json"), JSON.stringify(result, null, 2) + "\n");
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     if (!window.isDestroyed()) { await capture("failure").catch(() => {}); await fs.writeFile(path.join(artifacts, "failure.html"), await evaluate<string>("document.body.outerHTML")).catch(() => {}); }

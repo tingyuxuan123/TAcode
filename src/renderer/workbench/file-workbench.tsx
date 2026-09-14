@@ -15,6 +15,7 @@ export interface FileWorkbenchDocument {
   path: string;
   content: string;
   dirty?: boolean;
+  saving?: boolean;
   readOnly?: boolean;
 }
 
@@ -62,7 +63,7 @@ export function FileWorkbench({ projectName, document, entries, query, onQueryCh
       {onCopyPath && <WorkbenchButton label={t("workbench.copyPath")} disabled={!document} onClick={onCopyPath}><Copy size={16} /></WorkbenchButton>}
       {onLocate && <WorkbenchButton label={t("fileView.locate")} disabled={!document} onClick={() => { setTreeOpen(true); onTreeOpenChange?.(true); onLocate(); }}><LocateFixed size={16} /></WorkbenchButton>}
       {onRefresh && <WorkbenchButton label={t("workbench.refresh")} onClick={onRefresh}><RefreshCw size={16} /></WorkbenchButton>}
-      {onSave && !document?.readOnly && <WorkbenchButton label={t("workbench.save")} disabled={!document?.dirty} onClick={onSave}><Save size={16} /></WorkbenchButton>}
+      {onSave && !document?.readOnly && <WorkbenchButton label={t(document?.saving ? "fileEdit.saving" : "workbench.save")} disabled={!document?.dirty || document.saving} onClick={onSave}><Save size={16} /></WorkbenchButton>}
       <WorkbenchButton label={t(treeOpen ? "workbench.hideTree" : "workbench.showTree")} aria-pressed={treeOpen} onClick={() => { setTreeOpen(!treeOpen); onTreeOpenChange?.(!treeOpen); }}><Folders size={18} /></WorkbenchButton>
       {onExternalOpen && <WorkbenchButton label={t("workbench.open")} className="has-label is-outlined" disabled={!document} onClick={onExternalOpen}>
         <ExternalLink size={15} /><span>{t("workbench.open")}</span><ChevronDown size={12} />

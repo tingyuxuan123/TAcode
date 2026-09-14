@@ -79,6 +79,7 @@ import { WorkbenchPanels } from "./browser/workbench-panels";
 import { GitReviewPanel } from "./workbench/git-review-panel";
 import { SessionReviewActions } from "./workbench/session-review-actions";
 import { useBrowserPanels } from "./browser/use-browser-panels";
+import { useFileEditing } from "./workbench/file-editing";
 import { FilesPanel } from "./browser/files-panel";
 import { useDelegationTabs } from "./browser/use-delegation-tabs";
 import { useDelegationState } from "./use-delegation-state";
@@ -570,6 +571,7 @@ export function App() {
   const [fullscreen, setFullscreen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const browserPanels = useBrowserPanels(workspace, activeSession);
+  const fileEditing = useFileEditing();
   const sidebarLayout = useSidebarLayout();
   // 用户点开子会话的统一入口（侧栏行 + 委派卡片行都走这里）。除了把标签放进右侧
   // 工作台，还要把**关着的右侧抽屉拉开**：标签加进了一个看不见的抽屉等于没反应——
@@ -876,6 +878,7 @@ export function App() {
     storagePath?: string,
     sourceDraftKey?: string,
   ) => {
+    if (!resume && workspace && cwd !== workspace && !await fileEditing.confirm(workspace, undefined, true)) return false;
     const seq = ++startSeq.current;
     const browsing = Boolean(sessionPath) && !seedMessage && !resume;
     let browsingSnapshot: AgentStartResult | undefined;
@@ -1141,7 +1144,7 @@ export function App() {
     } finally {
       if (seq === startSeq.current) setLoading(false);
     }
-  }, [agentErrorToast, applyThinkingForModel, dropAgentSession, mergeActivity, permission, refreshAgentSkills, resolveSandbox, syncAgentThinking, t]);
+  }, [agentErrorToast, applyThinkingForModel, dropAgentSession, fileEditing, mergeActivity, permission, refreshAgentSkills, resolveSandbox, syncAgentThinking, t, workspace]);
 
   /**
    * 委派子会话：默认在右侧面板开一个只读标签（不再抢占中间主会话区）。
@@ -1308,6 +1311,7 @@ export function App() {
   }, [applyThinkingForModel, loading, modelOptions, running, t, workspace]);
 
   const bindProject = useCallback(async (cwd: string): Promise<boolean> => {
+    if (workspace && cwd !== workspace && !await fileEditing.confirm(workspace, undefined, true)) return false;
     // Phase 3b：多会话并行下，切换项目不再因“当前 agent 仍在运行”而阻止——每个
     // 项目/会话有独立 worker，旧项目的会话切走后会继续后台运行，切回即可见。
     detachAgentView();
@@ -1331,7 +1335,7 @@ export function App() {
     setFeatureTodos([]);
     setAgentSkills([]);
     return true;
-  }, [applyThinkingForModel, detachAgentView]);
+  }, [applyThinkingForModel, detachAgentView, fileEditing, workspace]);
   const openFolder = useCallback(async () => {
     const selected = await window.harness.workspace.choose();
     if (!selected) return;
@@ -1404,6 +1408,7 @@ export function App() {
   }, [mutateSession]);
 
   const removeProject = useCallback(async (path: string) => {
+    if (!await fileEditing.confirm(path, undefined, true)) return;
     const seq = startSeq.current;
     const runtimeId = runtimeIdRef.current;
     try {
@@ -1425,7 +1430,7 @@ export function App() {
     setUiRequest(undefined);
     sessionRef.current = undefined;
     if (runtimeId) await window.harness.agent.stop(runtimeId).catch(() => undefined);
-  }, [detachAgentView, workspace]);
+  }, [detachAgentView, fileEditing, workspace]);
 
   const applyUndo = useCallback(async (files: RestoreFile[]) => {
     const seq = startSeq.current;

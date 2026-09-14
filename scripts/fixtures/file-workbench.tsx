@@ -11,6 +11,8 @@ import { PreviewContext } from "../../src/renderer/file-path-chip";
 import type { ChatMessage } from "../../src/renderer/conversation";
 import { fileScope, readFileTabs } from "../../src/renderer/workbench/file-view-state";
 import { filePanelId } from "../../src/renderer/browser/panel-state";
+import { FileEditingProvider, useFileEditing } from "../../src/renderer/workbench/file-editing";
+import { fileDocuments } from "../../src/renderer/workbench/file-document-store";
 import "../../src/renderer/styles.css";
 import "./file-review.css";
 
@@ -26,6 +28,7 @@ function Fixture() {
   const [root, setRoot] = useState(new URLSearchParams(location.search).get("project") ?? "");
   const [session, setSession] = useState("session-1"); const [hidden, setHidden] = useState(false);
   const [error, setError] = useState(""); const panels = useBrowserPanels(root, session); const { setLocale } = useI18n();
+  const editing = useFileEditing();
   const open = useCallback((path: string, options?: { preview?: boolean; literal?: boolean }) => { try { panels.openFile(path, options); setHidden(false); } catch { setError("outsideProject"); } }, [panels.openFile]);
   useEffect(() => {
     const scope = fileScope(root, session); const saved = readFileTabs(scope);
@@ -33,8 +36,9 @@ function Fixture() {
   }, [panels.openFiles]);
   useEffect(() => {
     const editor = () => { const host = document.querySelector('[data-file-active="true"] .cm-editor'); return host ? EditorView.findFromDOM(host as HTMLElement) : null; };
-    (window as any).fileWorkbenchFixture = { setRoot, setSession, setHidden, setLocale, nativeEvents, state: () => ({ tabs: panels.tabs, active: panels.active, filesScope: panels.filesScope, root, session, hidden, error }),
-      editor: () => { const view = editor(); if (!view) return null; const selection = view.state.selection.main; const line = view.state.doc.lineAt(selection.from); return { content: view.state.doc.toString(), from: selection.from, to: selection.to, top: view.scrollDOM.scrollTop, selectionLine: line.number, column: selection.from - line.from + 1 }; },
+    (window as any).fileWorkbenchFixture = { setRoot: async (next: string) => { if (await editing.confirm(root, undefined, true)) setRoot(next); },
+      setSession, setHidden, setLocale, nativeEvents, store: fileDocuments(), state: () => ({ tabs: panels.tabs, active: panels.active, filesScope: panels.filesScope, root, session, hidden, error }),
+      editor: () => { const view = editor(); if (!view) return null; const selection = view.state.selection.main; const line = view.state.doc.lineAt(selection.from); return { content: view.state.sliceDoc(), from: selection.from, to: selection.to, top: view.scrollDOM.scrollTop, selectionLine: line.number, column: selection.from - line.from + 1 }; },
       setPosition: (top: number, line: number) => { const view = editor(); if (view) { view.dispatch({ selection: { anchor: view.state.doc.line(line).from } }); view.scrollDOM.scrollTop = top; view.scrollDOM.dispatchEvent(new Event("scroll")); } },
     };
   });
@@ -56,4 +60,4 @@ function Fixture() {
     </div>
   </div>;
 }
-createRoot(document.getElementById("root")!).render(<StrictMode><LocaleProvider><Fixture /></LocaleProvider></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode><LocaleProvider><FileEditingProvider><Fixture /></FileEditingProvider></LocaleProvider></StrictMode>);

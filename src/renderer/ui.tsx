@@ -1526,7 +1526,7 @@ export function FlowSpinner({ size = 15, label }: { size?: number; label?: strin
   return <Loader size={size} className="flow-spinner" aria-hidden={label ? undefined : true} aria-label={label} />;
 }
 
-export type PanelTab = { id: string; label: string; title?: string; icon?: ReactNode; preview?: boolean; reorderable?: boolean };
+export type PanelTab = { id: string; label: string; title?: string; icon?: ReactNode; preview?: boolean; reorderable?: boolean; dirty?: boolean };
 export type PanelTabCommand = { label: string; icon?: ReactNode; disabled?: boolean; run(): void };
 
 export type PanelAddItem = { type: string; label: string; icon: ReactNode; hint?: string };
@@ -1647,6 +1647,7 @@ export function PanelTabs({
             className={`inspect-tab${tab.id === active ? " active" : ""}${tab.preview ? " is-preview" : ""}${dropTarget === tab.id ? " is-drop-target" : ""}`}
             data-panel-id={tab.id}
             data-file-preview={tab.preview === undefined ? undefined : tab.preview}
+            data-file-dirty={tab.dirty === undefined ? undefined : tab.dirty}
             title={tab.title || tab.label}
             onClick={() => { if (!clickAfterDrag.current) onSelect(tab.id); }}
             onDoubleClick={() => onPinTab?.(tab.id)}
@@ -1694,6 +1695,7 @@ export function PanelTabs({
           >
             {tab.icon}
             <span className="inspect-tab-label">{tab.label}</span>
+            {tab.dirty && <span className="file-tab-dirty" aria-label={t("fileEdit.unsaved")} title={t("fileEdit.unsaved")} />}
             {onCloseTab && (
               <span
                 className="inspect-tab-close"
