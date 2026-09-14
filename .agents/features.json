@@ -77,7 +77,7 @@
   {
     "id": "UX-16",
     "description": "配置是否已在当前会话生效可见。验收：先运行未信任项目，再完成信任，界面明确说明生效状态并提供直接操作；重载后的 Skills/MCP 与配置一致；其他项目的会话和正在编辑的内容不受影响。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-16。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "UX-17",

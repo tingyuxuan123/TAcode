@@ -29,6 +29,8 @@ import { tacodeEnv } from "./env.js";
 import { createTurnLimiter, parseTurnLimit } from "./turn-limit.js";
 import { registerSessionTitle } from "./session-title.js";
 import { registerMcpTools } from "./mcp-extension.js";
+import { CAPABILITIES_REQUEST, CAPABILITIES_RESPONSE, type RuntimeCapabilityReport } from "../shared/capabilities.js";
+import { parseSkillCommands } from "../shared/skills.js";
 import type { PermissionMode, TacodeRuntimeOptions } from "./options.js";
 import { registerAskUserTool, ASK_USER_TOOL } from "./tools/ask-user.js";
 import { capturePatchCheckpoint, type Checkpoint } from "./tools/checkpoint.js";
@@ -105,14 +107,16 @@ const applyPatchParameters = Type.Object({
 });
 
 export function createTacodeExtension(options: TacodeRuntimeOptions) {
+  let reloadPermission: { current: PermissionMode; beforePlan: PermissionMode } | undefined;
   return {
     name: "tacode",
     factory(pi: ExtensionAPI): void {
       const registry = new ManagedProcessRegistry();
       const access = new SessionAccessController(options.sandbox, options.network);
       const checkpoints: Checkpoint[] = [];
-      let permission: PermissionMode = options.permission;
-      let permissionBeforePlan: PermissionMode = options.permission === "plan" ? "auto" : options.permission;
+      let permission: PermissionMode = reloadPermission?.current ?? options.permission;
+      let permissionBeforePlan: PermissionMode = reloadPermission?.beforePlan ?? (options.permission === "plan" ? "auto" : options.permission);
+      reloadPermission = undefined;
       /** 本次进入 plan 模式是否已抓过 carryOver（防止每轮 turn_start 重复抓取）。 */
       let planToolSetCaptured = false;
       let planState: PlanState | undefined;
@@ -184,12 +188,28 @@ export function createTacodeExtension(options: TacodeRuntimeOptions) {
         },
       );
       registerAskUserTool(pi);
-      registerMcpTools(pi, options, () => permission);
+      const mcpErrors = registerMcpTools(pi, options, () => permission);
+      const onCapabilitiesRequest = (message: unknown) => {
+        if (!message || typeof message !== "object") return;
+        const request = message as { type?: string; id?: string };
+        if (request.type !== CAPABILITIES_REQUEST || typeof request.id !== "string") return;
+        const report: RuntimeCapabilityReport = {
+          skills: parseSkillCommands(pi.getCommands()),
+          mcpTools: pi.getActiveTools().filter((name) => name.startsWith("mcp__")),
+          mcpErrors: mcpErrors(),
+          permission,
+        };
+        if (process.connected) process.send?.({ type: CAPABILITIES_RESPONSE, id: request.id, report }, () => {});
+      };
+      process.on("message", onCapabilitiesRequest);
+      pi.on("session_shutdown", () => { process.removeListener("message", onCapabilitiesRequest); });
       pi.registerCommand("reload-capabilities", {
         description: "Reload Skills and MCP configuration",
         handler: async (_args, ctx) => {
           await ctx.waitForIdle();
-          await ctx.reload();
+          reloadPermission = { current: permission, beforePlan: permissionBeforePlan };
+          try { await ctx.reload(); }
+          finally { reloadPermission = undefined; }
         },
       });
 

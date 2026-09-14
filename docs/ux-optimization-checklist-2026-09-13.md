@@ -176,7 +176,7 @@
 
   **定位与风险。** [ProviderSetupDialog](/Users/yfdl/project/TAcode/src/renderer/provider-dialog.tsx:566)、[ConfirmDialog](/Users/yfdl/project/TAcode/src/renderer/ui.tsx:1749)、[现有 dirty 处理](/Users/yfdl/project/TAcode/src/renderer/capabilities/common.tsx:86)。风险低到中等，适合小步复用公共弹窗能力。
 
-- [ ] **UX-16 · 配置是否已在当前会话生效可见**
+- [x] **UX-16 · 配置是否已在当前会话生效可见**
 
   **代码确认 + 产品建议。** 项目信任操作写入 trust store 并广播变化；现有提示明确要求：如果会话先以未信任状态启动，之后信任项目，需要完整重启 TACode 才能加载项目技能。用户完成配置后仍要退出工作台，步骤较重。
 
@@ -185,6 +185,8 @@
   **验收。** 先运行未信任项目，再完成信任，界面明确说明生效状态并提供直接操作；重载后的 Skills/MCP 与配置一致；其他项目的会话和正在编辑的内容不受影响。
 
   **定位与风险。** [trust-project IPC](/Users/yfdl/project/TAcode/src/main/capabilities-ipc.ts:39)、[现有信任提示](/Users/yfdl/project/TAcode/src/shared/capability-i18n.ts:36)、[CapabilityTrust](/Users/yfdl/project/TAcode/src/renderer/capabilities/common.tsx:69)。风险中等，运行时依赖边界需验证，不能先承诺完全热加载。
+
+  **实施结果（2026-09-14）。** 已显示当前会话的实际 Skills/MCP 数量、未生效、排队、重载和失败状态。Pi 在进程内缓存信任判断，首次信任只重建该会话 worker；普通编辑热重载。重载等待生成、审批和子任务结束，保留历史、当前模型与权限；真实 RPC/MCP 集成及桌面草稿/项目切换回归通过。
 
 - [ ] **UX-17 · 长时间使用后的资源回收**
 

@@ -1872,6 +1872,7 @@ export function App() {
         }
       }
       if (event.type === "agent_settled" || event.type === "desktop_runtime_stopped") {
+        if (event.type === "desktop_runtime_stopped" && event.capabilitiesReload === true) return;
         if (event.type === "desktop_runtime_stopped") {
           setMessages((current) => settleStoppedTurn(current));
           dropAgentSession();
@@ -2424,7 +2425,7 @@ export function App() {
           messageList.current?.scrollToAnchor(id, { onSettled: follow.reanchor });
         }} /></>}
         inspect={workspace || browserPanels.tabs.some((tab) => tab.type === "skills" || tab.type === "mcp") ? (
-          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace} onUsePrompt={fillPrompt}
+          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace} sessionPath={activeSession} onUsePrompt={fillPrompt}
             sideChatProps={{
               workspace,
               provider: connected,

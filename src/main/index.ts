@@ -229,6 +229,12 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
         return;
       }
       if (!sideChat) agentActivities.observe(event);
+      if (event.type === "desktop_capabilities_changed" || (event.type === "extension_ui_request" && event.method === "setStatus" && event.statusKey === "tacode")) {
+        mainWindow?.webContents.send("capabilities:runtime-changed", runtimeId);
+      }
+      if (["agent_settled", "desktop_ui_request_resolved", "desktop_capabilities_idle"].includes(event.type)) {
+        (sideChat ? sideChatManager : agentManager).flushScheduledCapabilities(runtimeId);
+      }
       if (!sideChat && event.type === "agent_start" && event.__sessionId) {
         delegationCoordinator?.resumeParent(event.__sessionId);
       }
@@ -268,10 +274,12 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
  * 切换会话不再杀其它会话的 host，后台会话继续运行；命令按 runtimeId 路由。 */
 const agentManager = new AgentManager({
   createHost: (runtimeId) => createAgentHost(runtimeId),
+  hasDelegations: (sessionPath) => Boolean(delegationCoordinator?.list(sessionPath, { includeCompleted: false }).length),
   stopDelegations: async (sessionPath) => delegationCoordinator?.stopParent(sessionPath),
 });
 const sideChatManager = new AgentManager({
   createHost: (runtimeId) => createAgentHost(runtimeId, "side-chat"),
+  hasDelegations: (sessionPath) => Boolean(delegationCoordinator?.list(sessionPath, { includeCompleted: false }).length),
 });
 const terminalManager = new TerminalManager((event) => {
   mainWindow?.webContents.send("terminal:event", event);
@@ -639,13 +647,17 @@ function registerIpc(): void {
   registerCapabilitiesIpc({
     resolveWorkspace: (cwd) => resolveInWorkspace(".", cwd),
     resolveProjectFile: (file, cwd) => resolveInWorkspace(file, cwd),
-    changed: (cwd) => {
+    runtimeStatus: async (cwd, sessionPath) => {
+      const host = agentManager.findBySession(sessionPath);
+      if (!host || host.cwd !== cwd) return { state: "inactive" };
+      if (!host.isRunning() && !["reloading", "failed"].includes(host.capabilityStatus().state)) return { state: "inactive" };
+      if (host.isRunning() && host.capabilityStatus().state !== "reloading") await host.readCapabilities();
+      return host.capabilityStatus();
+    },
+    reloadRuntime: (runtimeId) => agentManager.reloadCapabilities(runtimeId),
+    changed: (cwd, trustChanged) => {
       for (const manager of [agentManager, sideChatManager]) {
-        for (const runtime of manager.list()) {
-          const host = manager.findRuntime(runtime.runtimeId);
-          host?.invalidateCapabilities();
-          if (host && !runtime.running) void host.refreshCapabilities().catch(() => undefined);
-        }
+        manager.invalidateCapabilities(cwd, trustChanged);
       }
       for (const window of BrowserWindow.getAllWindows()) window.webContents.send("capabilities:changed", cwd);
     },
@@ -2189,6 +2201,8 @@ app.whenReady().then(async () => {
     },
     emitEvent: (parentSessionPath, event) => {
       agentManager.findBySession(parentSessionPath)?.sendDelegationEvent(event);
+      const runtimeId = agentManager.findBySession(parentSessionPath)?.runtimeId;
+      if (runtimeId) agentManager.flushScheduledCapabilities(runtimeId);
       // 直接广播给界面：后台 delegate 工具返回后已取消订阅，不能靠父会话消息更新面板。
       mainWindow?.webContents.send("delegations:event", event.event);
       sessionIndex.changed();

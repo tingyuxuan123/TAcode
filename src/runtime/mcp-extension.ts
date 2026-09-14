@@ -6,10 +6,11 @@ import { McpConnection, mcpErrorMessage, mcpFingerprint, mcpToolName } from "./m
 import type { PermissionMode, TacodeRuntimeOptions } from "./options.js";
 
 /** MCP 工具与浏览器工具一样贡献给统一工具集，不覆盖已有工具或绕过审批。 */
-export function registerMcpTools(pi: ExtensionAPI, options: TacodeRuntimeOptions, permission: () => PermissionMode): void {
+export function registerMcpTools(pi: ExtensionAPI, options: TacodeRuntimeOptions, permission: () => PermissionMode): () => string[] {
   const connections = new Map<string, { fingerprint: string; connection: McpConnection }>();
   const failures = new Map<string, number>();
   const lifetime = new AbortController();
+  const errors = new Map<string, string>();
   let refreshing: Promise<void> | undefined;
   const restricted = options.toolsExplicit;
 
@@ -17,12 +18,14 @@ export function registerMcpTools(pi: ExtensionAPI, options: TacodeRuntimeOptions
     if (refreshing) return refreshing;
     refreshing = (async () => {
       if (permission() === "plan" || restricted) {
+        errors.clear();
         setToolContribution("mcp", { names: [] });
         applyToolSet(pi);
         return;
       }
       const servers = await loadRuntimeMcpServers(ctx.cwd);
       const live = new Map(servers.map((server) => [server.name, mcpFingerprint(server)]));
+      for (const name of errors.keys()) if (!live.has(name)) errors.delete(name);
       for (const [name, value] of connections) {
         if (live.get(name) !== value.fingerprint || value.connection.isClosed) { connections.delete(name); await value.connection.close(); }
       }
@@ -34,6 +37,7 @@ export function registerMcpTools(pi: ExtensionAPI, options: TacodeRuntimeOptions
           if (lifetime.signal.aborted) { await connection.close(); return; }
           connections.set(server.name, { fingerprint, connection });
           failures.delete(fingerprint);
+          errors.delete(server.name);
           for (const tool of connection.tools) {
             pi.registerTool({
               name: mcpToolName(server.name, tool.name),
@@ -59,6 +63,7 @@ export function registerMcpTools(pi: ExtensionAPI, options: TacodeRuntimeOptions
           }
         } catch (error) {
           failures.set(fingerprint, Date.now());
+          errors.set(server.name, `${server.name}: ${mcpErrorMessage(error, server)}`);
           if (!lifetime.signal.aborted) ctx.ui.notify(`MCP ${server.name}：${mcpErrorMessage(error, server)}`, "warning");
         }
       }));
@@ -70,6 +75,7 @@ export function registerMcpTools(pi: ExtensionAPI, options: TacodeRuntimeOptions
       // 无法确认当前配置时收回工具；不可继续使用可能已被禁用的缓存连接。
       setToolContribution("mcp", { names: [] });
       applyToolSet(pi);
+      errors.set("configuration", error instanceof Error ? error.message : String(error));
       if (!lifetime.signal.aborted) ctx.ui.notify(`MCP：${error instanceof Error ? error.message : String(error)}`, "warning");
     }).finally(() => { refreshing = undefined; });
     return refreshing;
@@ -84,4 +90,5 @@ export function registerMcpTools(pi: ExtensionAPI, options: TacodeRuntimeOptions
     connections.clear();
     clearToolContribution("mcp");
   });
+  return () => [...errors.values()];
 }

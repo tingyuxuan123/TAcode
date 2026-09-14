@@ -13,6 +13,7 @@ import { browserPanelLabel, childSessionPanelLabel, filePanelLabel, isPanelVisib
 import type { useBrowserPanels } from "./use-browser-panels";
 import { SkillsPanel } from "../capabilities/skills-panel";
 import { McpPanel } from "../capabilities/mcp-panel";
+import { CapabilityRuntime } from "../capabilities/runtime-status";
 import "../capabilities/capabilities.css";
 
 /** 侧边聊天是声明式临时会话：关闭有破坏性确认，「不再询问」记在 localStorage。 */
@@ -39,7 +40,7 @@ export type SideChatPanelProps = {
 };
 
 /** 网页与审查共用顶部标签栏，切换标签时所有网页保持挂载。 */
-export function WorkbenchPanels({ panels, review, files, sideChatProps, onError, workspace, onUsePrompt }: {
+export function WorkbenchPanels({ panels, review, files, sideChatProps, onError, workspace, sessionPath, onUsePrompt }: {
   panels: ReturnType<typeof useBrowserPanels>;
   review: ReactNode;
   files: ReactNode;
@@ -47,6 +48,7 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
   onError(message: string): void;
   /** 文件标签读取内容用（过程区文件行打开的标签）。 */
   workspace?: string;
+  sessionPath?: string;
   onUsePrompt?(text: string): void;
 }) {
   const { t } = useI18n();
@@ -166,12 +168,14 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
         <div key={tab.id} className="panel-host" style={{ display: tab.id === active ? "flex" : "none" }}>{files}</div>
       ))}
       {tabs.filter((tab) => tab.type === "skills").map((tab) => (
-        <div key={`${tab.id}:${workspace ?? "global"}`} className="panel-host" style={{ display: tab.id === active ? "flex" : "none" }}>
+        <div key={`${tab.id}:${workspace ?? "global"}`} className="panel-host capability-host" style={{ display: tab.id === active ? "flex" : "none" }}>
+          <CapabilityRuntime key={sessionPath ?? "new"} workspace={workspace} sessionPath={sessionPath} active={tab.id === active} />
           <SkillsPanel workspace={workspace} onUsePrompt={onUsePrompt} onDirtyChange={skillsDirty} />
         </div>
       ))}
       {tabs.filter((tab) => tab.type === "mcp").map((tab) => (
-        <div key={`${tab.id}:${workspace ?? "global"}`} className="panel-host" style={{ display: tab.id === active ? "flex" : "none" }}>
+        <div key={`${tab.id}:${workspace ?? "global"}`} className="panel-host capability-host" style={{ display: tab.id === active ? "flex" : "none" }}>
+          <CapabilityRuntime key={sessionPath ?? "new"} workspace={workspace} sessionPath={sessionPath} active={tab.id === active} />
           <McpPanel workspace={workspace} onUsePrompt={onUsePrompt} onDirtyChange={mcpDirty} />
         </div>
       ))}

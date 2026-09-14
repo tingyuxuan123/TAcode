@@ -60,7 +60,7 @@ try {
   ipcMain.handle("app:get-locale", () => "zh");
   ipcMain.handle("workspace:recent", () => [{ path: project }, { path: other }]);
   const validateProject = async (cwd: string) => { assert.ok([project, other].includes(cwd)); return cwd; };
-  registerCapabilitiesIpc({ resolveWorkspace: validateProject, resolveProjectFile: async (file, cwd) => { await validateProject(cwd); const target = path.resolve(cwd, file); assert.ok(isPathInsideRoot(cwd, target)); return target; }, changed: (cwd) => main?.webContents.send("capabilities:changed", cwd) });
+  registerCapabilitiesIpc({ resolveWorkspace: validateProject, resolveProjectFile: async (file, cwd) => { await validateProject(cwd); const target = path.resolve(cwd, file); assert.ok(isPathInsideRoot(cwd, target)); return target; }, changed: (cwd) => main?.webContents.send("capabilities:changed", cwd), runtimeStatus: async () => ({ state: "inactive" }), reloadRuntime: async () => { throw new Error("No runtime in this fixture"); } });
   main = new BrowserWindow({ width: 1440, height: 980, show: true, backgroundColor: "#f6f4f0", ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 14 } } : {}), webPreferences: { preload: path.join(repository, "dist-electron/preload/index.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   main.webContents.on("console-message", (_event, level, message) => { if (level >= 3) rendererErrors.push(message); });
   stage = "load renderer fixture";

@@ -21,6 +21,9 @@ const api: DesktopApi = {
   capabilities: {
     trustProject: (cwd) => ipcRenderer.invoke("capabilities:trust-project", cwd),
     onChanged: (listener) => subscribe("capabilities:changed", listener),
+    runtimeStatus: (cwd, sessionPath) => ipcRenderer.invoke("capabilities:runtime-status", cwd, sessionPath),
+    reloadRuntime: (runtimeId) => ipcRenderer.invoke("capabilities:reload-runtime", runtimeId),
+    onRuntimeChanged: (listener) => subscribe("capabilities:runtime-changed", listener),
   },
   skills: {
     list: (cwd) => ipcRenderer.invoke("skills:list", cwd),

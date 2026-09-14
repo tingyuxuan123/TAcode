@@ -8,6 +8,7 @@ import type {
   AgentStartResult,
 } from "../shared/types";
 import type { AgentHost } from "./agent-host";
+import type { CapabilityRuntimeStatus, RuntimeCapabilityReport } from "../shared/capabilities";
 
 /** 从会话快照/命令结果里抽取底层会话文件路径。 */
 export function sessionFileFromUnknown(value: unknown): string | undefined {
@@ -30,6 +31,7 @@ export interface AgentManagerOptions {
   createHost(runtimeId: string): AgentHost;
   /** 主会话停止时回收由桌面协调器独立托管的子代理。 */
   stopDelegations?(sessionPath: string): Promise<unknown>;
+  hasDelegations?(sessionPath: string): boolean;
 }
 
 /**
@@ -68,6 +70,8 @@ export class AgentManager {
   private readonly index = new Map<string, string>();
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly stopping = new Map<string, Promise<void>>();
+  private readonly startOptions = new Map<string, AgentHostStartOptions>();
+  private readonly capabilityReloads = new Map<string, Promise<CapabilityRuntimeStatus>>();
   private activeRuntimeId: string | undefined;
   private selection = 0;
 
@@ -118,6 +122,8 @@ export class AgentManager {
 
   async start(options: AgentHostStartOptions): Promise<AgentStartResult> {
     const selection = ++this.selection;
+    const reloading = this.findBySession(options.sessionPath);
+    if (reloading) await this.capabilityReloads.get(reloading.runtimeId)?.catch(() => undefined);
     const existing = this.findBySession(options.sessionPath);
     if (existing?.isRunning()) return this.snapshotOn(existing, selection);
     // A worker can exit before the renderer gets a chance to call stop(). Do not
@@ -137,6 +143,7 @@ export class AgentManager {
   /** 复用已在运行的宿主：只取快照与缺口事件，不重启 worker。 */
   async resume(runtimeId: string): Promise<AgentStartResult> {
     const selection = ++this.selection;
+    await this.capabilityReloads.get(runtimeId)?.catch(() => undefined);
     const host = this.findRuntime(runtimeId);
     if (!host || !host.isRunning())
       return Promise.reject(new Error("Agent session is not running"));
@@ -144,6 +151,7 @@ export class AgentManager {
   }
 
   private async snapshotOn(host: AgentHost, selection: number): Promise<AgentStartResult> {
+    await this.capabilityReloads.get(host.runtimeId);
     // 读取不能排在等待 UI 的 prompt 后，否则连恢复确认卡也会死锁。
     const snapshot = await host.snapshot();
     if (this.findRuntime(host.runtimeId) !== host || !host.isRunning())
@@ -182,7 +190,7 @@ export class AgentManager {
   ): Promise<T> {
     const host = this.activeHost(runtimeId);
     if (!host) return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
-    if (!host.isRunning()) {
+    if (!host.isRunning() && !this.capabilityReloads.has(host.runtimeId)) {
       this.removeHost(host);
       return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
     }
@@ -191,6 +199,13 @@ export class AgentManager {
       return Promise.all([this.stopDelegations(host), host.request<T>(type, data)]).then(([, result]) => result);
     }
     return this.enqueue(host.runtimeId, async () => {
+      if (this.findRuntime(host.runtimeId) !== host) throw new Error(NO_ACTIVE_SESSION_MESSAGE);
+      if (type === "prompt" && host.requiresCapabilityRestart && this.canReloadCapabilities(host)) {
+        const reload = this.applyCapabilitiesOn(host);
+        this.capabilityReloads.set(host.runtimeId, reload);
+        try { await reload; }
+        finally { if (this.capabilityReloads.get(host.runtimeId) === reload) this.capabilityReloads.delete(host.runtimeId); }
+      }
       if (type === "new_session") await this.stopDelegations(host);
       const result = await host.request<T>(type, data);
       if (
@@ -227,6 +242,7 @@ export class AgentManager {
     const hosts = [...this.runtimes.values()];
     this.runtimes.clear();
     this.index.clear();
+    this.startOptions.clear();
     this.activeRuntimeId = undefined;
     await Promise.all([...this.stopping.values(), ...hosts.map((host) => Promise.all([this.stopDelegations(host), host.stop()]))].map((job) => job.catch(() => undefined)));
   }
@@ -240,12 +256,17 @@ export class AgentManager {
     const runtimeId = `runtime-${randomUUID()}`;
     const host = this.options.createHost(runtimeId);
     host.runtimeId = runtimeId;
+    host.capabilitiesBlocked = () => {
+      const session = host.sessionKey ?? host.requestedSessionPath;
+      return Boolean(session && this.options.hasDelegations?.(session));
+    };
     this.runtimes.set(runtimeId, host);
     return host;
   }
 
   private removeHost(host: AgentHost): void {
     this.runtimes.delete(host.runtimeId);
+    this.startOptions.delete(host.runtimeId);
     for (const [key, id] of this.index)
       if (id === host.runtimeId) this.index.delete(key);
     if (this.activeRuntimeId === host.runtimeId) this.activeRuntimeId = undefined;
@@ -259,6 +280,7 @@ export class AgentManager {
     let snapshot: AgentSnapshot;
     host.cwd = options.cwd;
     host.serviceKey = options.serviceKey;
+    this.startOptions.set(host.runtimeId, options);
     try {
       snapshot = await host.start(options);
       if (this.findRuntime(host.runtimeId) !== host) throw new Error("Agent session closed");
@@ -296,5 +318,91 @@ export class AgentManager {
     const next = previous.then(action, action);
     this.queues.set(key, next.catch(() => undefined));
     return next;
+  }
+
+  invalidateCapabilities(cwd?: string, trustChanged = false): void {
+    for (const host of this.runtimes.values()) {
+      if (cwd && host.cwd !== cwd) continue;
+      host.invalidateCapabilities(trustChanged);
+      if (!host.requiresCapabilityRestart) void this.reloadCapabilities(host.runtimeId, false).catch(() => undefined);
+    }
+  }
+
+  private canReloadCapabilities(host: AgentHost): boolean {
+    const session = host.sessionKey ?? host.requestedSessionPath;
+    return !host.isInTurn() && !host.hasPendingWork && !(session && this.options.hasDelegations?.(session));
+  }
+
+  /** No polling: settlement, resolved approvals and child completion retry a scheduled reload. */
+  flushScheduledCapabilities(runtimeId: string): void {
+    const host = this.findRuntime(runtimeId);
+    if (host?.capabilitiesScheduled && this.canReloadCapabilities(host)) void this.reloadCapabilities(runtimeId, false).catch(() => undefined);
+  }
+
+  reloadCapabilities(runtimeId: string, manual = true): Promise<CapabilityRuntimeStatus> {
+    const running = this.capabilityReloads.get(runtimeId);
+    if (running) return running;
+    const host = this.findRuntime(runtimeId);
+    if (!host) return Promise.reject(new Error(NO_ACTIVE_SESSION_MESSAGE));
+    if (manual && !host.hasCapabilityChanges) host.invalidateCapabilities();
+    host.scheduleCapabilities();
+    if (!this.canReloadCapabilities(host)) return Promise.resolve(host.capabilityStatus());
+    const appliedBefore = host.capabilityStatus().appliedRevision;
+    const job = this.enqueue(runtimeId, () => this.applyCapabilitiesOn(host));
+    this.capabilityReloads.set(runtimeId, job);
+    const finish = () => {
+      if (this.capabilityReloads.get(runtimeId) === job) this.capabilityReloads.delete(runtimeId);
+      if (host.capabilitiesScheduled && host.capabilityStatus().appliedRevision !== appliedBefore) this.flushScheduledCapabilities(runtimeId);
+    };
+    void job.then(finish, finish);
+    return job;
+  }
+
+  private async applyCapabilitiesOn(host: AgentHost): Promise<CapabilityRuntimeStatus> {
+    const isCurrent = () => this.findRuntime(host.runtimeId) === host;
+    if (!isCurrent()) throw new Error(NO_ACTIVE_SESSION_MESSAGE);
+    if (!this.canReloadCapabilities(host)) { host.scheduleCapabilities(); return host.capabilityStatus(); }
+    if (!host.requiresCapabilityRestart) {
+      await host.refreshCapabilities();
+      return host.capabilityStatus();
+    }
+    let revision: number | undefined;
+    try {
+      const previous = this.startOptions.get(host.runtimeId);
+      if (!previous) throw new Error("无法恢复会话启动配置，请重新打开此会话。");
+      const [state, report] = host.isRunning() ? await Promise.all([
+        host.request<{ model?: { id?: string }; thinkingLevel?: string; isStreaming?: boolean; isCompacting?: boolean; pendingMessageCount?: number; autoCompactionEnabled?: boolean; steeringMode?: string; followUpMode?: string }>("get_state"),
+        host.readCapabilities(true),
+      ]) : [{}, host.capabilityStatus().report] as const;
+      if (!isCurrent()) throw new Error(NO_ACTIVE_SESSION_MESSAGE);
+      if (!this.canReloadCapabilities(host) || state.isStreaming || state.isCompacting || state.pendingMessageCount) {
+        host.scheduleCapabilities();
+        return host.capabilityStatus();
+      }
+      const options: AgentHostStartOptions = {
+        ...previous, sessionPath: host.sessionKey ?? host.requestedSessionPath,
+        model: state.model?.id ?? previous.model,
+        effort: state.thinkingLevel ?? previous.effort,
+        permission: (report as RuntimeCapabilityReport | undefined)?.permission ?? previous.permission,
+      };
+      if (!options.sessionPath) throw new Error("会话尚未保存，发送第一条消息后再重载。");
+      this.startOptions.set(host.runtimeId, options);
+      revision = host.beginCapabilityReload();
+      await host.start(options, { capabilitiesReload: true, isCurrent });
+      if (!isCurrent()) { await host.stop(); throw new Error(NO_ACTIVE_SESSION_MESSAGE); }
+      if (typeof state.autoCompactionEnabled === "boolean") await host.request("set_auto_compaction", { enabled: state.autoCompactionEnabled });
+      if (state.steeringMode) await host.request("set_steering_mode", { mode: state.steeringMode });
+      if (state.followUpMode) await host.request("set_follow_up_mode", { mode: state.followUpMode });
+      await host.readCapabilities(true);
+      host.finishCapabilityReload(revision);
+      this.reindex(host);
+      return host.capabilityStatus();
+    } catch (error) {
+      if (isCurrent()) {
+        host.failCapabilityReload(error);
+        if (revision !== undefined && !host.isRunning()) await host.stop();
+      }
+      throw error;
+    }
   }
 }

@@ -1,7 +1,7 @@
 import os from "node:os";
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
-import type { CapabilityScope } from "../shared/capabilities";
+import type { CapabilityRuntimeStatus, CapabilityScope } from "../shared/capabilities";
 import type { McpServerRow } from "../shared/integrations";
 import { validateMcpServer } from "../shared/mcp-config";
 import { mcpConfigPath } from "../runtime/capability-config";
@@ -14,7 +14,9 @@ import { McpManager } from "./mcp-manager";
 interface CapabilitiesIpcOptions {
   resolveWorkspace(cwd: string): Promise<string>;
   resolveProjectFile(file: string, cwd: string): Promise<string>;
-  changed(cwd?: string): void;
+  changed(cwd?: string, trustChanged?: boolean): void;
+  runtimeStatus(cwd?: string, sessionPath?: string): Promise<CapabilityRuntimeStatus>;
+  reloadRuntime(runtimeId: string): Promise<CapabilityRuntimeStatus>;
 }
 
 export function registerCapabilitiesIpc(options: CapabilitiesIpcOptions): void {
@@ -40,8 +42,11 @@ export function registerCapabilitiesIpc(options: CapabilitiesIpcOptions): void {
     const cwd = await workspace(rawCwd);
     if (!cwd) throw new Error("请先选择项目");
     new ProjectTrustStore(getTacodeHome()).set(cwd, true);
-    options.changed(cwd);
+    options.changed(cwd, true);
   });
+  ipcMain.handle("capabilities:runtime-status", async (_event, rawCwd?: unknown, rawSession?: unknown) =>
+    options.runtimeStatus(await workspace(rawCwd), rawSession === undefined ? undefined : requireString(rawSession, "会话路径", { maxLength: 4_096 })));
+  ipcMain.handle("capabilities:reload-runtime", (_event, rawId: unknown) => options.reloadRuntime(requireString(rawId, "运行句柄", { maxLength: 128 })));
   ipcMain.handle("skills:list", async (_event, cwd?: unknown) => skills.list(await workspace(cwd)));
   ipcMain.handle("skills:read", async (_event, id: unknown, cwd?: unknown) => skills.read(idOf(id), await workspace(cwd)));
   ipcMain.handle("skills:create", async (_event, content: unknown, rawScope: unknown, rawCwd?: unknown) => {
@@ -65,8 +70,9 @@ export function registerCapabilitiesIpc(options: CapabilitiesIpcOptions): void {
   });
   ipcMain.handle("skills:remove", async (_event, id: unknown, rawCwd?: unknown) => {
     const cwd = await workspace(rawCwd);
+    const { skill } = await skills.read(idOf(id), cwd);
     await skills.remove(idOf(id), (directory) => shell.trashItem(directory), cwd);
-    options.changed();
+    options.changed(skill.scope === "project" ? cwd : undefined);
   });
   ipcMain.handle("skills:reveal", async (_event, id: unknown, rawCwd?: unknown) => {
     const directory = await skills.directory(idOf(id), await workspace(rawCwd));
@@ -89,8 +95,9 @@ export function registerCapabilitiesIpc(options: CapabilitiesIpcOptions): void {
     skills.readFile(idOf(id), requireString(file, "文件路径", { maxLength: 4_096 }), await workspace(rawCwd)));
   ipcMain.handle("skills:save-file", async (_event, id: unknown, file: unknown, content: unknown, previous: unknown, rawCwd?: unknown) => {
     const cwd = await workspace(rawCwd);
+    const { skill } = await skills.read(idOf(id), cwd);
     await skills.saveFile(idOf(id), requireString(file, "文件路径", { maxLength: 4_096 }), text(content), text(previous), cwd);
-    options.changed();
+    options.changed(skill.scope === "project" ? cwd : undefined);
   });
   ipcMain.handle("mcp:list", async (_event, rawScope: unknown, rawCwd?: unknown) => {
     const { scope, cwd } = await scoped(rawScope, rawCwd);

@@ -24,6 +24,7 @@ import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/ty
 import { testComposerDrafts, type ComposerSmokeControls } from "./composer-drafts-smoke";
 import { testImeInput } from "./ime-smoke";
 import { settingsFixture, testSettings } from "./settings-smoke";
+import { testCapabilityStatus, type CapabilitySmokeControls } from "./capability-status-smoke";
 
 /** 真实 App + preload + Electron IPC + Host 行协议；生成事件由本地夹具驱动，不访问模型服务。 */
 async function smoke() {
@@ -59,6 +60,8 @@ async function smoke() {
   const searchSmoke = process.env.TACODE_SEARCH_SMOKE === "1";
   const settingsSmoke = process.env.TACODE_SETTINGS_SMOKE === "1";
   const settings = settingsFixture();
+  const capabilitySmoke = process.env.TACODE_CAPABILITY_STATUS_SMOKE === "1";
+  const capabilities: CapabilitySmokeControls = { trusted: false, children: false, hold: false, mcpError: "" };
   const searchControls = { failEarlier: true };
   const largeSmoke = process.env.TACODE_LARGE_SMOKE === "1";
   const largeFixture = largeSmoke ? createLargeFixture() : undefined;
@@ -93,6 +96,7 @@ async function smoke() {
     cwd: project, createdAt: now, updatedAt: now, messageCount: 2, pinned: false, archived: false,
   }));
   if (searchSmoke) { sessions[1].title = "会话 A"; sessions[1].cwd = path.join(project, "副项目"); }
+  if (capabilitySmoke) { sessions[1].cwd = path.join(root, "other-project"); await mkdir(sessions[1].cwd); }
   const panelFixture = panelsSmoke ? createPanelFixture(project, sessions[0].path) : undefined;
   const transcript = (file: string) => (largeFixture && file === sessions[0].path ? largeFixture.messages : undefined) ?? panelFixture?.messages.get(file) ?? [
     { role: "user", content: [{ type: "text", text: `${path.basename(file)} 的问题` }], timestamp: Date.parse(now) + 1 },
@@ -105,25 +109,43 @@ async function smoke() {
   let delayedHistory: string | undefined;
   let releaseHistory: (() => void) | undefined;
   const emit = (host: AgentHost, event: Record<string, unknown>) => (host as unknown as { handleLine(line: string): void }).handleLine(JSON.stringify(event));
-  const manager = new AgentManager({ createHost: (runtimeId) => {
+  const manager = new AgentManager({ hasDelegations: () => capabilitySmoke && capabilities.children, createHost: (runtimeId) => {
+    let loadedCapabilities = false;
+    const capabilityReport = () => ({ skills: loadedCapabilities ? [{ name: "project-skill", description: "Fixture", path: path.join(project, ".agents/skills/project-skill/SKILL.md") }] : [], mcpTools: loadedCapabilities && !capabilities.mcpError ? ["mcp__fixture__echo"] : [], mcpErrors: capabilities.mcpError ? [capabilities.mcpError] : [], permission: "auto" });
     const host = new AgentHost(
-      (event) => { activity.observe(event); main?.webContents.send("agent:event", event); },
+      (event) => {
+        activity.observe(event); main?.webContents.send("agent:event", event);
+        if (capabilitySmoke) {
+          if (event.type === "desktop_capabilities_changed") main?.webContents.send("capabilities:runtime-changed", runtimeId);
+          if (["agent_settled", "desktop_ui_request_resolved", "desktop_capabilities_idle"].includes(event.type)) manager.flushScheduledCapabilities(runtimeId);
+        }
+      },
       (message, sessionKey, id) => {
         activity.fail(id ?? runtimeId, sessionKey, message, !host.isRunning());
         main?.webContents.send("agent:error", { message, __sessionId: sessionKey, __runtimeId: id ?? runtimeId });
       },
     );
-    host.start = async (options): Promise<AgentSnapshot> => {
+    host.start = async (options, lifecycle): Promise<AgentSnapshot> => {
       // 模拟真实 start 的销毁语义，防止“复用”测试掩盖后台进程被重启。
-      await host.stop();
+      await host.stop({ capabilitiesReload: lifecycle?.capabilitiesReload });
+      if (capabilitySmoke && lifecycle?.capabilitiesReload && capabilities.hold) {
+        capabilities.hold = false;
+        await new Promise<void>(resolve => { capabilities.release = resolve; });
+      }
+      if (lifecycle?.isCurrent && !lifecycle.isCurrent()) throw new Error("Agent session closed");
+      loadedCapabilities = capabilitySmoke && capabilities.trusted && options.cwd === project;
       starts.set(runtimeId, (starts.get(runtimeId) ?? 0) + 1);
       host.sessionKey = options.sessionPath;
       const internals = host as unknown as { child: unknown };
       internals.child = {
         exitCode: null,
+        send: (request: { id: string }, callback: () => void) => { queueMicrotask(() => emit(host, { type: "response", id: request.id, success: true, data: capabilityReport() })); callback?.(); },
         stdin: { destroyed: false, write: (line: string) => {
           const request = JSON.parse(line);
-          if (request.type === "extension_ui_response") {
+          if (capabilitySmoke && request.type === "prompt" && request.message === "/reload-capabilities") {
+            loadedCapabilities = capabilities.trusted && options.cwd === project;
+            queueMicrotask(() => emit(host, { type: "response", id: request.id, success: true, data: {} }));
+          } else if (request.type === "extension_ui_response") {
             replies.push({ ...request, runtimeId });
             if (request.id === "approve-a-2") pendingPrompts.get(runtimeId)?.();
           } else if (request.type === "abort" && stopSmoke) {
@@ -148,7 +170,7 @@ async function smoke() {
               : request.type === "get_messages" ? { messages: transcript(host.sessionKey!) }
                 : request.type === "get_available_models" ? { models: [{ id: "fixture", provider: "openai", input: ["text", "image"] }] }
                   : request.type === "get_available_thinking_levels" ? { levels: ["off"] }
-                    : request.type === "get_commands" ? { commands: [] }
+                    : request.type === "get_commands" ? { commands: loadedCapabilities ? [{ name: "skill:project-skill", source: "skill" }] : [] }
                       : request.type === "get_session_stats" ? { sessionFile: host.sessionKey } : {},
           }));
           return true;
@@ -222,7 +244,7 @@ async function smoke() {
       ipcMain.handle("subagents:save", () => { settings.subagentSaves++; });
     }
     ipcMain.handle("app:log-diagnostic", () => {});
-    ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }, ...(searchSmoke ? [{ path: path.join(project, "副项目"), name: "副项目", updatedAt: now }] : [])]);
+    ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }, ...(searchSmoke ? [{ path: path.join(project, "副项目"), name: "副项目", updatedAt: now }] : []), ...(capabilitySmoke ? [{ path: sessions[1].cwd, name: "other-project", updatedAt: now }] : [])]);
     ipcMain.handle("workspace:list", (_event, cwd, refresh) => {
       if (filesSmoke || previewSmoke || largeSmoke) {
         fileListCalls++;
@@ -289,7 +311,18 @@ async function smoke() {
       ipcMain.handle("side-chat:command", () => ({}));
       ipcMain.handle("side-chat:stop", () => {});
     }
-    ipcMain.handle("skills:list", () => ({ skills: [], projectTrusted: true }));
+    ipcMain.handle("skills:list", (_event, cwd) => ({ skills: capabilitySmoke && cwd === project ? [{ id: "project-agents:project-skill", name: "project-skill", description: "项目技能测试", scope: "project", rootLabel: ".agents", enabled: true, path: path.join(project, ".agents/skills/project-skill/SKILL.md") }] : [], projectTrusted: capabilitySmoke ? capabilities.trusted : true }));
+    if (capabilitySmoke) {
+      ipcMain.handle("mcp:list", () => ({ servers: [], configPath: "fixture", projectTrusted: capabilities.trusted }));
+      ipcMain.handle("capabilities:trust-project", (_event, cwd) => { capabilities.trusted = true; manager.invalidateCapabilities(cwd, true); main?.webContents.send("capabilities:changed", cwd); });
+      ipcMain.handle("capabilities:runtime-status", async (_event, cwd, sessionPath) => {
+        const host = manager.findBySession(sessionPath);
+        if (!host || host.cwd !== cwd) return { state: "inactive" };
+        if (host.isRunning() && host.capabilityStatus().state !== "reloading") await host.readCapabilities();
+        return host.capabilityStatus();
+      });
+      ipcMain.handle("capabilities:reload-runtime", (_event, runtimeId) => manager.reloadCapabilities(runtimeId));
+    }
     ipcMain.handle("auth:status", () => [{ id: "openai", serviceId: "fixture", serviceVersion: "1", preferred: true, configured: controls.configured, defaultModel: "fixture", models: ["fixture"] }]);
     ipcMain.handle("agent:runtimes", () => manager.list());
     ipcMain.handle("agent:activities", () => activity.list());
@@ -300,14 +333,15 @@ async function smoke() {
     ipcMain.handle("agent:deactivate", () => manager.deactivate());
     ipcMain.handle("agent:attach", async (_event, id) => {
       const snapshot = await manager.resume(id);
-      return { ...snapshot, cwd: project, activity: activity.bind(id, manager.findRuntime(id)?.sessionKey) };
+      return { ...snapshot, cwd: manager.findRuntime(id)?.cwd ?? project, activity: activity.bind(id, manager.findRuntime(id)?.sessionKey) };
     });
     ipcMain.handle("agent:ui-response", (_event, id, response, runtimeId) => manager.respondToUi(runtimeId, id, response));
     ipcMain.handle("agent:start", async (_event, options) => {
       if (controls.failStart) throw new Error("fixture worker startup failed");
       const sessionPath = options.sessionPath ?? path.join(project, "new.jsonl");
-      const snapshot = await manager.start({ ...options, sessionPath, cwd: project, serviceKey: "fixture:1" });
-      return { ...snapshot, cwd: project, activity: activity.bind(snapshot.runtimeId, sessionPath) };
+      const cwd = capabilitySmoke ? options.cwd ?? project : project;
+      const snapshot = await manager.start({ ...options, sessionPath, cwd, serviceKey: "fixture:1" });
+      return { ...snapshot, cwd, activity: activity.bind(snapshot.runtimeId, sessionPath) };
     });
     main = new BrowserWindow({
       width: 1440, height: 960, show: !startupSmoke, backgroundColor: "#f6f4f0",
@@ -327,10 +361,18 @@ async function smoke() {
     } else if (historySmoke) {
       controls.configured = false;
       for (const session of sessions) await writeTranscript(session.path, session.id === "A" ? 460 : 2);
-    } else if (!startupSmoke && !listSmoke) for (const session of sessions) await manager.start({ cwd: project, sessionPath: session.path, provider: "openai", permission: "auto", sandbox: "read-only", serviceKey: "fixture:1" });
+    } else if (!startupSmoke && !listSmoke) for (const session of sessions) await manager.start({ cwd: session.cwd, sessionPath: session.path, provider: "openai", permission: "auto", sandbox: "read-only", serviceKey: "fixture:1" });
     manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (capabilitySmoke) {
+      stage = "capability application state";
+      await wait(() => evaluate("!!document.querySelector('.project-row')"));
+      await evaluate("document.querySelector('.project-row').click()");
+      await testCapabilityStatus(main, manager, manager.findBySession(sessions[0].path)!, manager.findBySession(sessions[1].path)!, capabilities, starts, emit, select, screenshot);
+      assert.deepEqual(rendererErrors.filter(message => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      return;
+    }
     if (settingsSmoke) {
       stage = "settings dialog protection";
       await testSettings(main, settings, screenshot);

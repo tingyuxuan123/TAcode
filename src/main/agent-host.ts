@@ -1,10 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { getTacodeRpcEntryPath } from "../runtime/index";
-import type { AgentEvent, AgentSessionStats, AgentSnapshot, AgentStartOptions, ExtensionUiRequest } from "../shared/types";
+import type { AgentEvent, AgentSessionStats, AgentSnapshot, ExtensionUiRequest } from "../shared/types";
 import { isAgentUiDialog } from "../shared/agent-ui";
 import { ContextStatsTracker } from "./context-stats";
 import { parseSkillCommands } from "../shared/skills";
+import { CAPABILITIES_REQUEST, CAPABILITIES_RESPONSE, type CapabilityRuntimeStatus, type RuntimeCapabilityReport } from "../shared/capabilities";
+import { isCapabilityProjectTrusted } from "../runtime/capability-config";
+import type { AgentHostStartOptions } from "./agent-manager";
 import { killProcessTree, terminateProcessTree } from "./process-tree";
 import { drainUtf8Lines } from "./rpc-lines";
 import { IPC_LIMITS, formatBytes, redactSecrets } from "./ipc-validation";
@@ -19,6 +22,8 @@ import {
 } from "../shared/delegation";
 
 interface PendingRequest {
+  type: string;
+  startsTurn?: boolean;
   resolve(value: unknown): void;
   reject(error: Error): void;
   timeout: NodeJS.Timeout;
@@ -67,6 +72,8 @@ export class AgentHost {
   private malformedLines = 0;
   /** 是否正在进行一轮生成（agent_start ~ agent_settled）；供侧边栏“正在运行”徽标与 renderer 重载恢复使用。 */
   private turnActive = false;
+  private awaitingTurnStart = false;
+  private turnStartTimer?: NodeJS.Timeout;
   /** 等待下一轮开始的等待者（agent_start 到达或宽限超时后放行）。 */
   private startWaiters: Array<(saw: boolean) => void> = [];
   /** 等待本轮结束的等待者（agent_settled 或 worker 退出后放行）。 */
@@ -82,17 +89,90 @@ export class AgentHost {
   private capabilitiesRevision = 0;
   private appliedCapabilitiesRevision = 0;
   private capabilitiesReload?: Promise<void>;
+  private capabilitiesReport?: RuntimeCapabilityReport;
+  private capabilitiesError?: string;
+  private capabilitiesLoading = false;
+  private loadedProjectTrusted = false;
+  public requiresCapabilityRestart = false;
+  public capabilitiesScheduled = false;
+  public capabilitiesBlocked?: () => boolean;
   private stopping?: Promise<void>;
+  private stoppingForCapabilities = false;
 
-  invalidateCapabilities(): void { this.capabilitiesRevision += 1; }
+  invalidateCapabilities(restart = false): void {
+    this.capabilitiesRevision += 1;
+    this.requiresCapabilityRestart ||= restart && !this.loadedProjectTrusted;
+    this.capabilitiesError = undefined;
+    this.capabilitiesChanged();
+  }
+
+  get hasPendingUiRequests(): boolean { return this.pendingUi.size > 0; }
+  get hasPendingWork(): boolean {
+    return this.awaitingTurnStart || this.hasPendingUiRequests || this.browserRequests.size > 0
+      || [...this.pending.values()].some((request) => ["prompt", "compact", "fork", "new_session"].includes(request.type));
+  }
+  get hasCapabilityChanges(): boolean { return this.capabilitiesRevision !== this.appliedCapabilitiesRevision; }
+
+  capabilityStatus(): CapabilityRuntimeStatus {
+    return {
+      state: this.capabilitiesLoading ? "reloading" : this.capabilitiesError ? "failed" : this.capabilitiesScheduled ? "scheduled"
+        : this.requiresCapabilityRestart ? "restart-required" : this.hasCapabilityChanges ? "pending" : "loaded",
+      runtimeId: this.runtimeId, revision: this.capabilitiesRevision, appliedRevision: this.appliedCapabilitiesRevision,
+      report: this.capabilitiesReport, error: this.capabilitiesError,
+    };
+  }
+
+  scheduleCapabilities(): void { this.capabilitiesScheduled = true; this.capabilitiesChanged(); }
+
+  beginCapabilityReload(): number {
+    this.capabilitiesScheduled = false;
+    this.capabilitiesLoading = true;
+    this.capabilitiesError = undefined;
+    this.capabilitiesChanged();
+    return this.capabilitiesRevision;
+  }
+
+  finishCapabilityReload(revision: number): void {
+    this.appliedCapabilitiesRevision = revision;
+    if (revision === this.capabilitiesRevision) { this.requiresCapabilityRestart = false; this.capabilitiesScheduled = false; }
+    this.capabilitiesLoading = false;
+    if (this.capabilitiesReport) this.emitEvent(this.tagged({ type: "desktop_snapshot_meta", skills: this.capabilitiesReport.skills }));
+    this.capabilitiesChanged();
+    if (this.capabilitiesScheduled) this.emitEvent(this.tagged({ type: "desktop_capabilities_idle" }));
+  }
+
+  failCapabilityReload(error: unknown): void {
+    this.capabilitiesLoading = false;
+    this.capabilitiesError = redactSecrets(error instanceof Error ? error.message : String(error), this.secrets);
+    this.capabilitiesChanged();
+  }
+
+  private capabilitiesChanged(): void {
+    this.emitEvent(this.tagged({ type: "desktop_capabilities_changed" }));
+  }
+
+  async readCapabilities(force = false): Promise<RuntimeCapabilityReport> {
+    if (!this.capabilitiesReport || force) {
+      const child = this.child;
+      const report = await this.request<RuntimeCapabilityReport>("get_capabilities");
+      if (child !== this.child) throw new Error("Agent session closed");
+      if (!report || !Array.isArray(report.skills) || !Array.isArray(report.mcpTools) || !Array.isArray(report.mcpErrors)
+        || !["plan", "ask", "auto", "full"].includes(report.permission)) throw new Error("无法读取会话的能力状态。");
+      this.capabilitiesReport = report;
+    }
+    return this.capabilitiesReport;
+  }
 
   /** 空闲会话立即重载；生成中的会话在下一次 prompt 前重载，不中断本轮。 */
   async refreshCapabilities(): Promise<void> {
-    if (!this.isRunning() || this.isInTurn() || this.capabilitiesRevision === this.appliedCapabilitiesRevision) return;
+    if (this.capabilitiesReload) { await this.capabilitiesReload; return; }
+    if (!this.isRunning() || this.isInTurn() || this.hasPendingWork || this.capabilitiesBlocked?.() || this.requiresCapabilityRestart || !this.hasCapabilityChanges) return;
     if (!this.capabilitiesReload) {
-      const revision = this.capabilitiesRevision;
+      const revision = this.beginCapabilityReload();
       this.capabilitiesReload = this.request("prompt", { message: "/reload-capabilities" })
-        .then(() => { this.appliedCapabilitiesRevision = revision; })
+        .then(() => this.readCapabilities(true))
+        .then(() => { this.finishCapabilityReload(revision); })
+        .catch((error) => { this.failCapabilityReload(error); throw error; })
         .finally(() => { this.capabilitiesReload = undefined; });
     }
     await this.capabilitiesReload;
@@ -137,13 +217,17 @@ export class AgentHost {
 
   /** 给事件附上所属会话 id 与运行句柄，供渲染层按活动会话路由并去重。 */
   private tagged(event: AgentEvent): AgentEvent {
+    if (event.type === "extension_ui_request" && event.method === "setStatus" && event.statusKey === "tacode") this.capabilitiesReport = undefined;
     // 以 agent_start / agent_settled 驱动“活跃轮次”状态，供重载后恢复徽标：
     // 仅真正生成中的会话显示“正在运行”，空闲但存活的 worker 不再误报。
     // 同时放行 waitForIdle 的等待者（委派判定依赖这两个事件收敛）。
     if (event.type === "agent_start") {
+      this.clearTurnStart();
+      this.capabilitiesReport = undefined;
       this.turnActive = true;
       this.flushStartWaiters(true);
     } else if (event.type === "agent_settled") {
+      this.clearTurnStart();
       this.turnActive = false;
       this.clearPendingUi();
       this.flushSettledWaiters();
@@ -175,6 +259,12 @@ export class AgentHost {
   /** 是否正在执行一轮生成（worker 存活但空闲时返回 false）。 */
   isInTurn(): boolean {
     return this.turnActive;
+  }
+
+  private clearTurnStart(): void {
+    this.awaitingTurnStart = false;
+    if (this.turnStartTimer) clearTimeout(this.turnStartTimer);
+    this.turnStartTimer = undefined;
   }
 
   /**
@@ -248,6 +338,7 @@ export class AgentHost {
 
   /** Non-blocking follow-up for models/skills/stats after first paint. */
   private async emitSnapshotMeta(): Promise<void> {
+    const child = this.child;
     try {
       const [models, thinkingLevels, stats, commands] = await Promise.all([
         this.request<{ models: AgentSnapshot["models"] }>("get_available_models"),
@@ -262,6 +353,7 @@ export class AgentHost {
           }>;
         }>("get_commands").catch(() => ({ commands: [] })),
       ]);
+      if (this.child !== child) return;
       this.emitEvent(this.tagged({
         type: "desktop_snapshot_meta",
         models: models.models,
@@ -274,20 +366,14 @@ export class AgentHost {
     }
   }
 
-  async start(options: AgentStartOptions & {
-    cwd: string;
-    autoTitle?: boolean;
-    visionExtension?: string;
-    browserExtension?: string;
-    visionConfig?: string;
-    visionUploads?: string;
-    providerExtension?: string;
-    desktopProvider?: { config: unknown; apiKey: string };
-  }): Promise<AgentSnapshot> {
+  async start(options: AgentHostStartOptions, lifecycle?: { capabilitiesReload?: boolean; isCurrent?(): boolean }): Promise<AgentSnapshot> {
     this.requestedSessionPath = options.sessionPath;
     this.cwd = options.cwd;
     this.secrets = options.desktopProvider ? [options.desktopProvider.apiKey] : [];
-    await this.stop();
+    await this.stop({ capabilitiesReload: lifecycle?.capabilitiesReload });
+    if (lifecycle?.isCurrent && !lifecycle.isCurrent()) throw new Error("Agent session closed");
+    this.loadedProjectTrusted = isCapabilityProjectTrusted(options.cwd);
+    this.capabilitiesReport = undefined;
     this.resetBrowser?.();
     const args = [
       getTacodeRpcEntryPath(),
@@ -360,6 +446,11 @@ export class AgentHost {
     this.child = child;
     child.on("message", (message: unknown) => {
       if (this.child !== child || !message || typeof message !== "object") return;
+      const reportMessage = message as { type?: string; id?: string; report?: unknown };
+      if (reportMessage.type === CAPABILITIES_RESPONSE && typeof reportMessage.id === "string") {
+        this.handleLine(JSON.stringify({ type: "response", id: reportMessage.id, success: true, data: reportMessage.report }));
+        return;
+      }
       const request = message as
         | BrowserRequest
         | { type: "tacode:browser:cancel"; id: string }
@@ -462,16 +553,23 @@ export class AgentHost {
     child.send({ type: DELEGATION_BRIDGE_EVENT, event: event.event }, () => {});
   }
 
-  stop(): Promise<void> {
-    if (this.stopping) return this.stopping;
-    const pending = this.stopNow();
+  stop(options: { capabilitiesReload?: boolean } = {}): Promise<void> {
+    if (this.stopping) {
+      if (this.stoppingForCapabilities && !options.capabilitiesReload) {
+        return this.stopping.then(() => { this.emitEvent(this.tagged({ type: "desktop_runtime_stopped" })); });
+      }
+      return this.stopping;
+    }
+    this.stoppingForCapabilities = Boolean(options.capabilitiesReload);
+    const pending = this.stopNow(Boolean(options.capabilitiesReload));
     this.stopping = pending;
     const done = () => { if (this.stopping === pending) this.stopping = undefined; };
     void pending.then(done, done);
     return pending;
   }
 
-  private async stopNow(): Promise<void> {
+  private async stopNow(capabilitiesReload: boolean): Promise<void> {
+    this.clearTurnStart();
     const wasActive = this.turnActive;
     this.clearPendingUi();
     this.clearStatsRefresh();
@@ -484,7 +582,7 @@ export class AgentHost {
     this.flushStartWaiters(false);
     this.flushSettledWaiters();
     const child = this.child;
-    if (!child) { this.emitEvent(this.tagged({ type: "desktop_runtime_stopped" })); return; }
+    if (!child) { this.emitEvent(this.tagged({ type: "desktop_runtime_stopped", capabilitiesReload })); return; }
     this.child = undefined;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
@@ -503,7 +601,7 @@ export class AgentHost {
       if (child.exitCode === null && child.signalCode === null) { this.child = child; this.turnActive = wasActive; }
       throw error;
     }
-    this.emitEvent(this.tagged({ type: "desktop_runtime_stopped" }));
+    this.emitEvent(this.tagged({ type: "desktop_runtime_stopped", capabilitiesReload }));
   }
 
   async request<T>(type: string, data: Record<string, unknown> = {}): Promise<T> {
@@ -520,6 +618,8 @@ export class AgentHost {
     }
     const id = `desktop_${++this.requestId}`;
     const command = { ...data, type, id };
+    const startsTurn = type === "prompt" && data.message !== "/reload-capabilities" && !this.turnActive;
+    if (startsTurn) { this.clearTurnStart(); this.awaitingTurnStart = true; }
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
@@ -534,6 +634,8 @@ export class AgentHost {
         );
       }, timeoutForRequest(type));
       this.pending.set(id, {
+        type,
+        startsTurn,
         resolve: (value) => {
           if (this.child === child && type === "get_session_stats" && value && typeof value === "object") {
             this.latestStats = this.contextStats.enrich(value as AgentSessionStats);
@@ -554,12 +656,35 @@ export class AgentHost {
         timeout,
       });
       try {
-        child.stdin.write(`${JSON.stringify(command)}\n`);
+        if (type === "get_capabilities") {
+          child.send({ type: CAPABILITIES_REQUEST, id }, (error) => {
+            if (!error) return;
+            const pending = this.pending.get(id);
+            if (!pending) return;
+            clearTimeout(pending.timeout);
+            this.pending.delete(id);
+            pending.reject(error);
+          });
+        } else child.stdin.write(`${JSON.stringify(command)}\n`);
       } catch (error) {
         clearTimeout(timeout);
         this.pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
+    }).then((value) => {
+      if (startsTurn && this.child === child && this.awaitingTurnStart) {
+        this.turnStartTimer = setTimeout(() => {
+          this.clearTurnStart();
+          if (this.capabilitiesScheduled) this.emitEvent(this.tagged({ type: "desktop_capabilities_idle" }));
+        }, PROMPT_START_GRACE_MS);
+        this.turnStartTimer.unref?.();
+      }
+      if (this.capabilitiesScheduled && !this.hasPendingWork) this.emitEvent(this.tagged({ type: "desktop_capabilities_idle" }));
+      return value;
+    }, (error) => {
+      if (startsTurn && this.child === child) this.clearTurnStart();
+      if (this.capabilitiesScheduled && !this.hasPendingWork) this.emitEvent(this.tagged({ type: "desktop_capabilities_idle" }));
+      throw error;
     });
   }
 

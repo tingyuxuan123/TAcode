@@ -1,4 +1,25 @@
 import type { McpServerRow } from "./integrations";
+import type { AgentSkillCommand } from "./skills";
+import type { PermissionMode } from "./types";
+
+export const CAPABILITIES_REQUEST = "tacode:capabilities:get";
+export const CAPABILITIES_RESPONSE = "tacode:capabilities:report";
+
+export interface RuntimeCapabilityReport {
+  skills: AgentSkillCommand[];
+  mcpTools: string[];
+  mcpErrors: string[];
+  permission: PermissionMode;
+}
+
+export interface CapabilityRuntimeStatus {
+  state: "inactive" | "loaded" | "pending" | "restart-required" | "scheduled" | "reloading" | "failed";
+  runtimeId?: string;
+  revision?: number;
+  appliedRevision?: number;
+  report?: RuntimeCapabilityReport;
+  error?: string;
+}
 
 export type CapabilityScope = "project" | "user";
 
@@ -54,6 +75,9 @@ export interface McpSnapshot {
 export interface CapabilitiesApi {
   trustProject(cwd: string): Promise<void>;
   onChanged(listener: (cwd?: string) => void): () => void;
+  runtimeStatus(cwd?: string, sessionPath?: string): Promise<CapabilityRuntimeStatus>;
+  reloadRuntime(runtimeId: string): Promise<CapabilityRuntimeStatus>;
+  onRuntimeChanged(listener: (runtimeId: string) => void): () => void;
 }
 
 export interface SkillsApi {

@@ -1174,3 +1174,13 @@
 - 验证：**129 文件 / 1044 测试通过**、typecheck、diff check 通过。首次 4 workers 下原有文件监听用例超出其 1 秒等待，2 workers 全量通过。`TACODE_SETTINGS_SMOKE=1` 用真实 Electron renderer/preload 验证三层弹窗、32 次 Tab、焦点返回、名称/地址/模型参数的放弃、失败重试、图片识别/子代理保护和缓存隔离；合成 composition 配合 Electron 原生键盘事件验证确认前后均不激活保存，不宣称 Windows/macOS 输入法实机覆盖。fixture save failed 为主动注入；已查看 ux-15/unsaved-settings.png。
 - 文件：renderer/use-dialog-focus.ts、dialog.tsx、provider-dialog.tsx、subagent-settings.tsx、ui.tsx、App.tsx、styles.css；shared/i18n.ts；settings-smoke.ts、session-activity-smoke.ts。
 - 下一项：UX-16 配置生效状态、信任后只重载当前会话并保留其他会话和草稿。整份目标继续 active。
+
+## 2026-09-14：UX-16 当前会话配置生效状态与安全重载
+
+- [x] Skills/MCP 面板显示未运行、已加载、待生效、首次信任需重载、排队、重载中和失败；通过 RPC 的独立能力报告读取实际技能、工具、权限和 MCP 连接错误，打开面板不启动 worker。隐藏面板停止状态订阅，切会话隔离迟到响应。
+- [x] 确认 Pi 在进程内缓存项目信任判断：首次信任只重建当前会话 worker，普通配置编辑使用既有热重载。生成、审批、浏览器请求及子任务期间延后执行，由完成事件唤醒；覆盖 prompt ACK 到 agent_start 的间隙。重载保留 runtimeId、转录、模型、thinking、当前权限与队列模式，不改变另一项目的进程或当前选中会话；显式停止后不会被迟到启动复活。
+- [x] 热重载沿用当前权限，首次启动仍尊重显式参数；重载停止事件不清空界面草稿或历史。项目配置变更只失效相应 cwd，已配置但连接失败的 MCP 不冒充全部可用。
+- 验证：全量 **130 文件 / 1045 测试通过**（2 workers）；最后补充逐轮能力缓存失效后，真实 capabilities-reload、capabilities-runtime 和生命周期 **30 项定向测试通过**，typecheck、diff check 通过。`TACODE_CAPABILITY_STATUS_SMOKE=1` 通过实际 Electron renderer/preload/IPC 的状态、等待、切项目和两份草稿保留；已查看修正技能夹具后的 ux-16/capabilities-loaded.png，另有排队截图。集成测试仅用本地假模型服务、隔离 TACODE_HOME 和真实本地 MCP，不读取真实凭证。
+- 边界：首次信任是恢复当前会话进程，非完全热加载；失败显示重试且保留可读历史。Pi 恢复隐藏 custom 消息时可能使用相差数毫秒的 JSONL entry 时间，测试保留其正文并严格核对 user/assistant 时间。
+- 文件：main/agent-host.ts、agent-manager.ts、capabilities-ipc.ts、index.ts；runtime/extension.ts、mcp-extension.ts；shared/capabilities.ts、capability-i18n.ts；preload、renderer 能力状态/面板、App；真实集成与 capability-status-smoke.ts。
+- 下一项：UX-17 空闲 worker 和缓存预算、队列与浏览器状态回收、委派等待和轮数统计减少唤醒。整份目标继续 active。
