@@ -415,6 +415,7 @@ export function AccountMenu({
           <button
             type="button"
             onClick={() => {
+              root.current?.querySelector<HTMLButtonElement>(".account")?.focus();
               setMenu(undefined);
               onOpenSettings();
             }}

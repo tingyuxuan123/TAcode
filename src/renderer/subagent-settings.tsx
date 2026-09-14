@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import {
   MAX_SUBAGENT_DOCUMENT_BYTES,
@@ -32,6 +32,8 @@ import {
 } from "./subagent-draft";
 import { useI18n } from "./i18n";
 import { useBackdropClose } from "./use-backdrop-close";
+import { useDialogFocus } from "./use-dialog-focus";
+import { useUnsavedClose } from "./dialog";
 
 function sourceLabel(source: SubagentInfo["source"], t: ReturnType<typeof useI18n>["t"]): string {
   return source === "builtin" ? t("subagents.builtin") : t("subagents.custom");
@@ -242,9 +244,13 @@ function SubagentEditorSheet({
   onSave(): void;
 }) {
   const { t } = useI18n();
-  const backdropClose = useBackdropClose(() => {
-    if (!busy) onClose();
+  const initialDraft = useRef(JSON.stringify(draft));
+  const { requestClose, prompt } = useUnsavedClose({
+    dirty: initialDraft.current !== JSON.stringify(draft), busy, onClose,
+    onSave,
   });
+  const backdropClose = useBackdropClose(requestClose);
+  const focus = useDialogFocus(requestClose);
   const [nameTouched, setNameTouched] = useState(Boolean(original));
   const errorKey = subagentDraftError(draft);
   const pristine = !original && !draft.name.trim() && !draft.description.trim();
@@ -257,14 +263,6 @@ function SubagentEditorSheet({
     () => subagentThinkingLevelsFor(draft.model, modelOptions),
     [draft.model, modelOptions],
   );
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && !busy) onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, onClose]);
 
   const set = <K extends keyof SubagentDraft>(key: K, value: SubagentDraft[K]): void =>
     onChange({ ...draft, [key]: value });
@@ -292,7 +290,7 @@ function SubagentEditorSheet({
     );
 
   return (
-    <div className="modal" {...backdropClose}>
+    <><div className="modal" {...focus} {...backdropClose}>
       <div
         className="panel subagent-sheet"
         role="dialog"
@@ -310,18 +308,19 @@ function SubagentEditorSheet({
             type="button"
             className="settings-close"
             aria-label={t("common.close")}
-            onClick={onClose}
+            onClick={requestClose}
+            disabled={busy}
           >
             <X size={15} />
           </button>
         </header>
 
-        <div className="subagent-sheet-body">
+        <div className="subagent-sheet-body" inert={busy}>
           <label className="subagent-field">
             <span>{t("subagents.name")}</span>
             <input
               value={draft.name}
-              autoFocus={!original}
+              data-dialog-autofocus
               placeholder={t("subagents.namePlaceholder")}
               spellCheck={false}
               onChange={(event) => {
@@ -476,7 +475,7 @@ function SubagentEditorSheet({
         <footer className="subagent-sheet-actions">
           <span className="subagent-sheet-note">{t("subagents.sheetNote")}</span>
           <div className="row-actions">
-            <button type="button" className="ghost" disabled={busy} onClick={onClose}>
+            <button type="button" className="ghost" disabled={busy} onClick={requestClose}>
               {t("common.cancel")}
             </button>
             <button
@@ -491,6 +490,6 @@ function SubagentEditorSheet({
           </div>
         </footer>
       </div>
-    </div>
+    </div>{prompt}</>
   );
 }

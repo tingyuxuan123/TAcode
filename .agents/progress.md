@@ -1165,3 +1165,12 @@
 - 验证：**129 文件 / 1044 测试通过**、typecheck、diff check 通过。`TACODE_SEARCH_SMOKE=1` 覆盖 1000 会话、同名标题/项目检索、三种状态、2020 条真实 JSONL 分页、失败重试、中文离屏匹配、快速前后定位、IME 与焦点，worker 数保持 0；已查看 ux-14/conversation-find.png、会话截图另存 session-search.png。
 - 文件：renderer/session-search.ts、conversation-find.tsx、App.tsx、message-list.tsx、use-follow-scroll.ts、styles.css；i18n、测试、search-smoke.ts。
 - 下一项：UX-15 设置未保存修改保护与统一弹窗焦点、Tab/Escape、嵌套确认。整份目标继续 active。
+
+## 2026-09-14：UX-15 设置修改保护与弹窗键盘边界
+
+- [x] 提供商、图片识别配置、子代理编辑按未保存状态提供“保存 / 放弃修改 / 继续编辑”；背景、Escape、关闭/取消使用同一入口，忙碌时阻止关闭。图片识别初次配置读取完成后才建立基准，保存失败内联显示并保留内容；进入能力管理也经过修改保护。
+- [x] 共享确认框与编辑器管理初始焦点、Tab/Shift+Tab 循环、最上层 Escape 和关闭后返回。按祖先链的兄弟节点隔离背景，不把包含子编辑器的外层表单整体禁用；嵌套同时卸载不会覆盖外层已恢复的焦点，卸载恢复原有 inert 状态。
+- [x] 统一 IME/隐式提交保护，服务下拉的 Escape 先关闭下拉。模型发现结果仍可缓存，模型参数仅保存成功后写缓存；已有模型不依赖发现缓存也能查看和编辑。凭证仅存在临时编辑状态与既有保存接口中。
+- 验证：**129 文件 / 1044 测试通过**、typecheck、diff check 通过。首次 4 workers 下原有文件监听用例超出其 1 秒等待，2 workers 全量通过。`TACODE_SETTINGS_SMOKE=1` 用真实 Electron renderer/preload 验证三层弹窗、32 次 Tab、焦点返回、名称/地址/模型参数的放弃、失败重试、图片识别/子代理保护和缓存隔离；合成 composition 配合 Electron 原生键盘事件验证确认前后均不激活保存，不宣称 Windows/macOS 输入法实机覆盖。fixture save failed 为主动注入；已查看 ux-15/unsaved-settings.png。
+- 文件：renderer/use-dialog-focus.ts、dialog.tsx、provider-dialog.tsx、subagent-settings.tsx、ui.tsx、App.tsx、styles.css；shared/i18n.ts；settings-smoke.ts、session-activity-smoke.ts。
+- 下一项：UX-16 配置生效状态、信任后只重载当前会话并保留其他会话和草稿。整份目标继续 active。

@@ -72,7 +72,7 @@
   {
     "id": "UX-15",
     "description": "设置弹窗保护修改、统一键盘交互。验收：编辑名称、地址、模型参数后点背景或按 Escape，不会直接丢修改；Tab 不落到背景输入框；关闭后焦点回到触发按钮；嵌套确认不会误关闭外层设置；输入法确认不触发保存。 具体范围见 docs/ux-optimization-checklist-2026-09-13.md 的 UX-15。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "UX-16",

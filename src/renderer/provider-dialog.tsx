@@ -7,6 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./ui";
 import { useI18n } from "./i18n";
 import { useBackdropClose } from "./use-backdrop-close";
+import { useDialogFocus } from "./use-dialog-focus";
+import { useUnsavedClose } from "./dialog";
 import {
   NAMED_ENDPOINT_PRESETS,
   CUSTOM_SERVICE_ID,
@@ -73,6 +75,14 @@ function useModelDiscovery(
   const [error, setError] = useState("");
   const requestSeq = useRef(0);
 
+  useEffect(() => {
+    ++requestSeq.current;
+    setModels(readDiscoveryCache(discoveryCacheKey(baseUrl, apiStyle, providerId))?.discovered ?? []);
+    setLoading(false);
+    setError("");
+    return () => { ++requestSeq.current; };
+  }, [baseUrl, apiStyle, providerId]);
+
   // 模型发现改为手动触发：只在用户点击“发现模型”按钮时执行，不再随输入自动调起。
   const discover = useCallback(() => {
     const trimmedUrl = baseUrl.trim();
@@ -88,7 +98,10 @@ function useModelDiscovery(
     window.harness.providers
       .discover({ id: providerId, baseUrl: trimmedUrl, apiKey: apiKey.trim(), apiStyle })
       .then((ids) => {
-        if (seq === requestSeq.current) setModels(ids);
+        if (seq !== requestSeq.current) return;
+        setModels(ids);
+        const key = discoveryCacheKey(trimmedUrl, apiStyle, providerId);
+        writeDiscoveryCache(key, { ...readDiscoveryCache(key), discovered: ids });
       })
       .catch((err) => {
         if (seq === requestSeq.current) setError(err instanceof Error ? err.message : String(err));
@@ -149,7 +162,14 @@ export function ServicePicker({
   }, [open]);
 
   return (
-    <div className="provider-service-picker" ref={menuRef}>
+    <div className="provider-service-picker" ref={menuRef} onKeyDown={(event) => {
+      if (open && event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        menuRef.current?.querySelector<HTMLButtonElement>(".provider-service-trigger")?.focus();
+      }
+    }}>
       <button
         type="button"
         className="provider-service-trigger"
@@ -270,12 +290,12 @@ export function ModelSelectionPanes({
 
   const availableIds = useMemo(() => {
     const byId = new Map<string, string>();
-    availableModels.forEach((id) => {
+    [...availableModels, ...selectedModels.map((model) => model.id)].forEach((id) => {
       const trimmed = id.trim();
       if (trimmed && !byId.has(trimmed)) byId.set(trimmed, trimmed);
     });
     return [...byId.values()].sort((a, b) => a.localeCompare(b));
-  }, [availableModels]);
+  }, [availableModels, selectedModels]);
 
   const selectedById = useMemo(
     () => new Map(selectedModels.map((model) => [model.id, model])),
@@ -600,8 +620,17 @@ export function ProviderSetupDialog({
     provider?.defaultModelId ?? provider?.models[0]?.id ?? readDiscoveryCache(discoveryCacheKey(baseUrl, apiStyle, provider?.id))?.bindings?.[0]?.id ?? "",
   );
   const [testing, setTesting] = useState(false);
-  const backdropClose = useBackdropClose(() => { if (!saving && !testing) onClose(); });
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const draft = JSON.stringify({ service, name, baseUrl, apiKey, apiStyle, models, defaultModelId });
+  const initialDraft = useRef(draft);
+  const { requestClose, prompt } = useUnsavedClose({
+    dirty: draft !== initialDraft.current,
+    busy: saving || testing,
+    onClose,
+    onSave: () => { void save(); },
+  });
+  const focus = useDialogFocus(requestClose);
+  const backdropClose = useBackdropClose(requestClose);
 
   const namedPreset = NAMED_ENDPOINT_PRESETS.find((p) => p.id === service);
   const resolvedName = namedPreset ? name.trim() || namedPreset.name : name;
@@ -616,19 +645,12 @@ export function ProviderSetupDialog({
     provider?.id,
   );
 
-  // 保留上次发现结果与选中配置：打开弹窗时从缓存恢复，避免每次重新手动发现。
-  useEffect(() => {
-    if (!resolvedBaseUrl.trim()) return;
-    const key = discoveryCacheKey(resolvedBaseUrl, resolvedApiStyle, provider?.id);
-    const existing = readDiscoveryCache(key) ?? {};
-    writeDiscoveryCache(key, { ...existing, discovered: discoveredModels, bindings: models });
-  }, [discoveredModels, models, resolvedBaseUrl, resolvedApiStyle, provider?.id]);
-
   useEffect(() => {
     setTestResult(null);
   }, [baseUrl, apiKey, apiStyle, selectedDefault]);
 
   const save = async () => {
+    if (saving || testing) return;
     const providerName = resolvedName.trim();
     const providerBaseUrl = resolvedBaseUrl.trim();
     if (!providerName || !providerBaseUrl) {
@@ -657,6 +679,7 @@ export function ProviderSetupDialog({
           apiKey: apiKey.trim() || undefined,
         });
         if (!result) throw new Error(t("settings.providerMissing"));
+        writeDiscoveryCache(discoveryCacheKey(providerBaseUrl, resolvedApiStyle, result.id), { discovered: discoveredModels, bindings: result.models });
         await onSaved(result);
       } else {
         const result = await window.harness.providers.create({
@@ -668,6 +691,7 @@ export function ProviderSetupDialog({
           defaultModelId,
           apiKey: apiKey.trim() || undefined,
         });
+        writeDiscoveryCache(discoveryCacheKey(providerBaseUrl, resolvedApiStyle, result.id), { discovered: discoveredModels, bindings: result.models });
         await onSaved(result);
       }
     } catch (err) {
@@ -678,11 +702,7 @@ export function ProviderSetupDialog({
   };
 
   return (
-    <div className="provider-dialog-overlay" onKeyDown={(e) => {
-      e.stopPropagation();
-      if (e.key === "Escape" && !saving && !testing) onClose();
-      if (e.key === "Enter" && e.target instanceof HTMLInputElement) e.preventDefault();
-    }} {...backdropClose}>
+    <><div className="provider-dialog-overlay" {...focus} {...backdropClose}>
       <div className="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title">
         <div className="provider-dialog-head">
           <h2 id="provider-dialog-title">{editing ? t("settings.editProviderTitle") : t("settings.addProviderTitle")}</h2>
@@ -693,13 +713,13 @@ export function ProviderSetupDialog({
               catch (err) { setTestResult({ ok: false, message: err instanceof Error ? err.message : String(err) }); }
               finally { setTesting(false); }
             }}>{testing ? t("settings.testingConnection") : t("settings.testConnection")}</button>
-            <button type="button" className="ghost" onClick={onClose} disabled={saving || testing}>
+            <button type="button" className="ghost" onClick={requestClose} disabled={saving || testing}>
               {t("common.cancel")}
             </button>
             <button type="button" className="primary" onClick={save} disabled={saving || testing}>
               {saving ? t("settings.saving") : (editing ? t("settings.saveProvider") : t("settings.addProvider"))}
             </button>
-            <button type="button" className="provider-dialog-close" disabled={saving || testing} onClick={onClose} aria-label={t("common.close")}>
+            <button type="button" className="provider-dialog-close" disabled={saving || testing} onClick={requestClose} aria-label={t("common.close")}>
               <Icon path="M6 6l12 12M18 6L6 18" />
             </button>
           </div>
@@ -720,6 +740,7 @@ export function ProviderSetupDialog({
               <span>{t("settings.profileName")}</span>
               <input
                 value={name}
+                data-dialog-autofocus
                 onChange={(e) => setName(e.target.value)}
                 placeholder={namedPreset?.name ?? t("settings.profileNamePlaceholder")}
               />
@@ -801,7 +822,7 @@ export function ProviderSetupDialog({
         )}
         {testResult && <p role="status" className={testResult.ok ? "provider-test-success" : "provider-error"}>{testResult.message}</p>}
       </div>
-    </div>
+    </div>{prompt}</>
   );
 }
 

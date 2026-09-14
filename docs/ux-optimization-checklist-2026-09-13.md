@@ -166,7 +166,7 @@
 
   **定位与风险。** [项目与会话列表](/Users/yfdl/project/TAcode/src/renderer/App.tsx:1949)、[MessageList](/Users/yfdl/project/TAcode/src/renderer/message-list.tsx:115)。风险中等，建议在 UX-05/07 的读取与索引基础上做。
 
-- [ ] **UX-15 · 设置弹窗保护修改、统一键盘交互**
+- [x] **UX-15 · 设置弹窗保护修改、统一键盘交互**
 
   **代码确认 + 交互建议。** 模型服务设置关闭时主要检查是否正在保存或测试，没有统一的未保存修改保护；Escape 和背景关闭可直接退出。项目已有 Skills/MCP 编辑的 dirty 保护，可作为一致行为的参照。通用确认弹窗有语义角色，但没有统一焦点进入、限制和返回管理。
 

@@ -23,6 +23,7 @@ import { listTacodeThreads } from "../src/runtime/state";
 import type { AgentEvent, AgentSnapshot, SessionSummary } from "../src/shared/types";
 import { testComposerDrafts, type ComposerSmokeControls } from "./composer-drafts-smoke";
 import { testImeInput } from "./ime-smoke";
+import { settingsFixture, testSettings } from "./settings-smoke";
 
 /** 真实 App + preload + Electron IPC + Host 行协议；生成事件由本地夹具驱动，不访问模型服务。 */
 async function smoke() {
@@ -56,6 +57,8 @@ async function smoke() {
   const listSmoke = process.env.TACODE_SESSION_LIST_SMOKE === "1";
   const filesSmoke = process.env.TACODE_FILES_SMOKE === "1";
   const searchSmoke = process.env.TACODE_SEARCH_SMOKE === "1";
+  const settingsSmoke = process.env.TACODE_SETTINGS_SMOKE === "1";
+  const settings = settingsFixture();
   const searchControls = { failEarlier: true };
   const largeSmoke = process.env.TACODE_LARGE_SMOKE === "1";
   const largeFixture = largeSmoke ? createLargeFixture() : undefined;
@@ -203,9 +206,21 @@ async function smoke() {
     ipcMain.handle("app:build-status", () => ({ restartRequired: false }));
     ipcMain.handle("app:config-notices", () => []);
     ipcMain.handle("app:version", () => "test");
-    ipcMain.handle("providers:list", () => []);
+    ipcMain.handle("providers:list", () => settingsSmoke ? [settings.provider] : []);
     ipcMain.handle("providers:defaults", () => ({ defaultProviderId: null, defaultModelId: null }));
-    ipcMain.handle("vision:config", () => ({ profiles: [], activeProfileId: "" }));
+    ipcMain.handle("vision:config", () => settingsSmoke ? settings.vision : { profiles: [], activeProfileId: "" });
+    if (settingsSmoke) {
+      ipcMain.handle("providers:update", (_event, input) => {
+        if (settings.failSave) throw new Error("fixture save failed");
+        settings.updates++;
+        settings.provider = { ...settings.provider, ...input };
+        return settings.provider;
+      });
+      ipcMain.handle("vision:save-config", (_event, input) => { settings.visionSaves++; settings.vision = input; });
+      ipcMain.handle("auth:list-models", () => ["fixture-model"]);
+      ipcMain.handle("subagents:list", () => ({ subagents: [], warnings: [] }));
+      ipcMain.handle("subagents:save", () => { settings.subagentSaves++; });
+    }
     ipcMain.handle("app:log-diagnostic", () => {});
     ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }, ...(searchSmoke ? [{ path: path.join(project, "副项目"), name: "副项目", updatedAt: now }] : [])]);
     ipcMain.handle("workspace:list", (_event, cwd, refresh) => {
@@ -316,6 +331,12 @@ async function smoke() {
     manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (settingsSmoke) {
+      stage = "settings dialog protection";
+      await testSettings(main, settings, screenshot);
+      assert.deepEqual(rendererErrors.filter(message => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      return;
+    }
     if (searchSmoke) {
       stage = "session and conversation search";
       activity.observe({ type: "agent_start", __runtimeId: "search-running", __sessionId: sessions[2].path });

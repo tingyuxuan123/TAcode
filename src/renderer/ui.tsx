@@ -12,6 +12,9 @@ import { visibleUserText, visionResultSections, visionToolChips } from "../share
 import { defaultCustomProfile, type CustomApiProfile } from "../shared/chat-profiles";
 import { ProviderListPage, ProviderSetupDialog } from "./provider-dialog";
 import { useBackdropClose } from "./use-backdrop-close";
+import { useDialogFocus } from "./use-dialog-focus";
+import { useUnsavedClose } from "./dialog";
+export { ConfirmDialog } from "./dialog";
 import type { ProviderRecord } from "../shared/types";
 import { AppearanceSettings } from "./appearance-settings";
 import { effortLabelKey, reasoningLevelsAvailable } from "../shared/thinking";
@@ -1746,48 +1749,6 @@ export function PanelPicker({
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * 通用确认对话框（对齐 App 内 sandboxAsk 的 modal 结构），挂在 body 上避免被面板
- * 裁剪。可选「不再询问」勾选由调用方持久化。
- */
-export function ConfirmDialog({ title, detail, confirmLabel, cancelLabel, dontAskLabel, dontAsk, onDontAskChange, onConfirm, onCancel }: {
-  title: string;
-  detail?: string;
-  confirmLabel: string;
-  cancelLabel: string;
-  dontAskLabel?: string;
-  dontAsk?: boolean;
-  onDontAskChange?(next: boolean): void;
-  onConfirm(): void;
-  onCancel(): void;
-}) {
-  return createPortal(
-    <div
-      className="modal"
-      onClick={(event) => {
-        if (event.target !== event.currentTarget) return;
-        onCancel();
-      }}
-    >
-      <div className="panel" role="dialog" aria-modal="true">
-        <h2>{title}</h2>
-        {detail && <p>{detail}</p>}
-        {dontAskLabel && onDontAskChange && (
-          <label className="modal-dont-ask">
-            <input type="checkbox" checked={dontAsk ?? false} onChange={(event) => onDontAskChange(event.target.checked)} />
-            <span>{dontAskLabel}</span>
-          </label>
-        )}
-        <div className="row-actions">
-          <button type="button" className="ghost" onClick={onCancel}>{cancelLabel}</button>
-          <button type="button" className="primary" onClick={onConfirm}>{confirmLabel}</button>
-        </div>
-      </div>
-    </div>,
-    document.body,
   );
 }
 
@@ -3547,6 +3508,9 @@ export function Login({
   const [pane, setPane] = useState<SettingsPane>("providers");
   const [visionProfiles, setVisionProfiles] = useState<CustomApiProfile[]>([]);
   const [activeVisionId, setActiveVisionId] = useState("");
+  const [visionLoading, setVisionLoading] = useState(true);
+  const [visionError, setVisionError] = useState("");
+  const visionBaseline = useRef<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [visionModels, setVisionModels] = useState<string[]>([]);
   const [listing, setListing] = useState(false);
@@ -3594,10 +3558,13 @@ export function Login({
   };
 
   useEffect(() => {
+    let cancelled = false;
     void Promise.all([
       window.harness.vision.config(),
       window.harness.app.version().catch(() => "0.1.0"),
     ]).then(async ([config, ver]) => {
+      if (cancelled) return;
+      visionBaseline.current = JSON.stringify({ profiles: config.profiles, activeId: config.activeProfileId });
       setVisionProfiles(config.profiles);
       setActiveVisionId(config.activeProfileId);
       if (ver) setAppVersion(ver);
@@ -3605,7 +3572,9 @@ export function Login({
       if (vision?.url.trim() && vision.apiKey.trim()) {
         void window.harness.auth.listModels(vision.url, vision.apiKey).then(setVisionModels).catch(() => undefined);
       }
-    }).catch(() => undefined);
+    }).catch((error) => { if (!cancelled) setVisionError(String(error)); })
+      .finally(() => { if (!cancelled) setVisionLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
   const refreshProviders = useCallback(async () => {
@@ -3627,33 +3596,56 @@ export function Login({
     onRefreshSkills?.();
   }, [pane, onRefreshSkills]);
 
-  const backdropClose = useBackdropClose(onClose);
+  const visionDraft = JSON.stringify({ profiles: visionProfiles, activeId: activeVisionId });
+  const saveVision = async () => {
+    if (busy || listing || visionLoading || visionBaseline.current === null) return false;
+    if (activeVision && (!activeVision.url.trim() || !activeVision.model.trim() || !activeVision.apiKey.trim())) {
+      setPane("vision");
+      setVisionError(t("settings.fillRequired"));
+      return false;
+    }
+    setBusy(true);
+    setVisionError("");
+    try {
+      await window.harness.vision.saveConfig({ profiles: visionProfiles, activeProfileId: activeVision?.id ?? activeVisionId });
+      visionBaseline.current = visionDraft;
+      await onSaved();
+      return true;
+    } catch (error) {
+      setPane("vision");
+      setVisionError(error instanceof Error ? error.message : String(error));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const { requestClose, requestLeave, prompt } = useUnsavedClose({
+    dirty: visionBaseline.current !== null && visionBaseline.current !== visionDraft,
+    busy: busy || listing,
+    onClose,
+    onSave: (exit) => { void saveVision().then((saved) => { if (saved) exit(); }); },
+  });
+  const backdropClose = useBackdropClose(requestClose);
+  const focus = useDialogFocus(requestClose);
 
   return (
-    <div
+    <><div
       className="modal"
       {...backdropClose}
-      onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
+      {...focus}
     >
       <form
         className="settings"
-        onSubmit={async (event) => {
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-title"
+        aria-busy={busy}
+        onSubmit={(event) => {
           event.preventDefault();
-          setBusy(true);
-          try {
-            await window.harness.vision.saveConfig({
-              profiles: visionProfiles,
-              activeProfileId: activeVision?.id ?? activeVisionId,
-            });
-            await onSaved();
-          } catch (error) {
-            window.alert(error instanceof Error ? error.message : String(error));
-          } finally {
-            setBusy(false);
-          }
+          void saveVision();
         }}
       >
-        <nav className="settings-nav">
+        <nav className="settings-nav" inert={busy || listing}>
           {settingsNav(t).map((group) => (
             <div key={group.label} className="settings-group">
               <div className="settings-group-label">{group.label}</div>
@@ -3673,7 +3665,7 @@ export function Login({
         </nav>
         <div className="settings-main">
           <header className="settings-head">
-            <h2>
+            <h2 id="settings-dialog-title">
               {pane === "providers"
                   ? t("settings.providers")
                   : pane === "vision"
@@ -3688,15 +3680,17 @@ export function Login({
                           ? t("settings.shortcuts")
                           : t("settings.about")}
             </h2>
-            <button type="button" className="settings-close" aria-label={t("common.close")} onClick={onClose}>
+            <button type="button" className="settings-close" disabled={busy || listing} aria-label={t("common.close")} onClick={requestClose}>
               <Icon path="M6 6l12 12M18 6L6 18" />
             </button>
           </header>
-          <div className="settings-body">
+          <div className="settings-body" inert={busy || listing}>
             {pane === "subagents" && <SubagentsSettings providers={providers} />}
             {pane === "vision" && (
               <>
                 <p className="settings-hint">{t("settings.visionHint")}</p>
+                {visionError && <p role="alert" className="settings-error">{visionError}</p>}
+                <div inert={visionLoading || visionBaseline.current === null}>
                 <ApiProfilesEditor
                   profiles={visionProfiles}
                   activeId={activeVisionId}
@@ -3716,6 +3710,7 @@ export function Login({
                   urlPlaceholder="https://api.example.com/v1/chat/completions"
                   testStatus={testStatus}
                 />
+                </div>
                 <p className="settings-hint">{t("settings.mineruHint")}</p>
               </>
             )}
@@ -3764,7 +3759,7 @@ export function Login({
 
             {pane === "skills" && (
               <>
-                {onManageCapabilities && <button type="button" className="ghost" onClick={onManageCapabilities}><Blocks size={15} />{t("nav.capabilities")}</button>}
+                {onManageCapabilities && <button type="button" className="ghost" onClick={() => requestLeave(onManageCapabilities)}><Blocks size={15} />{t("nav.capabilities")}</button>}
                 <p className="settings-hint">{t("settings.skillsUse")}</p>
 
                 <div className="skills-section">
@@ -3923,7 +3918,7 @@ export function Login({
               </>
             )}
             {pane !== "vision" ? (
-              <button type="button" className="primary" onClick={onClose}>
+              <button type="button" className="primary" disabled={busy || listing} onClick={requestClose}>
                 {t("settings.close")}
               </button>
             ) : (
@@ -3931,7 +3926,7 @@ export function Login({
                 type="submit"
                 className="primary"
                 disabled={
-                  busy ||
+                  busy || listing || visionLoading || visionBaseline.current === null ||
                   (activeVision
                     ? !activeVision.url.trim() || !activeVision.model.trim() || !activeVision.apiKey.trim()
                     : false)
@@ -3943,6 +3938,6 @@ export function Login({
           </footer>
         </div>
       </form>
-    </div>
+    </div>{prompt}</>
   );
 }

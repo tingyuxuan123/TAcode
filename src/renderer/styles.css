@@ -5093,6 +5093,8 @@ textarea::selection,
   display: grid;
   place-items: center;
 }
+.confirm-modal { z-index: 200; }
+.confirm-modal .row-actions { flex-wrap: wrap; justify-content: flex-end; }
 .panel {
   width: min(400px, 92vw);
   background: var(--surface);
