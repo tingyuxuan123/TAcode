@@ -83,12 +83,23 @@ export function CapabilityTrust({ trusted, workspace, onTrusted }: { trusted: bo
   </>;
 }
 
-export function CapabilityBack({ title, dirty, onBack }: { title: string; dirty: boolean; onBack(): void }) {
+/** 返回列表和编辑器「取消」共用的放弃确认：dirty 时先确认，否则直接离开。 */
+export function useDiscardGuard(dirty: boolean, onDiscard: () => void) {
   const { t } = useI18n();
   const [confirm, setConfirm] = useState(false);
+  const request = () => { if (dirty) setConfirm(true); else onDiscard(); };
+  const dialog = confirm
+    ? <ConfirmDialog title={t("cap.discardTitle")} detail={t("cap.discardDetail")} confirmLabel={t("cap.discard")} cancelLabel={t("cap.keepEditing")} onConfirm={onDiscard} onCancel={() => setConfirm(false)} />
+    : null;
+  return { request, dialog };
+}
+
+export function CapabilityBack({ title, dirty, onBack, trailing }: { title: string; dirty: boolean; onBack(): void; trailing?: ReactNode }) {
+  const { t } = useI18n();
+  const guard = useDiscardGuard(dirty, onBack);
   return <>
-    <div className="cap-detail-heading"><button type="button" className="cap-icon-button" aria-label={t("cap.back")} onClick={() => dirty ? setConfirm(true) : onBack()}><ArrowLeft size={18} /></button><h2>{title}</h2></div>
-    {confirm && <ConfirmDialog title={t("cap.discardTitle")} detail={t("cap.discardDetail")} confirmLabel={t("cap.discard")} cancelLabel={t("cap.keepEditing")} onConfirm={onBack} onCancel={() => setConfirm(false)} />}
+    <div className="cap-detail-heading"><button type="button" className="cap-icon-button" aria-label={t("cap.back")} onClick={guard.request}><ArrowLeft size={18} /></button><h2>{title}</h2>{trailing}</div>
+    {guard.dialog}
   </>;
 }
 

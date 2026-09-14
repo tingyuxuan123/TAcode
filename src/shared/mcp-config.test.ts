@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseMcpServers, serializeMcpServers } from "./integrations";
-import { importMcpServers, parseMcpArguments, parseMcpKeyValues, validateMcpServer } from "./mcp-config";
+import { formatMcpServerJson, importMcpServers, parseMcpArguments, parseMcpKeyValues, parseMcpServerJson, validateMcpServer } from "./mcp-config";
 
 describe("MCP 配置契约", () => {
   it("保留环境变量、请求头、SSE、停用状态和未知扩展字段", () => {
@@ -36,5 +36,25 @@ describe("MCP 配置契约", () => {
     expect(() => validateMcpServer({ name: "x", kind: "stdio", command: "node", timeout: Number.NaN })).toThrow();
     const value = validateMcpServer({ name: "x", kind: "stdio", command: "node", extra: { disabled: true, command: "wrong", keep: true } });
     expect(serializeMcpServers([value])).toEqual({ mcpServers: { x: { command: "node", keep: true } } });
+  });
+
+  it("编辑器 JSON 模式支持裸映射与 mcpServers 包裹，且一次只接受一个服务器", () => {
+    expect(parseMcpServerJson('{"local":{"command":"node","args":["a b"],"env":{"TOKEN":"x"},"custom":{"keep":true}}}')).toEqual({ name: "local", kind: "stdio", command: "node", args: ["a b"], env: { TOKEN: "x" }, extra: { custom: { keep: true } } });
+    expect(parseMcpServerJson('{"mcpServers":{"remote":{"type":"sse","url":"https://example.com/sse"}}}')).toEqual({ name: "remote", kind: "sse", url: "https://example.com/sse" });
+    expect(() => parseMcpServerJson('{"mcpServers":{"a":{"command":"node"},"b":{"command":"node"}}}')).toThrow("一次只能保存一个");
+    expect(() => parseMcpServerJson('{"empty":{}}')).toThrow();
+    expect(() => parseMcpServerJson('{"bad":{"type":"ftp","url":"https://example.com"}}')).toThrow();
+    expect(() => parseMcpServerJson('{"bad":{"command":"node","env":{"TOKEN":123}}}')).toThrow();
+    expect(() => parseMcpServerJson('{"__proto__":{"command":"node"}}')).toThrow();
+    expect(() => parseMcpServerJson("not json")).toThrow();
+  });
+
+  it("表单生成的 JSON 能原样粘回编辑器", () => {
+    const row = { name: "local-fixture", kind: "stdio" as const, command: "node", args: ["-y", "/a path/server.mjs"], env: { MCP_FIXTURE_VALUE: "json" }, timeout: 15, description: "fixture", extra: { custom: true } };
+    const text = formatMcpServerJson(row);
+    expect(text).toMatch(/^\{\n {2}"local-fixture": \{/);
+    expect(parseMcpServerJson(text)).toEqual(row);
+    expect(parseMcpServerJson(formatMcpServerJson({ name: "remote", kind: "sse", url: "https://example.com/sse" }))).toEqual({ name: "remote", kind: "sse", url: "https://example.com/sse" });
+    expect(formatMcpServerJson({ name: "", kind: "http", url: "https://example.com/mcp" })).toContain('"my-mcp-server"');
   });
 });

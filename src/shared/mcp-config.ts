@@ -1,9 +1,9 @@
-import { parseMcpServers, type McpServerRow } from "./integrations";
+import { parseMcpServers, serializeMcpServers, type McpServerRow } from "./integrations";
 
 const RESERVED_NAMES = new Set(["__proto__", "prototype", "constructor"]);
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-/** IPC、JSON 导入和运行时共用同一份校验。 */
+/** IPC、JSON 导入、编辑器 JSON 粘贴和运行时共用同一份校验。 */
 export function validateMcpServer(value: unknown): McpServerRow {
   if (!record(value)) throw new Error("MCP 配置必须是对象");
   if (typeof value.name !== "string" || !value.name.trim() || value.name.length > 100 || RESERVED_NAMES.has(value.name.trim())) {
@@ -55,21 +55,55 @@ export function validateMcpServer(value: unknown): McpServerRow {
   return next;
 }
 
-export function importMcpServers(json: string): McpServerRow[] {
+/** 解包 JSON 文本里的服务器映射，同时支持 mcpServers、servers 和直接映射三种写法。 */
+function parseServerMap(json: string): Record<string, unknown> {
   if (json.length > 1_000_000) throw new Error("MCP 配置文件过大");
   let raw: unknown;
   try { raw = JSON.parse(json); } catch { throw new Error("JSON 格式不正确，请检查引号和逗号"); }
   if (!record(raw)) throw new Error("MCP 配置必须是 JSON 对象");
   const servers = raw.mcpServers ?? raw.servers ?? raw;
-  if (!record(servers) || Object.keys(servers).length === 0 || Object.keys(servers).length > 100) throw new Error("请提供 1–100 个 MCP 服务器配置");
-  const rows = parseMcpServers({ mcpServers: servers });
-  if (rows.length !== Object.keys(servers).length) throw new Error("每个服务器都需要 command 或 url，未导入任何配置");
-  // 不允许 parser 的宽松兼容逻辑掩盖错误输入（尤其是环境变量与参数）。
-  return rows.map((row) => {
-    const source = servers[row.name] as Record<string, unknown>;
-    if (source.type !== undefined && !["stdio", "http", "sse"].includes(String(source.type))) throw new Error(`不支持的 MCP 传输方式：${String(source.type)}`);
-    return validateMcpServer({ ...row, ...(source.args !== undefined ? { args: source.args } : {}), ...(source.env !== undefined ? { env: source.env } : {}), ...(source.headers !== undefined ? { headers: source.headers } : {}) });
+  if (!record(servers)) throw new Error("MCP 配置必须是 JSON 对象");
+  return servers;
+}
+
+/**
+ * 单条配置的严格校验。不允许 parser 的宽松兼容逻辑掩盖错误输入（尤其是环境变量与参数），
+ * 因此把 args / env / headers 原样回灌给 validateMcpServer。
+ */
+function parseEntry(name: string, source: Record<string, unknown>): McpServerRow {
+  if (source.type !== undefined && !["stdio", "http", "sse"].includes(String(source.type))) throw new Error(`不支持的 MCP 传输方式：${String(source.type)}`);
+  const [row] = parseMcpServers({ mcpServers: { [name]: source } });
+  if (!row) throw new Error(`服务器 ${name} 需要 command 或 url`);
+  return validateMcpServer({ ...row, ...(source.args !== undefined ? { args: source.args } : {}), ...(source.env !== undefined ? { env: source.env } : {}), ...(source.headers !== undefined ? { headers: source.headers } : {}) });
+}
+
+export function importMcpServers(json: string): McpServerRow[] {
+  const servers = parseServerMap(json);
+  const names = Object.keys(servers);
+  if (names.length === 0 || names.length > 100) throw new Error("请提供 1–100 个 MCP 服务器配置");
+  return names.map((name) => {
+    const source = servers[name];
+    if (!record(source)) throw new Error(`服务器 ${name} 的配置必须是 JSON 对象`);
+    return parseEntry(name, source);
   });
+}
+
+/** 编辑器 JSON 模式：一次一个服务器，键名即服务器名称。 */
+export function parseMcpServerJson(json: string): McpServerRow {
+  const servers = parseServerMap(json);
+  const names = Object.keys(servers);
+  if (names.length !== 1) throw new Error("JSON 模式一次只能保存一个 MCP 服务器；批量请返回列表使用「导入」");
+  const name = names[0]!;
+  const source = servers[name];
+  if (!record(source)) throw new Error(`服务器 ${name} 的配置必须是 JSON 对象`);
+  return parseEntry(name, source);
+}
+
+/** 表单 → JSON：按 mcpServers 的字段规则输出单个服务器的裸映射，未知扩展字段保留。 */
+export function formatMcpServerJson(row: McpServerRow): string {
+  const name = row.name.trim() || "my-mcp-server";
+  const body = serializeMcpServers([{ ...row, name }]).mcpServers[name] ?? {};
+  return JSON.stringify({ [name]: body }, null, 2);
 }
 
 export function parseMcpArguments(text: string): string[] {

@@ -1194,3 +1194,14 @@
 - 边界：空闲预算保留 8 个后台 worker，当前选中会话另计；worker、浏览器标签和 transcript 仍有各自明确上限。关闭窗口的 workspace watcher 已在 UX-10 完成，本项只补 manager/browser 资源清理；跨平台进程回收仍沿用 UX-12 的边界。
 - 文件：main/agent-manager.ts、agent-host.ts、index.ts、delegation-coordinator.ts、browser/automation.ts；renderer/App.tsx、browser/child-session-panel.tsx；新增生命周期回归测试。
 - 下一项：17 项使用体验优化均已完成，进入整体验收与最终状态核对。
+
+## 2026-09-14：MCP 编辑器加入「表单 / JSON」双模式
+
+- [x] 添加或配置 MCP 服务器时可在 `表单 | JSON` 之间切换。JSON 模式直接粘贴 `{"server-name": {…}}` 或 `{"mcpServers": {"server-name": {…}}}`，一次一个服务器（多于一个时报错并提示改用列表页「导入」）；键名即服务器名称，编辑已有服务器时改名沿用 `save(row, previousName)` 的重命名语义。
+- [x] 双向同步：表单 → JSON 按当前表单生成（表单还没填完时保留用户已写的内容）；JSON → 表单只有解析成功才切换，失败留在 JSON 模式并把原因显示在顶部提示里。未知扩展字段（`extra`）在两种模式间来回切换都不丢。
+- [x] 作用域选择器移入编辑器且两种模式都可见；保存到另一个作用域时按「复制一份新配置」处理（`previousName` 只在当前作用域里有意义，跨作用域不传），目标作用域已有同名时由 main 报「已存在同名服务器」而不是静默覆盖，保存后列表切到目标作用域并显示「已保存」（提示状态上提到 `McpPanel`，避免列表随作用域重挂载时丢失）。JSON 模式隐藏启用开关，启用状态由 JSON 里的 `disabled` 表达；底部新增「取消」，与返回、关闭面板、关闭标签页共用同一份放弃确认。
+- [x] 只切到 JSON 而不改动不会把编辑器置为未保存（生成 JSON 时同步更新脏基线）；JSON 模式保存成功后同时刷新表单基线与 JSON 基线。`build()` 里 env / headers / cwd 现在与 transport 无关地保留，JSON 粘进来的跨类型字段不会因为经过表单再保存就被删掉。
+- 验证：`pnpm typecheck`；`pnpm test` **132 文件 / 1055 测试**（新增 2 条 mcp-config 单测：JSON 粘贴解析、表单生成 JSON 往返；`src/main/session-index.test.ts` 的 1000 会话性能用例在本机全量并发下偶发失败，单跑 3/3 通过，改动前基线也出现过同一失败）；`pnpm test:capabilities` 通过，新增真实 Electron 场景——JSON 粘贴 + 测试连接（2 个工具）、JSON→表单往返（服务器名称回填 `json-fixture`，再回 JSON 时带出表单默认 `timeout: 20`）、写盘 `.tacode/mcp.json`、多服务器 JSON 被拒且不写盘、取消触发「放弃未保存」确认、包裹格式存入全局作用域（`$TACODE_HOME/mcp.json`，`type: sse` + headers）、只切 JSON 不改动时返回列表不弹确认、把项目里的已有服务器改到全局作用域保存（复制成功且项目内原配置保留）、320px 窄面板（含标题栏标签组）无横向溢出；无 renderer 控制台错误。
+- 独立复核（code-reviewer 只读）发现并已修：跨作用域保存已有服务器会被 main 判为「服务器已被移除」或静默覆盖目标作用域同名项；只切 JSON 即被判未保存；JSON→表单→JSON 会丢掉表单不承载的跨类型字段（env/headers/cwd）。仍未处理（已知限制，非本次引入）：`parseServerMap` 对 `timeout`/`cwd`/`description` 的类型错误仍是静默忽略（与既有导入行为一致）；表单的 `KEY=value` 文本格式无法承载含换行的 env 值。
+- 边界：JSON 模式一次只处理一个服务器，批量仍走列表页「导入」；不做语法高亮、格式化按钮和 Tab 缩进插入；不改 main / runtime / preload / IPC 契约。JSON 模式保留原始字段（不注入表单默认 `timeout: 20`），只有经过表单再回到 JSON 时才会补上表单默认值。
+- 文件：shared/mcp-config.ts（含 test）、shared/capability-i18n.ts；renderer/capabilities/mcp-panel.tsx、common.tsx、capabilities.css；scripts/capabilities-smoke.ts。

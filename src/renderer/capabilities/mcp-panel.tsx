@@ -1,13 +1,13 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, CheckCircle2, CircleDashed, Code2, Database, FileJson, FolderOpen, Globe, Plug, Plus, RefreshCw, Search, Server, Trash2, XCircle } from "lucide-react";
 import type { CapabilityScope, McpTestResult } from "../../shared/capabilities";
 import type { McpServerRow } from "../../shared/integrations";
-import { parseMcpArguments, parseMcpKeyValues, validateMcpServer } from "../../shared/mcp-config";
+import { formatMcpServerJson, parseMcpArguments, parseMcpKeyValues, parseMcpServerJson, validateMcpServer } from "../../shared/mcp-config";
 import type { MessageKey } from "../../shared/i18n";
 import { useI18n } from "../i18n";
 import { ConfirmDialog } from "../ui";
 import type { CapabilityPanelProps } from "./skills-panel";
-import { CapabilityBack, CapabilityNotice, CapabilityScopePicker, CapabilitySearch, CapabilitySkeleton, CapabilitySwitch, CapabilityTrust, errorText, useCapabilityData, useDirty } from "./common";
+import { CapabilityBack, CapabilityNotice, CapabilityScopePicker, CapabilitySearch, CapabilitySkeleton, CapabilitySwitch, CapabilityTrust, errorText, useCapabilityData, useDirty, useDiscardGuard } from "./common";
 
 const transportLabel = (kind: McpServerRow["kind"]): string => kind === "http" ? "HTTP" : kind === "sse" ? "SSE" : "stdio";
 const testKey = (server: McpServerRow): string => JSON.stringify(server);
@@ -30,10 +30,12 @@ function displayTarget(server: McpServerRow): string {
 
 export function McpPanel(props: CapabilityPanelProps) {
   const [scope, setScope] = useState<CapabilityScope>(props.workspace ? "project" : "user");
-  return <McpLibrary key={`${props.workspace ?? ""}:${scope}`} {...props} scope={scope} onScopeChange={setScope} />;
+  // 提示放在外层：编辑器把配置存进另一个作用域时，列表会随作用域整体重挂载。
+  const [notice, setNotice] = useState("");
+  return <McpLibrary key={`${props.workspace ?? ""}:${scope}`} {...props} scope={scope} onScopeChange={setScope} notice={notice} onNoticeChange={setNotice} />;
 }
 
-function McpLibrary({ workspace, scope, onScopeChange, onUsePrompt, onDirtyChange }: CapabilityPanelProps & { scope: CapabilityScope; onScopeChange(scope: CapabilityScope): void }) {
+function McpLibrary({ workspace, scope, onScopeChange, notice, onNoticeChange: setNotice, onUsePrompt, onDirtyChange }: CapabilityPanelProps & { scope: CapabilityScope; onScopeChange(scope: CapabilityScope): void; notice: string; onNoticeChange(notice: string): void }) {
   const { t } = useI18n();
   const load = useCallback(() => window.harness.mcp.list(scope, workspace), [scope, workspace]);
   const { data, loading, error, refresh, setError } = useCapabilityData(load, workspace);
@@ -42,7 +44,6 @@ function McpLibrary({ workspace, scope, onScopeChange, onUsePrompt, onDirtyChang
   const [importing, setImporting] = useState(false);
   const [removing, setRemoving] = useState<McpServerRow>();
   const [busy, setBusy] = useState("");
-  const [notice, setNotice] = useState("");
   const [tests, setTests] = useState<Record<string, McpTestResult>>({});
   const servers = data?.servers ?? [];
   const filtered = servers.filter((server) => [server.name, server.description, displayTarget(server)].join(" ").toLowerCase().includes(search.toLowerCase().trim()));
@@ -53,7 +54,7 @@ function McpLibrary({ workspace, scope, onScopeChange, onUsePrompt, onDirtyChang
   };
 
   if (importing) return <McpImport scope={scope} workspace={workspace} onBack={() => setImporting(false)} onDirtyChange={onDirtyChange} onSaved={(count) => { setImporting(false); setNotice(t("cap.jsonImported", { count })); void refresh(); }} />;
-  if (editor) return <McpEditor key={editor.previousName ?? "new"} {...editor} scope={scope} workspace={workspace} onDirtyChange={onDirtyChange} onBack={() => setEditor(undefined)} onSaved={() => { setEditor(undefined); setNotice(t("cap.saved")); void refresh(); }} onTested={(server, result) => setTests((current) => ({ ...current, [testKey(server)]: result }))} />;
+  if (editor) return <McpEditor key={editor.previousName ?? "new"} {...editor} scope={scope} workspace={workspace} onDirtyChange={onDirtyChange} onBack={() => setEditor(undefined)} onSaved={(savedScope) => { setEditor(undefined); setNotice(t("cap.saved")); if (savedScope === scope) void refresh(); else onScopeChange(savedScope); }} onTested={(server, result) => setTests((current) => ({ ...current, [testKey(server)]: result }))} />;
 
   return <section className="cap-panel" aria-label="MCP">
     <header className="cap-heading"><div className="cap-heading-title"><Plug size={22} /><h2>MCP</h2><span className="cap-count">{servers.length}</span></div><CapabilityScopePicker scope={scope} workspace={workspace} onChange={onScopeChange} /></header>
@@ -90,35 +91,78 @@ function McpLibrary({ workspace, scope, onScopeChange, onUsePrompt, onDirtyChang
 
 const keyValues = (values: Record<string, string> | undefined, separator: string): string => Object.entries(values ?? {}).map(([key, value]) => `${key}${separator}${value}`).join("\n");
 const argumentText = (args: string[] = []): string => args.some((arg) => !arg || arg.trim() !== arg || /[\r\n]/.test(arg)) ? JSON.stringify(args, null, 2) : args.join("\n");
+interface EditorValues { name: string; kind: McpServerRow["kind"]; description: string; command: string; args: string; env: string; url: string; headers: string; cwd: string; timeout: string; enabled: boolean }
 
-function McpEditor({ server, previousName, scope, workspace, onBack, onSaved, onTested, onDirtyChange }: CapabilityPanelProps & { server: McpServerRow; previousName?: string; scope: CapabilityScope; onBack(): void; onSaved(): void; onTested(server: McpServerRow, result: McpTestResult): void }) {
+const editorValues = (server: McpServerRow): EditorValues => ({ name: server.name, kind: server.kind, description: server.description ?? "", command: server.command ?? "", args: argumentText(server.args), env: keyValues(server.env, "="), url: server.url ?? "", headers: keyValues(server.headers, ": "), cwd: server.cwd ?? "", timeout: String(server.timeout ?? 20), enabled: !server.disabled });
+
+function McpEditor({ server, previousName, scope, workspace, onBack, onSaved, onTested, onDirtyChange }: CapabilityPanelProps & { server: McpServerRow; previousName?: string; scope: CapabilityScope; onBack(): void; onSaved(scope: CapabilityScope): void; onTested(server: McpServerRow, result: McpTestResult): void }) {
   const { t } = useI18n();
-  const initial = useMemo(() => ({ name: server.name, kind: server.kind, description: server.description ?? "", command: server.command ?? "", args: argumentText(server.args), env: keyValues(server.env, "="), url: server.url ?? "", headers: keyValues(server.headers, ": "), cwd: server.cwd ?? "", timeout: String(server.timeout ?? 20), enabled: !server.disabled }), [server]);
+  const initial = useMemo(() => editorValues(server), [server]);
+  const [mode, setMode] = useState<"form" | "json">("form");
   const [values, setValues] = useState(initial);
   const [savedValues, setSavedValues] = useState(initial);
+  // 未知扩展字段在表单和 JSON 之间来回切换都不能丢。
+  const [extra, setExtra] = useState<Record<string, unknown> | undefined>(server.extra);
+  const [json, setJson] = useState("");
+  const [jsonBase, setJsonBase] = useState("");
+  const [targetScope, setTargetScope] = useState(scope);
   const [busy, setBusy] = useState<"save" | "test">();
   const [error, setError] = useState("");
   const [test, setTest] = useState<McpTestResult>();
-  const dirty = JSON.stringify(values) !== JSON.stringify(savedValues);
+  const jsonRef = useRef<HTMLTextAreaElement>(null);
+  const dirty = JSON.stringify(values) !== JSON.stringify(savedValues) || json !== jsonBase;
   useDirty(dirty, onDirtyChange);
+  const guard = useDiscardGuard(dirty, onBack);
+  useEffect(() => { if (mode === "json") jsonRef.current?.focus(); }, [mode]);
   const update = <K extends keyof typeof values>(key: K, value: (typeof values)[K]) => { setValues((current) => ({ ...current, [key]: value })); setTest(undefined); };
+  const keyValueRow = (text: string, separator: "=" | ":"): Record<string, string> | undefined => {
+    const entries = parseMcpKeyValues(text, separator);
+    return Object.keys(entries).length ? entries : undefined;
+  };
   const build = (): McpServerRow => validateMcpServer({
     name: values.name, kind: values.kind, description: values.description, disabled: !values.enabled,
-    timeout: Number(values.timeout), extra: server.extra,
-    ...(values.kind === "stdio" ? { command: values.command, args: parseMcpArguments(values.args), env: parseMcpKeyValues(values.env, "="), cwd: values.cwd } : { url: values.url, headers: parseMcpKeyValues(values.headers, ":") }),
+    timeout: Number(values.timeout), extra, cwd: values.cwd,
+    // env / headers 与 transport 无关地保留：JSON 里粘进来的字段不能因为经过表单就被删掉。
+    env: keyValueRow(values.env, "="), headers: keyValueRow(values.headers, ":"),
+    ...(values.kind === "stdio" ? { command: values.command, args: parseMcpArguments(values.args) } : { url: values.url }),
   });
+  const current = (): McpServerRow => mode === "json" ? parseMcpServerJson(json) : build();
+  // 表单 → JSON：表单填完了就按表单生成；没填完保留用户已经在写的内容。
+  const toJson = () => {
+    setError("");
+    try { const generated = formatMcpServerJson(build()); setJson(generated); setJsonBase(generated); } catch { /* 表单还没填完整，保留现有 JSON */ }
+    setTest(undefined); setMode("json");
+  };
+  // JSON → 表单：只有解析成功才切换，失败留在 JSON 并显示原因。
+  const toForm = () => {
+    setError("");
+    if (json.trim()) {
+      try {
+        const row = parseMcpServerJson(json);
+        setValues(editorValues(row)); setExtra(row.extra);
+      } catch (reason) { setError(errorText(reason)); return; }
+    }
+    setTest(undefined); setMode("form");
+  };
   const run = async (action: "save" | "test") => {
     setBusy(action); setError("");
     try {
-      const row = build();
+      const row = current();
       if (action === "test") { const result = await window.harness.mcp.test(row, workspace); setTest(result); onTested(row, result); }
-      else { await window.harness.mcp.save(row, previousName, scope, workspace); setSavedValues(values); onSaved(); }
+      else {
+        // 换作用域保存等于复制一份新配置：previousName 只在当前作用域里有意义。
+        await window.harness.mcp.save(row, targetScope === scope ? previousName : undefined, targetScope, workspace);
+        if (mode === "json") { setSavedValues(editorValues(row)); setJsonBase(json); } else setSavedValues(values);
+        onSaved(targetScope);
+      }
     } catch (reason) { setError(errorText(reason)); } finally { setBusy(undefined); }
   };
-  return <section className="cap-panel"><CapabilityBack title={previousName ?? t("cap.addServer")} dirty={dirty} onBack={onBack} /><form className="cap-form cap-scroll" onSubmit={(event) => { event.preventDefault(); void run("save"); }}>
-    <div className="cap-detail-meta"><span className="cap-chip">{t(scope === "project" ? "cap.project" : "cap.user")}</span><span className="cap-enabled-control">{t(values.enabled ? "cap.enabled" : "cap.disabled")}<CapabilitySwitch checked={values.enabled} disabled={Boolean(busy)} label={t("cap.toggle", { name: values.name || "MCP" })} onChange={(enabled) => update("enabled", enabled)} /></span></div>
+  return <section className="cap-panel"><CapabilityBack title={previousName ?? t("cap.addServer")} dirty={dirty} onBack={onBack} trailing={<div className="cap-editor-tabs" role="group" aria-label={t("cap.editMode")}><button type="button" className={mode === "form" ? "active" : ""} aria-pressed={mode === "form"} disabled={Boolean(busy)} onClick={() => { if (mode === "json") toForm(); }}>{t("cap.modeForm")}</button><button type="button" className={mode === "json" ? "active" : ""} aria-pressed={mode === "json"} disabled={Boolean(busy)} onClick={() => { if (mode === "form") toJson(); }}>{t("cap.modeJson")}</button></div>} /><form className="cap-form cap-scroll" onSubmit={(event) => { event.preventDefault(); void run("save"); }}>
+    <div className={`cap-detail-meta${mode === "json" ? " cap-json-meta" : ""}`}><span>{t("cap.scope")}</span><CapabilityScopePicker scope={targetScope} workspace={workspace} onChange={setTargetScope} />{mode === "form" && <span className="cap-enabled-control">{t(values.enabled ? "cap.enabled" : "cap.disabled")}<CapabilitySwitch checked={values.enabled} disabled={Boolean(busy)} label={t("cap.toggle", { name: values.name || "MCP" })} onChange={(enabled) => update("enabled", enabled)} /></span>}</div>
     {error && <CapabilityNotice error>{error}</CapabilityNotice>}
-    <fieldset disabled={Boolean(busy)} className="cap-fieldset">
+    {mode === "json" ? <fieldset disabled={Boolean(busy)} className="cap-fieldset">
+      <label>{t("cap.jsonConfig")}<textarea ref={jsonRef} aria-label={t("cap.jsonConfig")} className="cap-source-editor cap-mono" spellCheck={false} rows={16} value={json} placeholder={'{\n  "my-mcp-server": {\n    "type": "http",\n    "url": "https://example.com/mcp"\n  }\n}'} onChange={(event) => { setJson(event.target.value); setTest(undefined); }} /><small>{t("cap.jsonServerHint")}</small><small>{t("cap.jsonNameHint")}</small><small>{t("cap.jsonOnlyOne")}</small></label>
+    </fieldset> : <fieldset disabled={Boolean(busy)} className="cap-fieldset">
       <label>{t("cap.serverName")}<input autoFocus value={values.name} required maxLength={100} placeholder="my-server" onChange={(event) => update("name", event.target.value)} /></label>
       <label>{t("cap.description")}<input value={values.description} onChange={(event) => update("description", event.target.value)} /></label>
       <label>{t("cap.transport")}<select value={values.kind} onChange={(event) => update("kind", event.target.value as McpServerRow["kind"])}><option value="stdio">{t("cap.stdio")}</option><option value="http">{t("cap.http")}</option><option value="sse">{t("cap.sse")}</option></select></label>
@@ -131,11 +175,11 @@ function McpEditor({ server, previousName, scope, workspace, onBack, onSaved, on
         <label>{t("cap.headers")}<textarea spellCheck={false} className="cap-mono" value={values.headers} rows={3} placeholder="Authorization: Bearer …" onChange={(event) => update("headers", event.target.value)} /><small>{t("cap.headersHint")}</small></label>
       </>}
       <details className="cap-advanced"><summary>{t("cap.advanced")}</summary>{values.kind === "stdio" && <label>{t("cap.cwd")}<input value={values.cwd} onChange={(event) => update("cwd", event.target.value)} /><small>{t("cap.cwdHint")}</small></label>}<label>{t("cap.timeout")}<input type="number" min={1} max={300} value={values.timeout} onChange={(event) => update("timeout", event.target.value)} /></label></details>
-    </fieldset>
+    </fieldset>}
     {test && <div className={`cap-test-result ${test.success ? "is-success" : "is-error"}`} role="status"><div>{test.success ? <CheckCircle2 size={17} /> : <XCircle size={17} />}<strong>{test.success ? t("cap.testPassed", { count: test.tools.length }) : t("cap.testFailed")}</strong></div>{!test.success && <p>{test.message}</p>}{test.success && <details open={test.tools.length <= 5}><summary>{t("cap.tools")}</summary>{!test.tools.length && <p>{t("cap.noTools")}</p>}<ul>{test.tools.map((tool) => <li key={tool.name}><code>{tool.name}</code>{tool.description && <p>{tool.description}</p>}</li>)}</ul></details>}</div>}
-    <div className="cap-form-actions"><button type="button" className="ghost" disabled={Boolean(busy)} onClick={() => void run("test")}><Plug size={15} />{t(busy === "test" ? "cap.testing" : "cap.test")}</button><button type="submit" className="primary" disabled={Boolean(busy)}>{t(busy === "save" ? "cap.saving" : "cap.save")}</button></div>
+    <div className="cap-form-actions"><button type="button" className="ghost" disabled={Boolean(busy)} onClick={() => void run("test")}><Plug size={15} />{t(busy === "test" ? "cap.testing" : "cap.test")}</button><button type="button" className="ghost" disabled={Boolean(busy)} onClick={guard.request}>{t("cap.cancel")}</button><button type="submit" className="primary" disabled={Boolean(busy)}>{t(busy === "save" ? "cap.saving" : "cap.save")}</button></div>
     <p className="cap-section-hint">{t("cap.appliesNext")}</p>
-  </form></section>;
+  </form>{guard.dialog}</section>;
 }
 
 function McpImport({ scope, workspace, onBack, onSaved, onDirtyChange }: CapabilityPanelProps & { scope: CapabilityScope; onBack(): void; onSaved(count: number): void }) {
