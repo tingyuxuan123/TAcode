@@ -1,8 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fileScope, projectFilePath, readFileTabs, readFileView, writeFileTabs, writeFileView } from "./file-view-state";
-beforeEach(() => { const values = new Map<string, string>(); vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) }); });
+import { applyFileMutationToStorage, fileScope, projectFilePath, readFileTabs, readFileView, writeFileTabs, writeFileView } from "./file-view-state";
+beforeEach(() => { const values = new Map<string, string>(); vi.stubGlobal("localStorage", { get length() { return values.size; }, key: (index: number) => [...values.keys()][index] ?? null,
+  removeItem: (key: string) => values.delete(key), getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) }); });
 afterEach(() => vi.unstubAllGlobals());
 describe("file entry points and stored views", () => {
+  it("continues migrating valid sessions after malformed storage keys", () => {
+    for (const suffix of ["broken", "null", "{}"])
+      localStorage.setItem(`tacode:file-tabs:v1:${suffix}`, "{}");
+    for (const suffix of ["broken", "null", '[null,2]', JSON.stringify([fileScope("/corrupt-migration"), 2])])
+      localStorage.setItem(`tacode:file-view:v1:${suffix}`, "{}");
+    const scope = fileScope("/corrupt-migration", "valid-session");
+    writeFileTabs(scope, { tabs: [{ path: "old/source", preview: false }], activePath: "old/source" });
+    writeFileView(scope, "old/source", { position: { top: 1234, left: 0, from: 12, to: 18 }, expanded: ["old/nested"] });
+    applyFileMutationToStorage({ kind: "mutation", projectRoot: "/corrupt-migration", path: "old", destination: "new", operation: "rename" });
+    expect(readFileTabs(scope)).toEqual({ tabs: [{ path: "new/source", preview: false }], activePath: "new/source" });
+    expect(readFileView(scope, "new/source")).toMatchObject({ position: { top: 1234 }, expanded: ["new/nested"] });
+    expect(readFileView(scope, "old/source")).toEqual({});
+  });
+  it("retargets all session tabs and reading state, redirects late cleanup, and isolates another project", () => {
+    const root = "/migration"; const first = fileScope(root, "first"); const second = fileScope(root, "second"); const foreign = fileScope("/other-migration", "first");
+    for (const scope of [first, second, foreign]) {
+      writeFileTabs(scope, { tabs: [{ path: "old/source", preview: false }, { path: "oldish/source", preview: true }], activePath: "old/source" });
+      writeFileView(scope, "old/source", { treeWidth: 400, expanded: ["old", "old/nested", "oldish"], position: { top: 1200, left: 0, from: 30, to: 40 } });
+    }
+    applyFileMutationToStorage({ kind: "mutation", projectRoot: root, path: "old", destination: "new", operation: "rename" });
+    for (const scope of [first, second]) {
+      expect(readFileTabs(scope).activePath).toBe("new/source"); expect(readFileTabs(scope).tabs.map((tab) => tab.path)).toEqual(["new/source", "oldish/source"]);
+      expect(readFileView(scope, "new/source")).toMatchObject({ expanded: ["new", "new/nested", "oldish"], position: { top: 1200 } });
+      expect(readFileView(scope, "old/source")).toEqual({});
+    }
+    writeFileView(first, "old/source", { position: { top: 1250, left: 0, from: 30, to: 40 }, expanded: ["old"] });
+    expect(readFileView(first, "new/source")).toMatchObject({ position: { top: 1250 }, expanded: ["new"] });
+    applyFileMutationToStorage({ kind: "mutation", projectRoot: root, path: "new", operation: "trash" });
+    writeFileView(first, "new/source", { treeWidth: 500 });
+    for (const scope of [first, second]) { expect(readFileTabs(scope).tabs.map((tab) => tab.path)).toEqual(["oldish/source"]); expect(readFileView(scope, "new/source")).toEqual({}); }
+    expect(readFileTabs(foreign).activePath).toBe("old/source"); expect(readFileView(foreign, "old/source").position?.top).toBe(1200);
+  });
   it("normalizes absolute/relative paths and line/column links, preserving literal colon filenames", () => {
     expect(projectFilePath("/project/src/../source.ts:123:8", "/project/", "darwin")).toEqual({ path: "source.ts", location: { line: 123, column: 8 } });
     expect(projectFilePath("./目录/a file.txt:12", "/project", "darwin", true)).toEqual({ path: "目录/a file.txt:12", location: undefined });

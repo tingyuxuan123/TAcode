@@ -1,4 +1,5 @@
 import type { BrowserTabSnapshot } from "../../shared/types";
+import { mutatedPath, type FileMutation } from "../../shared/files";
 
 export type BrowserPanelTab = {
   id: string;
@@ -138,6 +139,7 @@ export type PanelAction =
   | { type: "open-file"; path: string; workspace?: string; activate?: boolean; preview?: boolean; location?: import("../workbench/types").SourceLocation }
   | { type: "file-scope-changed"; scope: string; restored: FilePanelTab[]; activePath?: string }
   | { type: "pin-file"; id: string }
+  | { type: "file-mutation"; mutation: FileMutation }
   | { type: "close-other-files"; id: string }
   | { type: "reorder"; id: string; before: string; after?: boolean }
   | { type: "open-browser"; tab: BrowserPanelTab; activate: boolean }
@@ -208,7 +210,7 @@ export function panelReducer(state: PanelState, action: PanelAction): PanelState
   const next = applyPanelAction(state, action);
   if (next === state) return state;
   // session / sessionActive 只由 session-changed 维护；其余动作原样保留，避免每个分支都要记得带上。
-  if (action.type === "file-scope-changed") return next;
+  if (action.type === "file-scope-changed" || action.type === "file-mutation") return next;
   if (action.type === "session-changed") return state.filesScope === undefined ? next : { ...next, filesScope: state.filesScope };
   const preserved = next.session === state.session && next.sessionActive === state.sessionActive;
   return preserved && next.filesScope === state.filesScope ? next : { ...next, session: state.session, sessionActive: state.sessionActive, filesScope: state.filesScope };
@@ -216,6 +218,18 @@ export function panelReducer(state: PanelState, action: PanelAction): PanelState
 
 function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
   switch (action.type) {
+    case "file-mutation": {
+      const mutation = action.mutation; const ids = new Map<string, string>(); const seen = new Set<string>();
+      const tabs = state.tabs.flatMap((tab): WorkbenchPanelTab[] => {
+        if (tab.type !== "file" || tab.workspace !== mutation.projectRoot) return [tab];
+        const path = mutatedPath(tab.path, mutation); if (path === undefined) return [];
+        const id = filePanelId(path, tab.workspace, tab.scope); ids.set(tab.id, id);
+        if (seen.has(id)) return []; seen.add(id); return [{ ...tab, id, path }];
+      });
+      const requested = ids.get(state.active) ?? state.active;
+      const active = tabs.some((tab) => tab.id === requested && isPanelVisible(tab, state.session, state.filesScope)) ? requested : tabs.find((tab) => isPanelVisible(tab, state.session, state.filesScope))?.id ?? "";
+      return { ...state, tabs, active, sessionActive: Object.fromEntries(Object.entries(state.sessionActive).map(([key, id]) => [key, ids.get(id) ?? id])) };
+    }
     case "file-scope-changed": {
       if (state.filesScope === action.scope) return state;
       const existing = state.tabs.filter((tab) => tab.type === "file" && tab.scope === action.scope);

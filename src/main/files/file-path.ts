@@ -23,6 +23,19 @@ export function relativeFilePath(value: unknown, allowRoot = false): string {
 export interface BoundFile extends ProjectPath { realRoot: string; file: string; lexicalFile: string; exists: boolean; symlink: boolean }
 export class ProjectFilePaths {
   constructor(private readonly resolveProject: (root: string) => Promise<string>) {}
+  /** Structural operations act on the directory entry, including the link itself. */
+  async entry(request: ProjectPath): Promise<BoundFile> {
+    const relative = relativeFilePath(request.path);
+    const parentPath = relative.includes("/") ? relative.slice(0, relative.lastIndexOf("/")) : "";
+    const parent = await this.resolve({ projectRoot: request.projectRoot, path: parentPath }, true);
+    if (!parent.exists || !(await fs.stat(parent.file)).isDirectory()) throw new ProjectFileError("notDirectory", "The parent directory does not exist");
+    const name = relative.slice(relative.lastIndexOf("/") + 1);
+    const file = path.join(parent.file, name); let exists = true; let symlink = false;
+    try { symlink = (await fs.lstat(file)).isSymbolicLink(); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; exists = false; }
+    return { projectRoot: parent.projectRoot, path: relative, realRoot: parent.realRoot, file,
+      lexicalFile: path.join(parent.projectRoot, ...relative.split("/")), exists, symlink };
+  }
   async resolve(request: ProjectPath, allowRoot = false): Promise<BoundFile> {
     if (typeof request.projectRoot !== "string" || !path.isAbsolute(request.projectRoot) || request.projectRoot.length > 4096 || request.projectRoot.includes("\0")) throw new ProjectFileError("invalidRequest", "An explicit absolute project root is required");
     const projectRoot = path.resolve(request.projectRoot);

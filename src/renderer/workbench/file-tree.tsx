@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { ChevronRight, Search } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Search } from "lucide-react";
 import { useI18n } from "../i18n";
 import { isImeKey } from "../ime";
 import { WorkbenchFileSymbol } from "./file-symbol";
@@ -9,7 +9,7 @@ import type { WorkbenchChange, WorkbenchTreeEntry } from "./types";
 const letters: Record<WorkbenchChange, string> = { added: "A", modified: "•", deleted: "D", renamed: "R", untracked: "U", conflict: "!" };
 const rowHeight = 28;
 
-export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryChange, onOpen, onDoubleOpen, onExpand, initialExpanded = [], initialScroll, restoreReady = true, onScrollChange, onExpandedChange, reveal, label, review = false }: {
+export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryChange, onOpen, onDoubleOpen, onExpand, initialExpanded = [], initialScroll, restoreReady = true, onScrollChange, onExpandedChange, reveal, label, review = false, onMenu }: {
   entries: readonly WorkbenchTreeEntry[];
   selectedPath?: string;
   query?: string;
@@ -25,6 +25,7 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
   onScrollChange?(top: number): void;
   onExpandedChange?(paths: string[]): void;
   reveal?: number;
+  onMenu?(path: string, kind: "file" | "directory", x: number, y: number): void;
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(() => new Set([...initialExpanded, ...ancestorPaths(selectedPath ?? "")]));
@@ -113,6 +114,7 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
   };
   const onKeyDown = (event: KeyboardEvent, row: WorkbenchTreeRow, index: number) => {
     if (isImeKey(event.nativeEvent)) return;
+    if (onMenu && (event.key === "ContextMenu" || event.shiftKey && event.key === "F10")) { const rect = event.currentTarget.getBoundingClientRect(); onMenu(row.path, row.kind, rect.left, rect.bottom); event.preventDefault(); return; }
     if (event.key === "ArrowDown") focusRow(index + 1);
     else if (event.key === "ArrowUp") focusRow(index - 1);
     else if (event.key === "Home") focusRow(0);
@@ -153,6 +155,7 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
             className={`workbench-tree-row${selectedPath === row.path ? " is-selected" : ""}${row.kind === "directory" ? " is-directory" : ""}`}
             style={{ paddingInlineStart: 8 + row.depth * 16 }}
             title={row.path} onFocus={() => setFocused(row.path)}
+            onContextMenu={onMenu ? (event) => { event.preventDefault(); event.currentTarget.focus(); onMenu(row.path, row.kind, event.clientX, event.clientY); } : undefined}
             onDoubleClick={() => { if (row.kind !== "directory") onDoubleOpen?.(row.path); }}
             onKeyDown={(event) => onKeyDown(event, row, start + offset)}
             onClick={() => { setFocused(row.path); if (row.kind === "directory") toggle(row); else onOpen(row.path); }}>
@@ -160,6 +163,8 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
             {row.kind === "directory" ? <ChevronRight className={row.expanded ? "is-expanded" : ""} size={16} strokeWidth={1.75} aria-hidden="true" />
               : <WorkbenchFileSymbol path={row.path} />}
             <span className="workbench-tree-name">{row.name}</span>
+            {onMenu && <button type="button" className="workbench-tree-actions" aria-label={t("fileManage.actions")} title={t("fileManage.actions")} tabIndex={-1}
+              onClick={(event) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onMenu(row.path, row.kind, rect.left, rect.bottom); }}><MoreHorizontal size={14} /></button>}
             {row.change ? <span className={`workbench-change-marker is-${row.change}`} aria-label={t(`workbench.${row.change}`)}>{letters[row.change]}</span>
               : row.descendantChanged ? <i className="workbench-directory-changed" aria-label={t("workbench.fileChanges")} /> : null}
           </div>)}

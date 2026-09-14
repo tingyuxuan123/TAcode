@@ -20,7 +20,7 @@ export interface FileWorkbenchDocument {
 }
 
 /** Presentation shared by the production document controller and isolated Electron fixture. */
-export function FileWorkbench({ projectName, document, entries, query, onQueryChange, onOpen, onExpand, onChange, onSave, onCopyPath, onExternalOpen, location, locationToken, active = true, colorScheme = "light", editorRef, initialExpanded, initialTreeWidth, initialTreeOpen = true, onTreeWidthChange, onTreeOpenChange, navigation, content, notice, onLocate, onRefresh, initialPosition, onPositionChange }: {
+export function FileWorkbench({ projectName, document, entries, query, onQueryChange, onOpen, onExpand, onChange, onSave, onCopyPath, onExternalOpen, location, locationToken, active = true, colorScheme = "light", editorRef, initialExpanded, initialTreeWidth, initialTreeOpen = true, onTreeWidthChange, onTreeOpenChange, navigation, content, notice, onLocate, onRefresh, initialPosition, onPositionChange, actions, externalOpen }: {
   projectName: string;
   document: FileWorkbenchDocument | null;
   entries: readonly WorkbenchTreeEntry[];
@@ -49,6 +49,8 @@ export function FileWorkbench({ projectName, document, entries, query, onQueryCh
   onRefresh?(): void;
   initialPosition?: EditorPosition;
   onPositionChange?(position: EditorPosition): void;
+  actions?: ReactNode;
+  externalOpen?: ReactNode;
 }) {
   const { t } = useI18n();
   const [treeOpen, setTreeOpen] = useState(initialTreeOpen);
@@ -59,6 +61,7 @@ export function FileWorkbench({ projectName, document, entries, query, onQueryCh
       {document?.dirty && <span className="workbench-dirty" title={t("workbench.unsaved")} aria-label={t("workbench.unsaved")} />}
       {document?.readOnly && <span className="workbench-readonly">{t("workbench.readOnly")}</span>}
       <span className="workbench-toolbar-spacer" />
+      {actions}
       <WorkbenchButton label={t("workbench.wrap")} aria-pressed={wrap} onClick={() => setWrap(!wrap)}><WrapText size={16} /></WorkbenchButton>
       {onCopyPath && <WorkbenchButton label={t("workbench.copyPath")} disabled={!document} onClick={onCopyPath}><Copy size={16} /></WorkbenchButton>}
       {onLocate && <WorkbenchButton label={t("fileView.locate")} disabled={!document} onClick={() => { setTreeOpen(true); onTreeOpenChange?.(true); onLocate(); }}><LocateFixed size={16} /></WorkbenchButton>}
@@ -68,6 +71,7 @@ export function FileWorkbench({ projectName, document, entries, query, onQueryCh
       {onExternalOpen && <WorkbenchButton label={t("workbench.open")} className="has-label is-outlined" disabled={!document} onClick={onExternalOpen}>
         <ExternalLink size={15} /><span>{t("workbench.open")}</span><ChevronDown size={12} />
       </WorkbenchButton>}
+      {externalOpen}
     </>}
     navigation={navigation ?? <WorkbenchFileTree entries={entries} selectedPath={document?.path} query={query} onQueryChange={onQueryChange}
       onOpen={onOpen} onExpand={onExpand} initialExpanded={initialExpanded} />}>

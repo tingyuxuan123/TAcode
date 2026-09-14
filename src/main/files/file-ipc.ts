@@ -1,5 +1,5 @@
 import path from "node:path";
-import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { DirectoryRequest, DocumentReadRequest, DocumentWriteRequest, FileSearchRequest, FileSubscribeRequest, ProjectPath } from "../../shared/files";
 import { fileFailure, ProjectFileError, relativeFilePath } from "./file-path";
 import { FileService, type FileServiceOptions } from "./file-service";
@@ -35,7 +35,9 @@ function directoryRequest(raw: unknown): DirectoryRequest {
   return request;
 }
 export function registerFileIpc(options: FileServiceOptions & { host(): WebContents | undefined; draftRoot?: string }) {
-  const service = new FileService(options);
+  const service = new FileService({ ...options, trash: options.trash ?? ((file) => shell.trashItem(file)),
+    openPath: options.openPath ?? ((file) => shell.openPath(file)), reveal: options.reveal ?? ((file) => shell.showItemInFolder(file)),
+    mutation: (mutation) => { options.mutation?.(mutation); const host = options.host(); if (host && !host.isDestroyed()) host.send("files:mutation", mutation); } });
   const drafts = options.draftRoot ? new FileDrafts(options.draftRoot, service.paths) : undefined;
   const owners = new Map<number, { generation: number; cleanup(): void }>();
   const authorize = (event: IpcMainInvokeEvent) => {
@@ -93,6 +95,25 @@ export function registerFileIpc(options: FileServiceOptions & { host(): WebConte
     await drafts.remove(parseProjectPath(raw), active); return { kind: "checkpointed" };
   });
   handle("files:preview-url", (_host, raw) => service.previewUrl(parseProjectPath(raw)));
+  handle("files:inspect", (_host, raw) => service.inspect(parseProjectPath(raw)));
+  handle("files:location", (_host, raw) => service.location(parseProjectPath(raw, true)));
+  handle("files:editors", async () => ({ kind: "editors", editors: await service.editors() }));
+  handle("files:mutate", (_host, raw, active) => {
+    const value = record(raw);
+    if (!["createFile", "createDirectory", "rename", "trash"].includes(value.operation as string)
+      || value.expectedVersion !== undefined && typeof value.expectedVersion !== "string"
+      || value.destination !== undefined && typeof value.destination !== "string") throw new ProjectFileError("invalidRequest", "Invalid file mutation");
+    return service.mutate({ ...parseProjectPath(raw), operation: value.operation as import("../../shared/files").FileMutation["operation"],
+      expectedVersion: value.expectedVersion as string | undefined, destination: value.destination as string | undefined }, active);
+  });
+  handle("files:open", (_host, raw, active) => {
+    const value = record(raw);
+    if (!["system", "vscode", "cursor"].includes(value.editor as string)) throw new ProjectFileError("invalidRequest", "Invalid external editor");
+    for (const key of ["line", "column"] as const) if (value[key] !== undefined && (typeof value[key] !== "number" || !Number.isSafeInteger(value[key]) || value[key] < 1 || value[key] > 100_000_000)) throw new ProjectFileError("invalidRequest", "Invalid editor location");
+    return service.open({ ...parseProjectPath(raw, true), editor: value.editor as import("../../shared/files").ExternalEditor,
+      line: value.line as number | undefined, column: value.column as number | undefined }, active);
+  });
+  handle("files:reveal", (_host, raw, active) => service.reveal(parseProjectPath(raw, true), active));
   handle("files:subscribe", (host, raw) => {
     const value = record(raw);
     if (value.target !== "document" && value.target !== "directory") throw new ProjectFileError("invalidRequest", "Invalid subscription target");

@@ -21,6 +21,21 @@ function fixture(persist = false) {
   return { api, store, listeners, send, draftApi, saved };
 }
 describe("project disk documents", () => {
+  it("waits for a pending structural/external operation before leaving even with no dirty files", async () => {
+    const { store } = fixture(); const operation = deferred<void>(); store.trackOperation(operation.promise);
+    expect(store.hasPendingChanges()).toBe(true); let ready = false; const pending = store.waitForSaves().then(() => { ready = true; });
+    await tick(); expect(ready).toBe(false); operation.resolve(); await pending; await tick(); expect(store.hasPendingChanges()).toBe(false);
+  });
+  it("locks a subtree across session views and newly opened documents, retaining dirty text until the operation ends", async () => {
+    const { store } = fixture(true); const close = store.connect("/a", "dir/same.txt"); await vi.waitFor(() => expect(store.snapshot("/a", "dir/same.txt").loading).toBe(false));
+    store.edit("/a", "dir/same.txt", "retain"); const unlock = store.lock("/a", "dir");
+    expect(store.snapshot("/a", "dir/same.txt").mutating).toBe(true); expect(store.snapshot("/a", "dir/new.txt").mutating).toBe(true);
+    store.edit("/a", "dir/same.txt", "blocked"); expect(store.snapshot("/a", "dir/same.txt").draft?.content).toBe("retain");
+    expect(() => store.lock("/a", "dir/same.txt")).toThrow("already in progress");
+    expect(store.snapshot("/b", "dir/same.txt").mutating).toBe(false); expect(store.snapshot("/a", "dirish/same.txt").mutating).toBe(false);
+    unlock(); store.edit("/a", "dir/same.txt", "allowed"); expect(store.snapshot("/a", "dir/same.txt").draft?.content).toBe("allowed");
+    await store.flush(); close();
+  });
   it("shares one read and native subscription across two session views, releasing only after both leave", async () => {
     const { api, store, listeners } = fixture(); const first = store.connect("/a", "same.txt"); const second = store.connect("/a", "same.txt"); await tick();
     expect(api.readDocument).toHaveBeenCalledTimes(1); expect(api.subscribe).toHaveBeenCalledTimes(1); expect(store.snapshot("/a", "same.txt").document?.content).toBe("/a");

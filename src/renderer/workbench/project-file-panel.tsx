@@ -7,6 +7,8 @@ import { ProjectFileTree } from "./project-file-tree";
 import { readFileView, writeFileView, type FileViewState } from "./file-view-state";
 import { useWorkbenchVisible } from "./use-workbench-visible";
 import type { SourceLocation, WorkbenchTreeEntry } from "./types";
+import { useFileActions } from "./file-actions";
+import type { CodeEditorHandle } from "./code-editor";
 const CodeEditor = lazy(() => import("./code-editor").then((module) => ({ default: module.CodeEditor })));
 
 export interface ProjectFilePanelProps {
@@ -29,22 +31,27 @@ function FileView(props: ProjectFilePanelProps) {
   }, [scope, path]);
   useEffect(() => () => { clearTimeout(timer.current); writeFileView(scope, path ?? "", view.current); }, [scope, path]);
   const [treeVisible, setTreeVisible] = useState(view.current.treeOpen ?? true);
+  const editor = useRef<CodeEditorHandle | null>(null);
+  const actions = useFileActions(root, path, onOpen, () => editor.current?.getLocation());
   const navigateFromTree = (value: string, options?: { preview?: boolean; literal?: boolean }) => {
     // A newly opened tab inherits navigation so a second click still reaches the same row.
     if (value !== path && !Object.keys(readFileView(scope, value)).length) writeFileView(scope, value, { ...view.current, position: undefined });
     onOpen(value, options);
   };
-  const navigation = <ProjectFileTree root={root} path={path} active={visible && treeVisible} view={view.current} onViewChange={update} onOpen={navigateFromTree} changes={changes} reveal={reveal + (props.reveal ?? 0)} />;
+  const navigation = <ProjectFileTree root={root} path={path} active={visible && treeVisible} view={view.current} onViewChange={update} onOpen={navigateFromTree} changes={changes} reveal={reveal + (props.reveal ?? 0)}
+    onMenu={actions.openMenu} onCreate={actions.create} />;
   return <div ref={ref} className="project-file-panel" data-file-project={root} data-file-path={path ?? ""} data-file-active={visible}>
-    {path ? <DocumentView {...props} active={visible} navigation={navigation} view={view.current} update={update} onLocate={() => { setTreeVisible(true); setReveal((value) => value + 1); }}
+    {path ? <DocumentView {...props} active={visible} navigation={navigation} view={view.current} update={update} actions={actions} editor={editor} onLocate={() => { setTreeVisible(true); setReveal((value) => value + 1); }}
       onTreeOpen={(open) => { setTreeVisible(open); update({ treeOpen: open }); }} />
       : <FileWorkbench projectName={root.split(/[\\/]/).pop() ?? root} document={null} entries={[]} query="" onQueryChange={() => {}} onOpen={onOpen}
-        initialTreeWidth={view.current.treeWidth} initialTreeOpen={view.current.treeOpen} onTreeWidthChange={(treeWidth) => update({ treeWidth })}
+        actions={actions.toolbar} initialTreeWidth={view.current.treeWidth} initialTreeOpen={view.current.treeOpen} onTreeWidthChange={(treeWidth) => update({ treeWidth })}
         onTreeOpenChange={(open) => { setTreeVisible(open); update({ treeOpen: open }); }} navigation={navigation} />}
+    {actions.overlays}
   </div>;
 }
-function DocumentView({ root, path = "", active, location, reveal, onOpen, navigation, view, update, onLocate, onTreeOpen }: ProjectFilePanelProps & {
+function DocumentView({ root, path = "", active, location, reveal, onOpen, navigation, view, update, onLocate, onTreeOpen, actions, editor }: ProjectFilePanelProps & {
   navigation: React.ReactNode; view: FileViewState; update(change: Partial<FileViewState>): void; onLocate(): void; onTreeOpen(open: boolean): void;
+  actions: ReturnType<typeof useFileActions>; editor: React.Ref<CodeEditorHandle>;
 }) {
   const { t } = useI18n(); const state = useFileDocument(root, path, active);
   const displayed = useRef(active ? { document: state.document, draft: state.draft } : undefined);
@@ -55,7 +62,7 @@ function DocumentView({ root, path = "", active, location, reveal, onOpen, navig
   const [comparison, setComparison] = useState<{ version?: string; content: string | null; writable: boolean }>();
   const compare = () => setComparison({ version: document?.version, content: document?.content ?? null, writable: editableDocument(document) });
   const source = draft || document?.content !== null && document?.content !== undefined ? { id: state.key, path,
-    content: draft?.content ?? document!.content!, readOnly: !draft && (!editableDocument(document) || Boolean(state.recoveryError || state.recoveryLoading)), dirty: state.dirty, saving: state.saving } : null;
+    content: draft?.content ?? document!.content!, readOnly: Boolean(state.mutating) || !draft && (!editableDocument(document) || Boolean(state.recoveryError || state.recoveryLoading)), dirty: state.dirty, saving: state.saving } : null;
   const save = () => { if (state.conflict) compare(); else void state.save(); };
   const content = draft ? undefined : !document ? <p className="workbench-empty" role="status">{state.loading ? t("preview.reading") : t("preview.failed")}</p>
     : document.status === "missing" ? <p className="workbench-empty">{t("preview.missing")}</p>
@@ -81,8 +88,9 @@ function DocumentView({ root, path = "", active, location, reveal, onOpen, navig
     initialTreeWidth={view.treeWidth} initialTreeOpen={view.treeOpen} onTreeWidthChange={(treeWidth) => update({ treeWidth })} onTreeOpenChange={onTreeOpen}
     initialPosition={view.position} onPositionChange={(position) => update({ position })} onLocate={onLocate} onRefresh={state.refresh}
     onChange={state.edit} onSave={save}
-    onCopyPath={() => { setActionError(undefined); void navigator.clipboard.writeText(path).catch((error) => setActionError(String(error))); }}
-    onExternalOpen={() => { setActionError(undefined); void window.harness.workspace.open(path, root).catch((error) => setActionError(String(error))); }} />
+    actions={actions.toolbar} externalOpen={actions.openButton} editorRef={editor}
+    onCopyPath={actions.copyRelative}
+    />
     {comparison && <FileEditDialog title={t("fileEdit.conflictTitle")} className="file-conflict-dialog" onCancel={() => { if (!state.saving) setComparison(undefined); }}>
       <p><code>{path}</code></p>
       <div className="file-conflict-columns"><section><h3>{t("fileEdit.diskVersion")}</h3><Suspense fallback={<p>{t("workbench.loading")}</p>}>

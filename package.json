@@ -23,6 +23,7 @@
     "test:file-workbench": "node scripts/test-file-workbench.mjs",
     "test:file-editing": "node scripts/test-file-editing.mjs",
     "test:file-editing-app": "node scripts/test-file-editing-app.mjs",
+    "test:file-management": "node scripts/test-file-management.mjs",
     "test:git-review": "node scripts/test-git-review.mjs",
     "test:capabilities": "pnpm build && node scripts/test-capabilities.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build",

@@ -24,6 +24,6 @@ try {
   assert.equal(await readFile(expected.disk, "utf8"), "APP_DISK_A\n");
   const result = { ...JSON.parse(await readFile(path.join(artifacts, "app.json"), "utf8")), date: new Date().toISOString(), exitCode: code, exactRecovery: true, diskUnchanged: true,
     artifacts, boundary: "Unmodified production main/preload/App builds; isolated appData/TACODE_HOME and APFS projects; semantic project commands and native editor/dialog input; natural Electron exit independently verified by the parent." };
-  await writeFile("docs/file-review-reference/fr-08-app-result.json", JSON.stringify(result, null, 2) + "\n");
+  await writeFile(process.env.TACODE_FILE_EDIT_APP_REPORT ?? "docs/file-review-reference/fr-08-app-result.json", JSON.stringify(result, null, 2) + "\n");
   console.log(`Full production main/preload/App quit and exact recovery passed: ${artifacts}`);
 } finally { await rm(output, { recursive: true, force: true }); await rm(directory, { recursive: true, force: true }); }

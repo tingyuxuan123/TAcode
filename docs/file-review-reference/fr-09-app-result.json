@@ -1,0 +1,16 @@
+{
+  "stages": [
+    "Production App bindProject cancels or retains unsaved changes without starting an Agent or changing disk",
+    "Production before-quit waits for user choice and cancellation keeps the App and its file services alive",
+    "Production App quit approves durable keep only after the final text is checkpointed; the parent verifies a natural process exit"
+  ],
+  "errors": [],
+  "profile": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-editing-app-QKp76u/app-data/TACode",
+  "home": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-editing-app-QKp76u/home",
+  "date": "2026-09-14T10:54:26.846Z",
+  "exitCode": 0,
+  "exactRecovery": true,
+  "diskUnchanged": true,
+  "artifacts": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-editing-app-artifacts-lIYaHh",
+  "boundary": "Unmodified production main/preload/App builds; isolated appData/TACODE_HOME and APFS projects; semantic project commands and native editor/dialog input; natural Electron exit independently verified by the parent."
+}

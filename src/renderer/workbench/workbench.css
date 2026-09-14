@@ -1,5 +1,5 @@
 /* Screenshot-matched file/review surfaces. Tokens stay inside this region. */
-.code-workbench, .file-edit-dialog {
+.code-workbench, .file-edit-dialog, .file-action-menu {
   --workbench-bg: #fff;
   --workbench-ink: #202123;
   --workbench-secondary: #6f7174;
@@ -206,3 +206,18 @@
 .file-conflict-columns h3 { flex: none; font-size: 13px; margin: 0 0 8px; }
 .file-conflict-columns .workbench-code-editor { flex: 1; min-height: 0; border: 1px solid var(--workbench-border); }
 @media (max-width: 680px) { .file-conflict-columns { grid-template-columns: minmax(0, 1fr); } .file-conflict-columns section { height: 24vh; } }
+.project-file-tree-tools { display: flex; align-items: center; height: 32px; flex: none; padding: 0 8px; border-bottom: 1px solid var(--workbench-border); }
+.project-file-tree-tools > span { flex: 1; font-size: 12px; color: var(--workbench-secondary); }
+.project-file-tree-tools .workbench-button { width: 26px; height: 26px; }
+.workbench-tree-actions { visibility: hidden; flex: none; display: grid; place-items: center; border: 0; background: transparent; color: var(--workbench-secondary); width: 20px; height: 20px; padding: 0; }
+.workbench-tree-row:hover .workbench-tree-actions, .workbench-tree-row:focus-within .workbench-tree-actions { visibility: visible; }
+.file-action-menu { position: fixed; inset: auto; margin: 0; padding: 4px; width: min(236px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; border: 1px solid var(--workbench-border); border-radius: 6px; background: var(--workbench-bg); color: var(--workbench-ink); box-shadow: 0 4px 16px #0002; font: 13px/1.4 var(--workbench-sans); }
+.file-action-menu button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; border-radius: 3px; min-height: 30px; padding: 5px 8px; text-align: start; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.file-action-menu button > svg { flex: none; }
+.file-action-menu button > span { min-width: 0; overflow-wrap: anywhere; }
+.file-action-menu button:hover, .file-action-menu button:focus-visible { background: var(--workbench-hover); outline: none; }
+.file-action-menu .is-destructive { color: var(--workbench-red); }
+.file-name-label { display: flex; flex-direction: column; gap: 8px; }
+.file-name-label input { padding: 8px; width: 100%; border: 1px solid var(--workbench-border); border-radius: 4px; background: var(--workbench-bg); color: var(--workbench-ink); font-family: var(--workbench-mono); }
+.file-action-error, .file-mutation-status { position: fixed; bottom: 16px; right: 16px; z-index: 60; max-width: min(480px, calc(100vw - 32px)); padding: 10px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); overflow-wrap: anywhere; }
+.file-action-error { color: var(--red); }

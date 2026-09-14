@@ -31,7 +31,7 @@ try {
   if (!process.exitCode) {
     const phases = await Promise.all(["initial", "restart"].map(async (phase) => JSON.parse(await readFile(path.join(artifacts, `${phase}.json`), "utf8"))));
     const result = { date: new Date().toISOString(), phases, artifacts, boundary: "Two separate offline Electron processes using production preload/files IPC, native Chromium keyboard/mouse, real APFS files and durable application recovery records." };
-    await writeFile("docs/file-review-reference/fr-08-result.json", JSON.stringify(result, null, 2) + "\n");
+    await writeFile(process.env.TACODE_FILE_EDIT_REPORT ?? "docs/file-review-reference/fr-08-result.json", JSON.stringify(result, null, 2) + "\n");
     console.log(JSON.stringify(result, null, 2));
   }
 } finally { await rm(output, { recursive: true, force: true }); await rm(directory, { recursive: true, force: true }); }

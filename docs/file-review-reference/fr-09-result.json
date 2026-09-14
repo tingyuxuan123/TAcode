@@ -1,0 +1,36 @@
+{
+  "date": "2026-09-14T10:49:43.677Z",
+  "stages": [
+    "Native create folder/file with Chinese, spaces and literal colons; empty editor, pin and real save",
+    "Existing creation target is rejected without overwriting disk; Escape cancels",
+    "Directory rename retargets both session tabs and exact reading positions, with actual subtree bytes preserved",
+    "Dirty rename cancellation retains text; save and version re-confirmation migrate the path and remove old recovery",
+    "External edits invalidate the captured trash confirmation and preserve all disk text",
+    "Trash failure retains the source; success preserves recoverable bytes and removes both session tabs",
+    "Relative/absolute clipboard paths, explicit-project system/reveal adapters and a real external CLI receive exact special paths and locations",
+    "Same-name projects remain isolated; narrow English menu bounds and native keyboard/focus restoration",
+    "Native case-only rename updates the actual case-insensitive APFS directory entry",
+    "The native menu and production mutation service move a unique temporary file into the actual Electron system Trash"
+  ],
+  "errors": [],
+  "network": [],
+  "systemOpened": [
+    "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-management-BhVWmj/project-a/目录 空格/a:2 $(literal).txt"
+  ],
+  "revealed": [
+    "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-management-BhVWmj/project-a/目录 空格/a:2 $(literal).txt"
+  ],
+  "nativeTrashRestored": true,
+  "resources": {
+    "subscriptions": 0,
+    "roots": 0,
+    "reads": 0
+  },
+  "git": {
+    "projects": 0,
+    "subscriptions": 0,
+    "reads": 0
+  },
+  "artifacts": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-management-artifacts-3XNjY3",
+  "boundary": "Production preload, files/Git IPC and WorkbenchPanels with native Chromium input. Real APFS mutations and external CLI; reversible Trash/system/reveal adapters for failure cases, plus the same native menu/IPC/mutation service with actual Electron system Trash. Installed user editors were not launched."
+}

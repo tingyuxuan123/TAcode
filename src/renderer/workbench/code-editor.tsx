@@ -13,6 +13,7 @@ export interface CodeEditorHandle {
   focus(): void;
   reveal(location: SourceLocation): void;
   getValue(): string;
+  getLocation(): SourceLocation | undefined;
 }
 
 const syntax = HighlightStyle.define([
@@ -116,7 +117,8 @@ export function CodeEditor({ documentId, path, value, readOnly = false, wrap = t
     const end = target.endLine ? editor.state.doc.line(Math.max(1, Math.min(editor.state.doc.lines, target.endLine))).to : from;
     editor.dispatch({ selection: EditorSelection.single(from, Math.max(from, end)), effects: EditorView.scrollIntoView(from, { y: "center" }) });
   };
-  useImperativeHandle(ref, () => ({ focus: () => view.current?.focus(), reveal, getValue: () => view.current?.state.sliceDoc() ?? initial.current.value }));
+  useImperativeHandle(ref, () => ({ focus: () => view.current?.focus(), reveal, getValue: () => view.current?.state.sliceDoc() ?? initial.current.value,
+    getLocation: () => { const editor = view.current; if (!editor) return; const position = editor.state.selection.main.head; const line = editor.state.doc.lineAt(position); return { line: line.number, column: position - line.from + 1 }; } }));
 
   useEffect(() => {
     if (!host.current) return;

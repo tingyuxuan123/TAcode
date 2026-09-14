@@ -1,4 +1,5 @@
 import type { SourceLocation } from "./types";
+import { mutatedPath, pathWithin, type FileMutation } from "../../shared/files";
 
 export interface EditorPosition { top: number; left: number; from: number; to: number }
 export interface FileViewState { treeWidth?: number; treeOpen?: boolean; expanded?: string[]; treeScroll?: number; query?: string; position?: EditorPosition }
@@ -7,6 +8,13 @@ export interface SavedFileTabs { tabs: SavedFileTab[]; activePath?: string }
 export const fileScope = (root: string | undefined, session?: string): string => JSON.stringify([root ?? "", session ?? ""]);
 const key = (scope: string, path: string) => `tacode:file-view:v1:${JSON.stringify([scope, path])}`;
 const tabsKey = (scope: string) => `tacode:file-tabs:v1:${scope}`;
+const redirects: FileMutation[] = [];
+function redirect(scope: string, path: string): string | undefined {
+  let root: string; try { root = JSON.parse(scope)[0]; } catch { return path; }
+  let next: string | undefined = path;
+  for (const mutation of redirects) if (mutation.projectRoot === root && next !== undefined) next = mutatedPath(next, mutation);
+  return next;
+}
 function read(value: string): unknown { try { return JSON.parse(localStorage.getItem(value) ?? "null"); } catch { return null; } }
 function write(value: string, data: unknown): void { try { localStorage.setItem(value, JSON.stringify(data)); } catch { /* In-memory views remain usable when storage is unavailable. */ } }
 const finite = (value: unknown, max = 100_000_000): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= max;
@@ -23,7 +31,11 @@ export function readFileView(scope: string, path: string): FileViewState {
   if (position && [position.top, position.left, position.from, position.to].every((item) => finite(item))) state.position = position;
   return state;
 }
-export function writeFileView(scope: string, path: string, state: FileViewState): void { write(key(scope, path), state); }
+export function writeFileView(scope: string, path: string, state: FileViewState): void {
+  const next = redirect(scope, path); if (next === undefined) return;
+  const expanded = state.expanded?.map((value) => redirect(scope, value)).filter((value): value is string => value !== undefined);
+  write(key(scope, next), { ...state, expanded });
+}
 export function readFileTabs(scope: string): SavedFileTabs {
   const value = read(tabsKey(scope)) as SavedFileTabs | null;
   if (!value || !Array.isArray(value.tabs)) return { tabs: [] };
@@ -35,6 +47,34 @@ export function readFileTabs(scope: string): SavedFileTabs {
   return { tabs, activePath: tabs.some((tab) => tab.path === value.activePath) ? value.activePath : undefined };
 }
 export function writeFileTabs(scope: string, value: SavedFileTabs): void { write(tabsKey(scope), value); }
+export function applyFileMutationToStorage(mutation: FileMutation): void {
+  if (mutation.operation === "createFile" || mutation.operation === "createDirectory") {
+    for (let index = redirects.length - 1; index >= 0; index--) if (redirects[index]!.projectRoot === mutation.projectRoot && pathWithin(redirects[index]!.path, mutation.path)) redirects.splice(index, 1);
+    return;
+  }
+  try {
+    const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter((value): value is string => Boolean(value));
+    for (const storageKey of keys) {
+      try {
+        if (storageKey.startsWith("tacode:file-tabs:v1:")) {
+          const scope = storageKey.slice("tacode:file-tabs:v1:".length);
+          if (JSON.parse(scope)[0] !== mutation.projectRoot) continue;
+          const saved = readFileTabs(scope); const seen = new Set<string>();
+          const tabs = saved.tabs.flatMap((tab) => { const path = mutatedPath(tab.path, mutation); if (!path || seen.has(path)) return []; seen.add(path); return [{ ...tab, path }]; });
+          writeFileTabs(scope, { tabs, activePath: saved.activePath ? mutatedPath(saved.activePath, mutation) : undefined });
+        } else if (storageKey.startsWith("tacode:file-view:v1:")) {
+          const [scope, path] = JSON.parse(storageKey.slice("tacode:file-view:v1:".length)) as [string, string];
+          if (JSON.parse(scope)[0] !== mutation.projectRoot) continue;
+          const next = mutatedPath(path, mutation); const view = readFileView(scope, path);
+          const expanded = view.expanded?.map((value) => mutatedPath(value, mutation)).filter((value): value is string => value !== undefined);
+          if (next !== path) localStorage.removeItem(storageKey);
+          if (next !== undefined) write(key(scope, next), { ...view, expanded });
+        }
+      } catch { /* A corrupt record must not prevent other sessions from migrating. */ }
+    }
+  } catch { /* Mounted tabs still update when browser storage is unavailable. */ }
+  redirects.push(mutation);
+}
 
 /** Normalize all entry points without Node APIs; the main process repeats the boundary check. */
 export function projectFilePath(input: string, root: string, platform: NodeJS.Platform, literal = false): { path: string; location?: SourceLocation } {

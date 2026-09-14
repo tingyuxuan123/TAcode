@@ -6,6 +6,7 @@ import {
   createBrowserPanel,
   createChildSessionPanel,
   initialPanelState,
+  filePanelId,
   panelReducer,
   visiblePanelTabs,
   type ChildSessionPanelInfo,
@@ -16,6 +17,16 @@ const page = (name: string) => ({ url: `https://${name}.test/`, title: name });
 const open = (state: PanelState, id: string, activate = true) => panelReducer(state, { type: "open-browser", tab: createBrowserPanel(id, page(id)), activate });
 
 describe("顶部网页标签状态", () => {
+  it("retargets renamed file subtrees in all sessions and removes trashed tabs while retaining other project/tool panels", () => {
+    const scopes = [JSON.stringify(["/a", "one"]), JSON.stringify(["/a", "two"]), JSON.stringify(["/b", "one"])];
+    const tabs = scopes.map((scope, index) => ({ id: filePanelId("dir/file", index === 2 ? "/b" : "/a", scope), type: "file" as const, workspace: index === 2 ? "/b" : "/a", scope, path: "dir/file", preview: false }));
+    let state: PanelState = { ...initialPanelState, tabs: [...initialPanelState.tabs, ...tabs], active: tabs[0]!.id, filesScope: scopes[0], sessionActive: { one: tabs[0]!.id, two: tabs[1]!.id } };
+    state = panelReducer(state, { type: "file-mutation", mutation: { kind: "mutation", projectRoot: "/a", path: "dir", destination: "new", operation: "rename" } });
+    expect(state.tabs.filter((tab) => tab.type === "file").map((tab) => tab.path)).toEqual(["new/file", "new/file", "dir/file"]);
+    expect(state.active).toBe(filePanelId("new/file", "/a", scopes[0])); expect(state.sessionActive.two).toBe(filePanelId("new/file", "/a", scopes[1]));
+    state = panelReducer(state, { type: "file-mutation", mutation: { kind: "mutation", projectRoot: "/a", path: "new", operation: "trash" } });
+    expect(state.tabs.map((tab) => tab.type)).toEqual(["review", "file"]); expect(state.active).toBe("review"); expect(state.tabs[1]).toEqual(tabs[2]);
+  });
   it("后台新页保留当前选择及现有网页实例", () => {
     const first = open(initialPanelState, "first");
     const next = open(first, "background", false);

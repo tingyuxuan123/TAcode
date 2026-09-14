@@ -20,6 +20,16 @@ const invoke = (channel: string, raw: unknown, owner = event) => handlers.get(ch
 const request = () => ({ projectRoot: root, path: "source" });
 
 describe("production files IPC", () => {
+  it("authenticates and validates structural/open requests and emits only real successful mutations", async () => {
+    for (const channel of ["files:inspect", "files:mutate", "files:location", "files:editors", "files:open", "files:reveal"]) expect(await invoke(channel, request(), { sender: host, senderFrame: {} } as IpcMainInvokeEvent)).toMatchObject({ error: { code: "outsideProject" } });
+    for (const raw of [{ ...request(), operation: "delete" }, { ...request(), operation: "rename", destination: 1 }, { ...request(), operation: "trash", expectedVersion: [] }]) expect(await invoke("files:mutate", raw)).toMatchObject({ error: { code: "invalidRequest" } });
+    for (const raw of [{ ...request(), editor: "other" }, { ...request(), editor: "vscode", line: "1" }, { ...request(), editor: "system", column: 0 }]) expect(await invoke("files:open", raw)).toMatchObject({ error: { code: "invalidRequest" } });
+    const target = await invoke("files:inspect", request());
+    expect(await invoke("files:mutate", { ...request(), operation: "rename", destination: "moved", expectedVersion: target.version })).toMatchObject({ kind: "mutation", path: "source", destination: "moved" });
+    expect(host.send).toHaveBeenCalledWith("files:mutation", { ...request(), kind: "mutation", operation: "rename", destination: "moved" });
+    expect(await invoke("files:location", { ...request(), path: "moved" })).toMatchObject({ absolutePath: path.join(root, "moved") });
+    expect(await fs.readFile(path.join(root, "moved"), "utf8")).toBe("old");
+  });
   it("requires the workbench main frame and validates every request as structured failures", async () => {
     for (const owner of [{ sender: {}, senderFrame: {} }, { sender: host, senderFrame: {} }]) expect(await invoke("files:read-document", request(), owner as IpcMainInvokeEvent)).toMatchObject({ kind: "error", error: { code: "outsideProject" } });
     for (const raw of [undefined, [], { path: "source" }, { ...request(), projectRoot: "." }, { ...request(), path: "../secret" }, { ...request(), offset: "1" }, { ...request(), length: -1 }]) expect(await invoke("files:read-document", raw)).toMatchObject({ kind: "error", error: { code: "invalidRequest" } });

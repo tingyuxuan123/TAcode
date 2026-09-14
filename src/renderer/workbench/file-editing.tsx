@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
-import type { ProjectPath } from "../../shared/files";
+import type { FileMutation, ProjectPath } from "../../shared/files";
 import { fileDocuments, useFileDocuments } from "./file-document-store";
 import { isImeKey } from "../ime";
+import { applyFileMutationToStorage } from "./file-view-state";
 
 export function FileEditDialog({ title, onCancel, children, className = "" }: { title: string; onCancel(): void; children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -15,7 +16,9 @@ export function FileEditDialog({ title, onCancel, children, className = "" }: { 
     onCancel={(event) => { event.preventDefault(); onCancel(); }}><h2>{title}</h2>{children}</dialog>;
 }
 type Confirm = (root?: string, paths?: readonly string[], retain?: boolean) => Promise<boolean>;
-const FileEditingContext = createContext<{ confirm: Confirm }>({ confirm: async (root, paths) => {
+type ActionNotice = "copyRelative" | "copyAbsolute" | "opened" | "revealed";
+type Notice = Pick<FileMutation, "operation" | "path" | "destination"> | { operation: ActionNotice; path: string; destination?: undefined };
+const FileEditingContext = createContext<{ confirm: Confirm; notify(operation: ActionNotice, path: string): void }>({ notify: () => {}, confirm: async (root, paths) => {
   const store = fileDocuments(); if (store.dirty(root, paths).length) return false; await store.flush(); return true;
 } });
 export const useFileEditing = () => useContext(FileEditingContext);
@@ -26,6 +29,13 @@ export function FileEditingProvider({ children }: { children: ReactNode }) {
   const [selection, setSelection] = useState<{ root?: string; paths?: readonly string[]; retain: boolean; files: ProjectPath[] }>();
   const [busy, setBusy] = useState(false); const busyRef = useRef(false); const [error, setError] = useState("");
   const permitUnload = useRef(false);
+  const [notice, setNotice] = useState<Notice>();
+  const notify = useCallback((operation: ActionNotice, path: string) => setNotice({ operation, path }), []);
+  useEffect(() => window.harness.files.onMutation?.((mutation) => {
+    applyFileMutationToStorage(mutation); store.applyMutation(mutation);
+    setNotice(mutation);
+  }), [store]);
+  useEffect(() => { if (notice) { const timer = setTimeout(() => setNotice(undefined), 6000); return () => clearTimeout(timer); } }, [notice]);
   const confirm = useCallback<Confirm>(async (root, paths, retain = false) => {
     await store.waitForSaves();
     if (pending.current) return false;
@@ -35,7 +45,7 @@ export function FileEditingProvider({ children }: { children: ReactNode }) {
     const promise = new Promise<boolean>((done) => { resolve = done; }); pending.current = { promise, resolve };
     setSelection({ root, paths, retain, files }); setError(checkpointError); return promise;
   }, [store]);
-  const value = useMemo(() => ({ confirm }), [confirm]);
+  const value = useMemo(() => ({ confirm, notify }), [confirm, notify]);
   const finish = (allow: boolean) => { const current = pending.current; pending.current = undefined; setSelection(undefined); setError(""); current?.resolve(allow); };
   const apply = async (action: "save" | "discard" | "retain") => {
     if (!selection || busyRef.current) return;
@@ -70,7 +80,7 @@ export function FileEditingProvider({ children }: { children: ReactNode }) {
     window.addEventListener("beforeunload", beforeUnload);
     return () => { off?.(); api.setCloseGuardReady?.(false); window.removeEventListener("keydown", reload, true); window.removeEventListener("beforeunload", beforeUnload); pending.current?.resolve(false); pending.current = undefined; };
   }, [confirm]);
-  return <FileEditingContext.Provider value={value}>{children}{selection && <FileEditDialog title={t("fileEdit.unsavedTitle")} onCancel={() => { if (!busyRef.current) finish(false); }}>
+  return <FileEditingContext.Provider value={value}>{children}{notice && <div className="file-mutation-status" role="status">{t(`fileManage.done.${notice.operation}`)} {notice.destination ?? notice.path}</div>}{selection && <FileEditDialog title={t("fileEdit.unsavedTitle")} onCancel={() => { if (!busyRef.current) finish(false); }}>
     <ul className="workbench-confirm-paths">{selection.files.map((file) => <li key={JSON.stringify(file)}><code title={file.projectRoot}>{file.path}</code>
       {store.snapshot(file.projectRoot, file.path).saveError && <span>{t("fileEdit.saveFailed")}</span>}</li>)}</ul>
     {error && <p role="alert">{error}</p>}

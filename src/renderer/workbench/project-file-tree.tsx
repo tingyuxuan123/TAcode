@@ -5,10 +5,14 @@ import type { FileEntry, FileFailure } from "../../shared/files";
 import type { FileViewState } from "./file-view-state";
 import type { WorkbenchTreeEntry } from "./types";
 import { WorkbenchFileTree } from "./file-tree";
+import { FilePlus2, FolderPlus, MoreHorizontal } from "lucide-react";
+import { WorkbenchButton } from "./controls";
 
-export function ProjectFileTree({ root, path, active, view, onViewChange, onOpen, reveal, changes = [] }: {
+export function ProjectFileTree({ root, path, active, view, onViewChange, onOpen, reveal, changes = [], onMenu, onCreate }: {
   root: string; path?: string; active: boolean; view: FileViewState; onViewChange(change: Partial<FileViewState>): void;
   onOpen(path: string, options?: { preview?: boolean; literal?: boolean }): void; reveal?: number; changes?: readonly WorkbenchTreeEntry[];
+  onMenu?(path: string, kind: "file" | "directory" | "symlink", x: number, y: number): void;
+  onCreate?(operation: "createFile" | "createDirectory"): void;
 }) {
   const { t } = useI18n();
   const index = useWorkspaceFiles(active ? root : undefined);
@@ -29,7 +33,12 @@ export function ProjectFileTree({ root, path, active, view, onViewChange, onOpen
         do {
           const page = await window.harness.files.directory({ projectRoot: root, path: directory, cursor, includeIgnored: true, refresh: refresh && !cursor });
           if (current !== generation.current || !enabled.current) return;
-          if (page.kind === "error") { setError(page.error); return; }
+          if (page.kind === "error") {
+            if (directory && (page.error.code === "missing" || page.error.code === "notDirectory")) {
+              loaded.current.delete(directory); setDirectories((old) => new Map([...old].filter(([path]) => path !== directory && !path.startsWith(`${directory}/`)))); return;
+            }
+            setError(page.error); return;
+          }
           entries.push(...page.entries); cursor = page.cursor;
         } while (cursor);
         loaded.current.add(directory); setError(undefined);
@@ -73,11 +82,17 @@ export function ProjectFileTree({ root, path, active, view, onViewChange, onOpen
   const previousReveal = useRef(reveal);
   useEffect(() => { if (previousReveal.current !== reveal) { previousReveal.current = reveal; setQuery(""); onViewChange({ query: "" }); } }, [reveal, onViewChange]);
   return <div className="project-file-tree">
+    {onCreate && <div className="project-file-tree-tools"><span>{t("workbench.files")}</span>
+      <WorkbenchButton label={t("fileManage.createFile")} onClick={() => onCreate("createFile")}><FilePlus2 size={15} /></WorkbenchButton>
+      <WorkbenchButton label={t("fileManage.createDirectory")} onClick={() => onCreate("createDirectory")}><FolderPlus size={15} /></WorkbenchButton>
+      {onMenu && <WorkbenchButton label={t("fileManage.actions")} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); onMenu("", "directory", rect.left, rect.bottom); }}><MoreHorizontal size={15} /></WorkbenchButton>}
+    </div>}
     {(error || index.error) && <div className="file-tree-notice" role="alert"><span>{t("fileView.treeFailed")}</span><button type="button" onClick={() => { void index.refresh(); for (const directory of loaded.current) void load(directory, true); void load("", true); }}>{t("common.retry")}</button></div>}
     {index.loading && !entries.length && <p className="workbench-empty" role="status">{t("workbench.loading")}</p>}
     <WorkbenchFileTree entries={entries} selectedPath={path} query={query} onQueryChange={(value) => { setQuery(value); onViewChange({ query: value }); }}
       onOpen={(value) => onOpen(value, { preview: true, literal: true })} onDoubleOpen={(value) => onOpen(value, { preview: false, literal: true })}
       onExpand={expand} initialExpanded={view.expanded} initialScroll={view.treeScroll} restoreReady={!index.loading && loaded.current.has("") && (view.expanded ?? []).every((directory) => loaded.current.has(directory))}
+      onMenu={onMenu}
       onScrollChange={(top) => onViewChange({ treeScroll: top })} onExpandedChange={expanded} reveal={reveal} />
   </div>;
 }

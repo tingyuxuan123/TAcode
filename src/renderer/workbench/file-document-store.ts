@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { FileDocument, FileDraftWriteRequest, FileFailure, FilesApi, ProjectPath } from "../../shared/files";
+import { pathWithin, type FileMutation } from "../../shared/files";
 
 export interface FileDocumentState {
   key: string; document?: FileDocument; loading: boolean; error?: FileFailure; mode: "native" | "polling";
   draft?: FileDraftWriteRequest; dirty: boolean; saving: boolean; restored?: boolean;
   saveError?: FileFailure; draftError?: FileFailure; recoveryError?: FileFailure; recoveryLoading?: boolean;
+  mutating?: boolean;
 }
 interface Entry {
   request: ProjectPath; state: FileDocumentState; listeners: Set<() => void>; users: number; serial: number; revision: number;
@@ -22,8 +24,10 @@ export class FileDocumentStore {
   private readonly entries = new Map<string, Entry>();
   private readonly roots = new Map<string, Promise<void>>();
   private readonly saves = new Map<string, Promise<boolean>>();
+  private readonly operations = new Set<Promise<unknown>>();
   private readonly listeners = new Set<() => void>();
   private revision = 0;
+  private readonly locks = new Set<ProjectPath>();
   constructor(private readonly api: FilesApi, private readonly id: () => string = () => crypto.randomUUID(), private readonly drafts?: DraftApi) {}
   subscribeAll = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   version = () => this.revision;
@@ -34,7 +38,7 @@ export class FileDocumentStore {
   private entry(root: string, path: string): Entry {
     const key = documentKey(root, path); let entry = this.entries.get(key);
     if (!entry) {
-      entry = { request: { projectRoot: root, path }, state: { key, loading: true, mode: "native", dirty: false, saving: false },
+      entry = { request: { projectRoot: root, path }, state: { key, loading: true, mode: "native", dirty: false, saving: false, mutating: this.locked(root, path) },
         listeners: new Set(), users: 0, serial: 0, revision: 0, checkpointed: 0, persistence: Promise.resolve() };
       this.entries.set(key, entry);
     }
@@ -97,6 +101,7 @@ export class FileDocumentStore {
   }
   edit(root: string, path: string, content: string): void {
     const entry = this.entry(root, path); const state = entry.state;
+    if (this.locked(root, path)) return;
     if (!state.draft && (!editableDocument(state.document) || state.recoveryLoading || state.recoveryError)) return;
     const dirty = content !== state.document?.content;
     const draft = dirty ? { ...(state.draft ?? { ...entry.request, baseContent: state.document!.content!, baseVersion: state.document!.version!, lineEnding: state.document!.metadata.lineEnding }), content } : undefined;
@@ -150,8 +155,25 @@ export class FileDocumentStore {
     const results = await Promise.allSettled([...this.entries.values()].filter((entry) => entry.revision !== entry.checkpointed || entry.state.draftError).map((entry) => this.checkpoint(entry)));
     const failed = results.find((result) => result.status === "rejected"); if (failed?.status === "rejected") throw failed.reason;
   }
-  async waitForSaves(): Promise<void> { await Promise.allSettled([...this.saves.values()]); }
-  hasPendingChanges(): boolean { return [...this.entries.values()].some((entry) => entry.state.dirty || entry.state.saving || entry.revision !== entry.checkpointed); }
+  trackOperation<T>(pending: Promise<T>): Promise<T> {
+    this.operations.add(pending); void pending.catch(() => {}).finally(() => this.operations.delete(pending)); return pending;
+  }
+  async waitForSaves(): Promise<void> { await Promise.allSettled([...this.saves.values(), ...this.operations]); }
+  private locked(root: string, path: string): boolean { return [...this.locks].some((lock) => lock.projectRoot === root && pathWithin(path, lock.path)); }
+  lock(root: string, path: string): () => void {
+    if ([...this.locks].some((lock) => lock.projectRoot === root && (pathWithin(path, lock.path) || pathWithin(lock.path, path)))) throw new Error("A file operation is already in progress");
+    const lock = { projectRoot: root, path }; this.locks.add(lock);
+    for (const entry of this.entries.values()) if (entry.request.projectRoot === root && pathWithin(entry.request.path, path)) this.publish(entry, { ...entry.state, mutating: true });
+    return () => { this.locks.delete(lock); for (const entry of this.entries.values()) if (entry.request.projectRoot === root && pathWithin(entry.request.path, path)) this.publish(entry, { ...entry.state, mutating: this.locked(root, entry.request.path) }); };
+  }
+  applyMutation(mutation: FileMutation): void {
+    for (const entry of this.entries.values()) if (entry.request.projectRoot === mutation.projectRoot && pathWithin(entry.request.path, mutation.path)) {
+      entry.serial++;
+      if (entry.users) void this.read(entry);
+      else this.publish(entry, { ...entry.state, document: undefined, loading: true });
+    }
+  }
+  hasPendingChanges(): boolean { return this.operations.size > 0 || [...this.entries.values()].some((entry) => entry.state.dirty || entry.state.saving || entry.revision !== entry.checkpointed); }
   stats(): { documents: number; subscriptions: number } { return { documents: this.entries.size, subscriptions: [...this.entries.values()].filter((entry) => entry.active).length }; }
   private schedule(entry: Entry): void {
     clearTimeout(entry.timer); entry.timer = setTimeout(() => { entry.timer = undefined; void this.checkpoint(entry).catch(() => {}); }, 200);

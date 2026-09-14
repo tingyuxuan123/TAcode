@@ -18,6 +18,7 @@ export function useBrowserPanels(workspace?: string, sourceSession?: string) {
   const stateRef = useRef(state); stateRef.current = state;
   const dirtyKeys = useFileDirtyKeys();
   const scope = fileScope(workspace, sourceSession);
+  useEffect(() => window.harness.files.onMutation?.((mutation) => dispatch({ type: "file-mutation", mutation })), []);
   useLayoutEffect(() => {
     const saved = readFileTabs(scope);
     dispatch({ type: "session-changed", sourceSession });
