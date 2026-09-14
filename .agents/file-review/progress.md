@@ -141,3 +141,9 @@
 - 验证：`TACODE_GIT_REVIEW_REPORT=docs/file-review-reference/fr-12-git-result.json pnpm test:git-review` **32 阶段**通过（原 27 + 新 5），外部刷新 **328/333 ms**，网络与 renderer 错误 0、关窗后资源 0；新增 `review-comments.test.ts` **6 用例**；最终全量 **144 文件 / 1212 用例**、typecheck、build、diff check 通过，文件工作台 **7 阶段**（164.7 ms）、文件组件 **5 阶段**、格式烟测 **10 阶段**、BrowserPanel 与真实 App 文档（183.6 ms）回归全部通过。
 - 详情与边界见 `docs/file-review-fr-12.md`：意见只在本机工作台存储，不进仓库/会话文件，不随分支移动；过期基于范围+快照+文件版本，不自动挪行号；行内卡片按钮可能被底部动作条覆盖，需要滚动，同时提供 Mod-Enter。AI 审查、视觉核对与性能/发布验收待 FR-13～15。
 - 专项 **12/15**；下一条仅 **FR-13：AI 审查**，本轮不启动。提交仍在本工作树隔离分支、未合并；原工作区及另一运行任务未修改、切换、重置或停止，既有 UX 清单未改。
+
+## 2026-09-14 FR-13 开始（仅摸底，未落代码）
+
+- 接手本轮已完成 FR-10 / FR-11 / FR-12，三项都已提交并带原生证据（`1a2cf2a`、`b3125cf`、`98c9366`）；本次到这里停止，不开始 FR-13 的实现，避免留下未验证的半成品。
+- 已确认 FR-13 可直接复用的既有基础：运行时内置角色 `code-reviewer`（`src/runtime/subagents.ts`，`read_file`/`list_files`/`search_files`/`exec_command` + `execPolicy: "readonly"`、`thinkingLevel: "high"`）；子会话委派链路 `src/main/delegation-coordinator.ts` + `src/shared/delegation.ts`（`DELEGATION_COMPLETION_CONTRACT`：空闲后取最后一条带文本的 assistant 消息，不能把工具旁白当报告）；`AgentHost`/`AgentManager` 每会话一个 RPC worker；本轮新增的 `TurnSnapshotService.resolve(snapshotId)` 可作为「冻结范围」的来源，`GitReader` 已支持 `{kind:"turn"}` 只读范围，`ReviewWorkbench` 已具备范围栏、右侧栏与行级锚点（意见卡片的 annotation 机制可直接复用来渲染 AI 发现）。
+- FR-13 尚未开始实现，`passes` 保持 false。下一条仍为 **FR-13：AI 审查**。
