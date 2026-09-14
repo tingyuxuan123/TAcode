@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { registerGitIpc } from "../src/main/git/git-ipc";
 import { GitReader } from "../src/main/git/git-reader";
+import { TurnSnapshotService } from "../src/main/git/turn-snapshot";
 
 const exec = promisify(execFile);
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -51,11 +52,14 @@ async function smoke() {
     webPreferences: { preload: path.join(path.dirname(fileURLToPath(import.meta.url)), "git-review-preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
   const session = window.webContents.session;
   let delayNextRead = false; let heldRead = false; let releaseRead: (() => void) | undefined;
+  const turnService = new TurnSnapshotService({ root: path.join(profile, "review-turns"),
+    resolveProject: async (root) => { if (!allowed.has(root)) throw new Error("Folder is not an opened project"); return root; },
+    publish: (update) => { if (!window.isDestroyed()) window.webContents.send("git:turn", update); } });
   const registration = registerGitIpc({ host: () => window.webContents,
-    recoveryRoot: path.join(profile, "git-recovery"),
+    recoveryRoot: path.join(profile, "git-recovery"), turns: turnService,
     resolveProject: async (root) => { if (!allowed.has(root)) throw new Error("Folder is not an opened project"); return root; },
     reader: (root) => {
-      const reader = new GitReader(root);
+      const reader = new GitReader(root, { turns: turnService });
       return { inspect: reader.inspect.bind(reader), branches: reader.branches.bind(reader), read: async (query, signal) => {
         const snapshot = await reader.read(query, signal);
         if (delayNextRead && root === await fs.realpath(a)) { delayNextRead = false; heldRead = true; await new Promise<void>((resolve) => { releaseRead = resolve; }); }
@@ -78,6 +82,7 @@ async function smoke() {
   registration.commits.cancel = (owner, token) => { cancelledCommitTokens.add(token); cancelCommit(owner, token); };
   ipcMain.handle("app:get-locale", () => "zh"); ipcMain.handle("app:set-locale", () => {});
   const network: string[] = []; const errors: string[] = []; const stages: string[] = []; const refreshMs: number[] = [];
+  let turnTimings: { files: number; additions: number; deletions: number; baselineMs: number; targetMs: number } | undefined;
   window.webContents.session.webRequest.onBeforeRequest({ urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] }, (details, callback) => { network.push(details.url); callback({ cancel: true }); });
   window.webContents.on("console-message", (event) => { if (event.level === "error") { errors.push(event.message); console.error("[renderer]", event.message); } });
   window.webContents.on("render-process-gone", (_event, details) => { errors.push(`renderer gone: ${details.reason}`); });
@@ -422,6 +427,84 @@ async function smoke() {
     await click("dialog.workbench-commit-dialog form .workbench-dialog-actions button:first-child");
     stage("A subproject commit refuses staged changes outside its preview and retains the complete index");
 
+    // FR-11：最近一轮审查。真实 turn 边界（agent_start → 工具写入 → agent_settled）产生不可变快照。
+    await evaluate("window.gitReviewFixture.setColorScheme('light'); window.gitReviewFixture.setLocale('zh')");
+    const turnRoot = path.join(directory, "turn-project"); await fs.mkdir(turnRoot); allowed.add(turnRoot);
+    await git(turnRoot, ["init", "-qb", "main"]); await git(turnRoot, ["config", "user.name", "TACode fixture"]); await git(turnRoot, ["config", "user.email", "fixture@example.invalid"]);
+    await write(turnRoot, "app.ts", "export const version = 1;\n"); await write(turnRoot, "keep.txt", "keep me\n");
+    await git(turnRoot, ["add", "--all"]); await git(turnRoot, ["commit", "-qm", "base"]);
+    await write(turnRoot, "before.txt", "changed before the turn\n");
+    const turnSession = path.join(directory, "turn-session.jsonl");
+    const turnEvents = (event: Record<string, unknown>) => turnService.observe({ __runtimeId: "turn-runtime", __sessionId: turnSession, ...event }, turnRoot);
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(turnRoot)})`); await ready();
+    await select('.workbench-scope', "unstaged"); await wait(`${state} === 'ready' && ${hasCode("changed before the turn")}`, "pre-turn live changes");
+
+    turnEvents({ type: "agent_start" }); await turnService.idle();
+    await write(turnRoot, "app.ts", "export const version = 2;\n");
+    await write(turnRoot, "added.txt", "added by the turn\n");
+    await fs.rm(path.join(turnRoot, "keep.txt"));
+    turnEvents({ type: "tool_execution_start", toolCallId: "call-watch", toolName: "exec_command", args: { cmd: "pnpm dev --watch" } });
+    turnEvents({ type: "tool_execution_end", toolCallId: "call-watch", toolName: "exec_command", result: { details: { running: true, processId: "dev-42" } } });
+    turnEvents({ type: "agent_settled" }); await turnService.idle();
+    await wait("Boolean(document.querySelector('.workbench-scope option[value=\"lastTurn\"]:not([disabled])'))", "last turn scope enabled", 5_000);
+    await select('.workbench-scope', "lastTurn");
+    await wait(`${state} === 'ready' && ${hasCode("version = 2")}`, "recorded turn comparison");
+    assert.equal(await evaluate("document.querySelector('.workbench-scope').value"), "lastTurn");
+    assert.ok(!(await evaluate(hasCode("changed before the turn"))), "pre-turn changes are not part of the turn");
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-tree-path=\"added.txt\"]'))"), true);
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-tree-path=\"keep.txt\"]'))"), true);
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-tree-path=\"before.txt\"]'))"), false, "files the turn did not touch stay out of the recorded range");
+    assert.equal(await evaluate("document.querySelector('.workbench-readonly')?.textContent"), "只读");
+    const turnSummary = await evaluate<string>("document.querySelector('[data-turn-snapshot]')?.textContent ?? ''");
+    assert.match(turnSummary, /本轮快照 · 3 个文件/);
+    assert.equal(await evaluate("document.querySelector('[data-turn-snapshot]')?.dataset.turnSnapshot?.length"), 64);
+    assert.match(await evaluate<string>("document.querySelector('.workbench-turn-note')?.textContent ?? ''"), /pnpm dev --watch/);
+    const turnRecord = await turnService.latest(turnRoot);
+    assert.equal(turnRecord.kind, "turn");
+    if (turnRecord.kind === "turn") {
+      turnTimings = { files: turnRecord.snapshot.files, additions: turnRecord.snapshot.additions, deletions: turnRecord.snapshot.deletions,
+        baselineMs: Math.round(turnRecord.snapshot.baselineMs), targetMs: Math.round(turnRecord.snapshot.targetMs) };
+      assert.ok(turnRecord.snapshot.targetTree.length >= 40 && turnRecord.snapshot.baseTree !== turnRecord.snapshot.targetTree);
+    }
+    await capture("git-last-turn-zh");
+    stage("A settled turn records only its own immutable file changes and marks unfinished commands");
+
+    await write(turnRoot, "later.txt", "written after the turn\n");
+    await select('.workbench-scope', "unstaged"); await wait(`${state} === 'ready' && ${hasCode("written after the turn")}`, "later changes appear in live Git");
+    await select('.workbench-scope', "lastTurn"); await wait(`${state} === 'ready' && ${hasCode("version = 2")}`, "recorded turn restored");
+    assert.ok(!(await evaluate(hasCode("written after the turn"))));
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-tree-path=\"later.txt\"]'))"), false, "later changes never rewrite the recorded turn");
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-tree-path=\"added.txt\"]'))"), true);
+    stage("Later disk changes enter live Git without rewriting the recorded turn");
+
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(b)})`); await ready();
+    await select('.workbench-scope', "lastTurn");
+    await wait("document.querySelector('.git-review-panel')?.dataset.turnState === 'missing'", "missing snapshot notice");
+    const missingNotice = await evaluate<string>("document.querySelector('[data-turn-notice=\"missing\"]')?.textContent ?? ''");
+    assert.match(missingNotice, /没有记录到最近一轮的快照/);
+    assert.match(missingNotice, /未暂存\/已暂存范围仍显示当前改动/);
+    assert.equal(await evaluate("document.querySelectorAll('diffs-container').length"), 0, "missing history never falls back to current content");
+    await capture("git-last-turn-missing-zh");
+    stage("A project without a recorded turn says so instead of showing current content");
+
+    const expiredRoot = path.join(directory, "expired-project"); await fs.mkdir(expiredRoot); allowed.add(expiredRoot);
+    await git(expiredRoot, ["init", "-qb", "main"]); await git(expiredRoot, ["config", "user.name", "TACode fixture"]); await git(expiredRoot, ["config", "user.email", "fixture@example.invalid"]);
+    await write(expiredRoot, "value.txt", "one\n"); await git(expiredRoot, ["add", "--all"]); await git(expiredRoot, ["commit", "-qm", "base"]);
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(expiredRoot)})`); await ready();
+    turnService.observe({ type: "agent_start", __runtimeId: "turn-expired", __sessionId: turnSession }, expiredRoot); await turnService.idle();
+    await write(expiredRoot, "value.txt", "two\n");
+    turnService.observe({ type: "agent_settled", __runtimeId: "turn-expired", __sessionId: turnSession }, expiredRoot); await turnService.idle();
+    await select('.workbench-scope', "lastTurn"); await wait(`${state} === 'ready' && ${hasCode("two")}`, "recorded turn before collection");
+    await fs.rm(path.join(expiredRoot, ".git", "objects"), { recursive: true, force: true });
+    await git(expiredRoot, ["init", "-qb", "main"]);
+    await click('[aria-label="刷新"]');
+    await wait("document.querySelector('.git-review-panel')?.dataset.turnState === 'expired'", "collected objects reported as expired");
+    assert.match(await evaluate<string>("document.querySelector('[data-turn-notice=\"expired\"]')?.textContent ?? ''"), /已被回收/);
+    assert.equal(await evaluate("document.querySelectorAll('diffs-container').length"), 0);
+    stage("Collected snapshot objects are reported as expired, never as current content");
+
+    await evaluate("window.gitReviewFixture.setLocale('en')");
+
     // Keep actual text changes visible for the narrow dark-theme artifact.
     await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(c)})`); await ready();
     await write(c, "source.ts", twoEdits); await click('[aria-label="Refresh"]'); await ready(); await wait(hasCode("item63 = 6300"), "final dark view has real source changes");
@@ -431,9 +514,10 @@ async function smoke() {
     window.setContentSize(620, 740); await capture("git-narrow-dark-en");
     window.close(); await wait(() => registration.service.stats().subscriptions === 0, "window close releases resources");
     stage("Renderer reload/window close cleanup and offline dark/English rendering");
-    const result = { ok: true, stages, refreshMs, networkRequests: network, rendererErrors: errors, gitHead: head, rootCommit,
+    const result = { ok: true, stages, refreshMs, turnTimings, networkRequests: network, rendererErrors: errors, gitHead: head, rootCommit,
       serviceAfterClose: registration.service.stats(), environment: { platform: platform(), release: release(), cpu: cpus()[0]?.model, electron: process.versions.electron, node: process.versions.node, chromium: process.versions.chrome } };
     await fs.writeFile(path.join(artifacts, "result.json"), JSON.stringify(result, null, 2));
+    if (process.env.TACODE_GIT_REVIEW_REPORT) await fs.writeFile(path.resolve(process.env.TACODE_GIT_REVIEW_REPORT), JSON.stringify(result, null, 2));
     console.log(JSON.stringify({ ...result, artifacts }, null, 2));
   } catch (error) {
     failed = true; console.error(error);

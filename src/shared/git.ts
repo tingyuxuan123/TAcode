@@ -3,7 +3,8 @@ export type GitComparison =
   | { kind: "unstaged" }
   | { kind: "staged" }
   | { kind: "commit"; commit: string }
-  | { kind: "branch"; base: string };
+  | { kind: "branch"; base: string }
+  | { kind: "turn"; snapshotId: string };
 
 export interface GitRepositoryInfo {
   id: string;
@@ -94,7 +95,42 @@ export interface GitSnapshot {
 export type GitErrorCode = "missingGit" | "notRepository" | "invalidReference" | "noCommits" | "noMergeBase"
   | "outsideProject" | "invalidPath" | "invalidRequest" | "changedDuringRead" | "cancelled" | "timedOut" | "outputLimit" | "invalidOutput" | "failed"
   | "staleSnapshot" | "indexLocked" | "patchRejected" | "unsupportedChange" | "recoveryConflict" | "recoveryFailed"
-  | "noStagedChanges" | "outsideStagedChanges" | "noUpstream" | "identityMissing" | "hookFailed" | "commitFailed" | "authFailed" | "pushRejected" | "pushFailed";
+  | "noStagedChanges" | "outsideStagedChanges" | "noUpstream" | "identityMissing" | "hookFailed" | "commitFailed" | "authFailed" | "pushRejected" | "pushFailed"
+  | "noTurnSnapshot" | "turnObjectsMissing";
+
+/** A tool call that was still running when the turn ended; its file writes land after the snapshot. */
+export interface GitTurnCommand {
+  tool: string;
+  command: string;
+  processId?: string;
+  startedAt: number;
+}
+/** Immutable record of one agent turn: two workspace trees plus what the snapshot cannot cover. */
+export interface GitTurnSnapshot {
+  id: string;
+  projectRoot: string;
+  sessionPath: string | null;
+  startedAt: number;
+  settledAt: number;
+  status: "completed" | "stopped";
+  baseTree: string;
+  targetTree: string;
+  files: number;
+  additions: number;
+  deletions: number;
+  baselineMs: number;
+  targetMs: number;
+  unfinished: readonly GitTurnCommand[];
+  warnings: readonly string[];
+}
+/** Never substitutes live content for a history the snapshot could not record. */
+export type GitTurnSnapshotState =
+  | { kind: "turn"; snapshot: GitTurnSnapshot }
+  | { kind: "capturing"; projectRoot: string; startedAt: number }
+  | { kind: "missing"; projectRoot: string }
+  | { kind: "expired"; snapshot: GitTurnSnapshot }
+  | { kind: "failed"; projectRoot: string; reason: string }
+  | { kind: "error"; error: GitFailure };
 
 /** Repository-only queries let the user choose a branch before reading a diff. */
 export type GitReviewQuery = GitComparison | { kind: "repository" };
@@ -118,11 +154,16 @@ export interface GitReviewUpdate extends GitSubscribeRequest {
   result?: GitReviewResult;
   watchMode: GitWatchMode;
 }
+export interface GitTurnRequest { projectRoot: string }
+/** Sent when a turn settles so a visible last-turn scope can pick the new snapshot up. */
+export interface GitTurnUpdate { projectRoot: string; snapshot: GitTurnSnapshot }
 export interface GitApi {
   subscribe(request: GitSubscribeRequest): Promise<void>;
   unsubscribe(subscriptionId: string): Promise<void>;
   refresh(subscriptionId: string): Promise<void>;
   onUpdate(listener: (update: GitReviewUpdate) => void): () => void;
+  turnSnapshot(request: GitTurnRequest): Promise<GitTurnSnapshotState>;
+  onTurnSnapshot(listener: (update: GitTurnUpdate) => void): () => void;
   prepareMutation(request: GitPrepareMutationRequest): Promise<GitMutationPreview | Extract<GitMutationResult, { kind: "error" }>>;
   applyMutation(token: string): Promise<GitMutationResult>;
   cancelMutation(token: string): Promise<void>;

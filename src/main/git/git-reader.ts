@@ -23,6 +23,8 @@ export interface GitReaderOptions {
   git?: GitProcess;
   maxTextBytes?: number;
   maxSnapshotBytes?: number;
+  /** Resolves a recorded turn snapshot to its two immutable workspace trees. */
+  turns?: { resolve(snapshotId: string, projectRoot?: string): Promise<{ base: string; target: string } | undefined> };
 }
 
 /** Read-only, asynchronous Git access. No Electron imports or global active cwd. */
@@ -30,11 +32,13 @@ export class GitReader {
   private readonly git: GitProcess;
   private readonly maxTextBytes: number;
   private readonly maxSnapshotBytes: number;
+  private readonly turns?: GitReaderOptions["turns"];
 
   constructor(private readonly projectRoot: string, options: GitReaderOptions = {}) {
     this.git = options.git ?? new GitProcess();
     this.maxTextBytes = options.maxTextBytes ?? 8 * 1024 * 1024;
     this.maxSnapshotBytes = options.maxSnapshotBytes ?? 64 * 1024 * 1024;
+    this.turns = options.turns;
   }
 
   async inspect(signal?: AbortSignal): Promise<GitRepositoryState> {
@@ -114,6 +118,11 @@ export class GitReader {
       const parents = gitOutputLine(await this.git.run(repository.root, ["rev-list", "--parents", "-n", "1", target], { signal })).split(" ");
       const base = parents[1] ?? null;
       return { args: base ? ["diff", ...diffOptions, base, target, ...paths] : ["diff-tree", "--root", "-r", "--no-commit-id", ...diffOptions, target, ...paths], base, target };
+    }
+    if (comparison.kind === "turn") {
+      const turn = await this.turns?.resolve(comparison.snapshotId, this.projectRoot);
+      if (!turn) throw new GitReadError("noTurnSnapshot", "The recorded turn snapshot is no longer available");
+      return { args: ["diff", ...diffOptions, turn.base, turn.target, ...paths], base: turn.base, target: turn.target };
     }
     if (!repository.head) throw new GitReadError("noCommits", "A branch comparison needs at least one commit");
     const baseRef = await this.reference(repository, comparison.base, signal);
@@ -329,7 +338,7 @@ export class GitReader {
     const repository = await this.requireRepository(signal);
     const resolved = await this.resolve(repository, comparison, signal);
     const live = comparison.kind === "unstaged";
-    const historical = comparison.kind === "commit" || comparison.kind === "branch";
+    const historical = comparison.kind === "commit" || comparison.kind === "branch" || comparison.kind === "turn";
     const indexVersion = await this.indexVersion(repository);
     const [diff, untracked] = await Promise.all([
       this.git.run(repository.root, resolved.args, { signal, maxBytes: this.maxSnapshotBytes }),

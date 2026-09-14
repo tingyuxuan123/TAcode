@@ -1196,3 +1196,10 @@
 - 最终全量 **142 文件 / 1197 用例**、typecheck、build、diff check 通过；原生格式烟测 **10 阶段**遍历 **32 个分块**并准确保存 4 MiB，结束后资源与快照为 0；编辑/重启恢复 **12 阶段**、完整生产 App 退出 **3 阶段**、文件工作台 **7 阶段**（162.8 ms）、文件组件 **5 阶段**、生产 Git **23 阶段**（324/340 ms）、BrowserPanel/live reload/resize、真实 App 文档（127.2 ms）与文件检索回归全部通过。
 - 夹具 CSP 已与生产 `index.html` 对齐，App 文档烟测的截断文案断言按新文案更新（仍断言截断状态），未放宽行为断言。证据及边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-10.md`。
 - 分块只读为设计约束，Windows、性能与分支整合待 FR-15；专项 **10/15**，下一条仅 **FR-11：最近一轮审查**，本轮不启动，完整目标保持 active。分支仍隔离且未合并，原工作区及既有 UX 清单未修改。
+
+## 2026-09-14：文件与审查专项 FR-11 完成
+
+- 在隔离工作树 `codex/file-review-workbench` 完成最近一轮审查：按真实运行时事件流取 `agent_start` 至 `agent_settled`/停止为轮次边界，开始与结束各用项目私有 index 抓一份工作区树写入仓库对象库，审查范围 `baseTree..targetTree` 复用既有 Git 读管线，只读且不触碰用户 index/HEAD/refs。
+- 覆盖本轮同步命令、已完成异步命令与未跟踪文件的实际落盘差异；结束时仍在运行的命令在快照上标记命令与 processId。快照生成后其后变化只进实时范围；没有记录、对象被回收、抓取失败、正在抓取四种状态分别提示且都不显示 diff，绝不用当前内容冒充历史。新增 `TurnSnapshotService`（按项目隔离、抓取串行、在途可等、保留最近 8 份）。
+- 验证：`pnpm test:git-review` **27 阶段**通过（含 4 个新阶段），外部刷新 **325/335 ms**，样例仓库抓取基线 **16 ms** / 目标 **10 ms**，网络与 renderer 错误 0、关窗后资源 0；新增 `turn-snapshot.test.ts` **8 用例**；最终全量 **143 文件 / 1206 用例**、typecheck、build 通过，格式/文件工作台/组件/编辑重启/生产 App 退出/BrowserPanel/真实 App 文档回归全部通过。
+- 证据及边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-11.md`。快照对象为无 ref 的悬空对象，主动回收后报失效；基线与首个写入并发时给出覆盖告警；同项目两会话并发时区间会包含窗口内对方写入；Windows 与 2 万文件性能待 FR-15。专项 **11/15**，下一条仅 **FR-12：行级意见与持久化**，本轮不启动，完整目标保持 active。

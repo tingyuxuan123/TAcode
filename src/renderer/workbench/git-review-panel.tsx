@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { GitBranch, GitReviewQuery } from "../../shared/git";
+import type { GitBranch, GitReviewQuery, GitTurnSnapshotState } from "../../shared/git";
 import { gitReviewQueryKey } from "../../shared/git";
 import { useI18n } from "../i18n";
 import { createImeGuard } from "../ime";
@@ -30,16 +30,30 @@ export function GitReviewPanel(props: {
 }
 
 function ProjectGitReview({ projectRoot, active, onOpenFile, onChooseProject, onOpenTerminal, colorScheme, onWorkerStateChange }: Parameters<typeof GitReviewPanel>[0]) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { ref, visible } = useWorkbenchVisible(active);
   const [scope, setScope] = useState<ReviewScope>("unstaged");
   const [base, setBase] = useState(() => readBase(projectRoot ?? ""));
   const [commit, setCommit] = useState("HEAD");
   const [commitInput, setCommitInput] = useState("HEAD");
+  const [turn, setTurn] = useState<GitTurnSnapshotState>();
+  const [turnVersion, setTurnVersion] = useState(0);
   const ime = useRef(createImeGuard());
+  const turnScope = scope === "lastTurn";
+  const turnReady = turn?.kind === "turn";
+  useEffect(() => {
+    if (!projectRoot || !visible || !turnScope) return;
+    let disposed = false;
+    const load = () => void window.harness.git.turnSnapshot({ projectRoot }).then((next) => { if (!disposed) setTurn(next); },
+      () => { if (!disposed) setTurn({ kind: "error", error: { code: "failed", message: t("workbench.gitError.noTurnSnapshot") } }); });
+    load();
+    const off = window.harness.git.onTurnSnapshot((update) => { if (update.projectRoot === projectRoot) load(); });
+    return () => { disposed = true; off(); };
+  }, [projectRoot, visible, turnScope, turnVersion]);
   const query = useMemo<GitReviewQuery>(() => scope === "commit" ? { kind: "commit", commit }
     : scope === "branch" ? base ? { kind: "branch", base } : { kind: "repository" }
-      : scope === "staged" ? { kind: "staged" } : { kind: "unstaged" }, [scope, base, commit]);
+      : scope === "lastTurn" ? turn?.kind === "turn" ? { kind: "turn", snapshotId: turn.snapshot.id } : { kind: "repository" }
+        : scope === "staged" ? { kind: "staged" } : { kind: "unstaged" }, [scope, base, commit, turn]);
   const queryKey = gitReviewQueryKey(query);
   const store = useMemo(() => new GitReviewStore(window.harness.git), []);
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -47,11 +61,13 @@ function ProjectGitReview({ projectRoot, active, onOpenFile, onChooseProject, on
   const commitActions = useGitCommitActions(store, projectRoot, queryKey);
   useEffect(() => {
     if (!projectRoot || !visible) return;
+    if (turnScope && !turnReady) return;
     return store.connect(projectRoot, query);
-  }, [store, projectRoot, queryKey, visible]);
+  }, [store, projectRoot, queryKey, visible, turnScope, turnReady]);
   const current = state.key === gitReviewStateKey(projectRoot ?? "", query);
   const result = current ? state.result : undefined;
-  const busy = Boolean(projectRoot && visible && (!current || state.loading)) || actions.busy || commitActions.busy;
+  const turnBlocked = turnScope && turn !== undefined && turn.kind !== "turn";
+  const busy = Boolean(projectRoot && visible && !turnBlocked && (!current || state.loading)) || actions.busy || commitActions.busy;
   const snapshot = result?.kind === "ready" ? result.snapshot : undefined;
   const branchCache = useRef<readonly GitBranch[]>([]);
   if (result?.kind === "ready" || result?.kind === "repository") branchCache.current = result.branches;
@@ -65,6 +81,16 @@ function ProjectGitReview({ projectRoot, active, onOpenFile, onChooseProject, on
 
   let emptyState;
   if (!projectRoot) emptyState = <><p>{t("workbench.chooseProject")}</p>{onChooseProject && <button type="button" onClick={onChooseProject}>{t("workbench.openProject")}</button>}</>;
+  else if (turnScope && turn && turn.kind !== "turn") emptyState = <div className="workbench-turn-notice" data-turn-notice={turn.kind}
+    role={turn.kind === "capturing" || turn.kind === "missing" ? "status" : "alert"}>
+    <p>{turn.kind === "capturing" ? t("workbench.lastTurnRecording")
+      : turn.kind === "missing" ? t("workbench.lastTurnMissing")
+        : turn.kind === "expired" ? t("workbench.lastTurnExpired")
+          : turn.kind === "failed" ? t("workbench.lastTurnFailed", { reason: turn.reason })
+            : t("workbench.gitError.noTurnSnapshot")}</p>
+    {turn.kind === "error" && <details><summary>{t("workbench.errorDetails")}</summary><pre>{turn.error.details || turn.error.message}</pre></details>}
+    {turn.kind !== "capturing" && <button type="button" onClick={() => setTurnVersion((value) => value + 1)}>{t("common.retry")}</button>}
+  </div>;
   else if (busy && !result) emptyState = t("workbench.loading");
   else if (result?.kind === "missingGit") emptyState = <><p>{t("workbench.missingGit")}</p><button type="button" onClick={() => void window.harness.app.openExternal("https://git-scm.com/downloads")}>{t("workbench.installGit")}</button><button type="button" onClick={store.refresh}>{t("workbench.refresh")}</button></>;
   else if (result?.kind === "notRepository") emptyState = <><p>{t("workbench.notRepository")}</p>{onOpenTerminal && <button type="button" onClick={onOpenTerminal}>{t("workbench.openTerminal")}</button>}<button type="button" onClick={store.refresh}>{t("workbench.refresh")}</button></>;
@@ -76,7 +102,21 @@ function ProjectGitReview({ projectRoot, active, onOpenFile, onChooseProject, on
   else if (scope === "branch" && !base) emptyState = t(branches.length ? "workbench.chooseBaseHint" : "workbench.noBranches");
 
   const history = scope === "commit" || scope === "branch";
-  const scopeDetails = history || state.watchMode === "polling" ? <div className="workbench-scope-details">
+  const turnSummary = turn?.kind === "turn" ? <div className="workbench-turn-summary" data-turn-snapshot={turn.snapshot.id}>
+    <span>{t("workbench.lastTurnSummary", { files: turn.snapshot.files, time: new Date(turn.snapshot.settledAt).toLocaleTimeString(locale === "zh" ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit" }) })}</span>
+    {turn.snapshot.status === "stopped" && <span role="status">{t("workbench.lastTurnStopped")}</span>}
+    {turn.snapshot.unfinished.length > 0 && <details className="workbench-turn-note" open>
+      <summary>{t("workbench.lastTurnUnfinished")}</summary>
+      <ul>{turn.snapshot.unfinished.map((command, index) => <li key={`${command.tool}-${index}`}><code>{command.command}</code>
+        {command.processId && <span>{` · ${command.processId}`}</span>}</li>)}</ul>
+    </details>}
+    {turn.snapshot.warnings.length > 0 && <details className="workbench-turn-note">
+      <summary>{t("workbench.lastTurnWarnings")}</summary>
+      <ul>{turn.snapshot.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+    </details>}
+  </div> : undefined;
+  const scopeDetails = turnScope || history || state.watchMode === "polling" ? <div className="workbench-scope-details">
+    {turnSummary}
     {scope === "commit" && <form onSubmit={(event) => { event.preventDefault(); if (!ime.current.active() && !ime.current.recent() && commitInput.trim()) setCommit(commitInput.trim()); }}>
       <label htmlFor="review-commit-ref">{t("workbench.commitReference")}</label>
       <input id="review-commit-ref" value={commitInput} spellCheck={false} maxLength={1024} onChange={(event) => setCommitInput(event.target.value)}
@@ -99,9 +139,10 @@ function ProjectGitReview({ projectRoot, active, onOpenFile, onChooseProject, on
   </div> : undefined;
 
   return <div ref={ref} className="git-review-panel" data-review-state={busy ? "loading" : result?.kind ?? "idle"}
-    data-review-project={projectRoot} data-snapshot-id={snapshot?.id} data-review-active={visible} aria-busy={busy}>
+    data-review-project={projectRoot} data-snapshot-id={snapshot?.id} data-review-active={visible} aria-busy={busy}
+    data-turn-state={turn?.kind ?? "loading"} data-turn-scope={turnScope}>
     <ReviewWorkbench files={files} scope={scope} onScopeChange={setScope} onOpenFile={onOpenFile}
-      onRefresh={projectRoot ? store.refresh : undefined} busy={busy} paused={!visible} comparisonKey={queryKey}
+      onRefresh={projectRoot ? () => { if (turnScope) { setTurnVersion((value) => value + 1); store.refresh(); } else store.refresh(); } : undefined} busy={busy} paused={!visible} comparisonKey={queryKey}
       onMutation={snapshot && !snapshot.readOnly ? actions.onMutation : undefined}
       onStageAll={snapshot && scope === "unstaged" ? () => actions.onMutation("stage", { kind: "all" }) : undefined}
       onUnstageAll={snapshot && scope === "staged" ? () => actions.onMutation("unstage", { kind: "all" }) : undefined}
@@ -112,6 +153,6 @@ function ProjectGitReview({ projectRoot, active, onOpenFile, onChooseProject, on
       colorScheme={colorScheme}
       dialogs={<><GitMutationDialogs actions={actions} /><GitCommitDialogs actions={commitActions} /></>}
       scopeDetails={scopeDetails || actions.phase || actions.result || commitActions.result ? <><>{scopeDetails}</><GitMutationNotice actions={actions} onRefresh={store.refresh} /><GitCommitNotice actions={commitActions} /></> : undefined}
-      emptyState={emptyState} disabledScopes={["lastTurn"]} />
+      emptyState={emptyState} />
   </div>;
 }

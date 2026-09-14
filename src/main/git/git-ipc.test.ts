@@ -18,10 +18,25 @@ describe("Git IPC boundary", () => {
       { ...valid, query: { kind: "lastTurn" } }, { ...valid, query: { kind: "branch", base: "x\0y" } }, { ...valid, query: { kind: "commit", commit: "a".repeat(1025) } }]) {
       expect(() => parseGitSubscribeRequest(bad)).toThrow();
     }
+    expect(parseGitSubscribeRequest({ ...valid, query: { kind: "turn", snapshotId: "a".repeat(64) } }))
+      .toEqual({ ...valid, query: { kind: "turn", snapshotId: "a".repeat(64) } });
+    for (const bad of [{ ...valid, query: { kind: "turn", snapshotId: "HEAD" } }, { ...valid, query: { kind: "turn" } }, { ...valid, query: { kind: "turn", snapshotId: "a".repeat(63) } }])
+      expect(() => parseGitSubscribeRequest(bad)).toThrow();
   });
 
-  it("rejects browser guests/subframes and cancels pending work on main-frame navigation", async () => {
+  it("serves the last-turn scope only to the main frame and reports a disabled service instead of live content", async () => {
     const emitter = new EventEmitter(); const mainFrame = {};
+    const host = Object.assign(emitter, { id: 7, mainFrame, send: vi.fn(), isDestroyed: () => false }) as unknown as WebContents;
+    const registration = registerGitIpc({ host: () => host, recoveryRoot: path.join(os.tmpdir(), "tacode-git-ipc-unused"), resolveProject: async (project) => project });
+    dispose = registration.dispose;
+    const turn = handlers.get("git:turn-snapshot")!;
+    expect(() => turn({ sender: {}, senderFrame: {} }, os.tmpdir())).toThrow("main frame");
+    const event = { sender: host, senderFrame: mainFrame } as IpcMainInvokeEvent;
+    expect(() => turn(event, ".")).toThrow();
+    await expect(turn(event, os.tmpdir())).resolves.toMatchObject({ kind: "failed", projectRoot: os.tmpdir() });
+  });
+
+  it("rejects browser guests/subframes and cancels pending work on main-frame navigation", async () => {    const emitter = new EventEmitter(); const mainFrame = {};
     const host = Object.assign(emitter, { id: 5, mainFrame, send: vi.fn(), isDestroyed: () => false }) as unknown as WebContents;
     let allow!: (project: string) => void;
     const registration = registerGitIpc({ host: () => host, recoveryRoot: path.join(os.tmpdir(), "tacode-git-ipc-unused"), resolveProject: () => new Promise((resolve) => { allow = resolve; }) });

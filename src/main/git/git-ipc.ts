@@ -7,6 +7,8 @@ import { GitMutationService, gitMutationFailure } from "./git-mutations";
 import { gitRecoveryId } from "./git-recovery";
 import { GitCommitService, gitCommitFailure } from "./git-commit";
 import { GitWriteQueue } from "./git-write-queue";
+import { GitReader } from "./git-reader";
+import type { TurnSnapshotService } from "./turn-snapshot";
 
 function text(raw: unknown, max: number): string {
   if (typeof raw !== "string" || !raw.length || raw.length > max || raw.includes("\0")) throw new GitReadError("invalidRequest", "Invalid Git request");
@@ -28,6 +30,7 @@ export function parseGitSubscribeRequest(raw: unknown): GitSubscribeRequest {
   if (query.kind === "unstaged" || query.kind === "staged" || query.kind === "repository") parsed = { kind: query.kind };
   else if (query.kind === "commit") parsed = { kind: "commit", commit: text(query.commit, 1024) };
   else if (query.kind === "branch") parsed = { kind: "branch", base: text(query.base, 1024) };
+  else if (query.kind === "turn") parsed = { kind: "turn", snapshotId: digest(query.snapshotId) };
   else throw new GitReadError("invalidRequest", "Invalid Git comparison");
   return { subscriptionId: gitSubscriptionId(value.subscriptionId), projectRoot, query: parsed };
 }
@@ -81,8 +84,8 @@ export function parseGitCommitRequest(raw: unknown): GitPrepareCommitRequest {
   return { ...info, action: value.action as GitCommitAction, message, target };
 }
 
-export function registerGitIpc(options: GitReviewServiceOptions & { host(): WebContents | undefined; recoveryRoot: string }): { service: GitReviewService; mutations: GitMutationService; commits: GitCommitService; dispose(): void; idle(): Promise<void> } {
-  const service = new GitReviewService(options);
+export function registerGitIpc(options: GitReviewServiceOptions & { host(): WebContents | undefined; recoveryRoot: string; turns?: TurnSnapshotService }): { service: GitReviewService; mutations: GitMutationService; commits: GitCommitService; turns: TurnSnapshotService | undefined; dispose(): void; idle(): Promise<void> } {
+  const service = new GitReviewService({ ...options, reader: options.reader ?? ((root) => new GitReader(root, options.turns ? { turns: options.turns } : {})) });
   const queue = new GitWriteQueue();
   const mutations = new GitMutationService({ ...options, queue });
   const commits = new GitCommitService({ ...options, queue });
@@ -114,6 +117,9 @@ export function registerGitIpc(options: GitReviewServiceOptions & { host(): WebC
     });
   });
   ipcMain.handle("git:unsubscribe", (event, raw: unknown) => service.unsubscribe(authorize(event).id, gitSubscriptionId(raw)));
+  ipcMain.handle("git:turn-snapshot", (event, raw: unknown) => { authorize(event);
+    const root = projectPath(raw);
+    return options.turns ? options.turns.latest(root) : Promise.resolve({ kind: "failed" as const, projectRoot: root, reason: "本轮快照服务未启用。" }); });
   ipcMain.handle("git:refresh", (event, raw: unknown) => service.refresh(authorize(event).id, gitSubscriptionId(raw)));
   ipcMain.handle("git:prepare-mutation", async (event, raw: unknown) => {
     try {
@@ -162,11 +168,11 @@ export function registerGitIpc(options: GitReviewServiceOptions & { host(): WebC
     catch (error) { return gitCommitFailure(error); }
   });
   ipcMain.handle("git:cancel-commit", (event, raw: unknown) => commits.cancel(authorize(event).id, gitRecoveryId(raw)));
-  return { service, mutations, commits, idle: () => Promise.all([mutations.idle(), commits.idle()]).then(() => undefined), dispose: () => {
+  return { service, mutations, commits, turns: options.turns, idle: () => Promise.all([mutations.idle(), commits.idle()]).then(() => undefined), dispose: () => {
     service.close();
     mutations.close();
     commits.close();
     for (const cleanup of owners.values()) cleanup();
-    for (const channel of ["git:subscribe", "git:unsubscribe", "git:refresh", "git:prepare-mutation", "git:apply-mutation", "git:cancel-mutation", "git:list-recoveries", "git:restore-recovery", "git:commit-info", "git:prepare-commit", "git:apply-commit", "git:cancel-commit"]) ipcMain.removeHandler(channel);
+    for (const channel of ["git:subscribe", "git:unsubscribe", "git:refresh", "git:turn-snapshot", "git:prepare-mutation", "git:apply-mutation", "git:cancel-mutation", "git:list-recoveries", "git:restore-recovery", "git:commit-info", "git:prepare-commit", "git:apply-commit", "git:cancel-commit"]) ipcMain.removeHandler(channel);
   } };
 }

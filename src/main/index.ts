@@ -235,6 +235,7 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
         return;
       }
       if (!sideChat) agentActivities.observe(event);
+      if (!sideChat) turnSnapshots.observe(event, agentManager.findRuntime(runtimeId)?.cwd);
       if (!sideChat && event.type === "agent_start" && event.__sessionId) {
         delegationCoordinator?.resumeParent(event.__sessionId);
       }
@@ -646,9 +647,16 @@ function installMenu(): void {
 }
 
 import { registerProviderIpcHandlers, desktopProviderStatus, resolveDesktopProvider, resolveDesktopServiceId } from "./providers";
+import { TurnSnapshotService } from "./git/turn-snapshot";
 
 let gitIpc: ReturnType<typeof registerGitIpc> | undefined;
 let fileIpc: ReturnType<typeof registerFileIpc> | undefined;
+/** Recent-turn snapshots are recorded per project; the review panel reads them through Git IPC. */
+const turnSnapshots = new TurnSnapshotService({
+  root: path.join(userDataPath, "review-turns"),
+  resolveProject: (cwd) => resolveInWorkspace(".", cwd),
+  publish: (update) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("git:turn", update); },
+});
 function registerIpc(): void {
   fileIpc = registerFileIpc({
     draftRoot: path.join(userDataPath, "file-drafts"),
@@ -666,6 +674,7 @@ function registerIpc(): void {
     host: () => mainWindow?.webContents,
     resolveProject: (cwd) => resolveInWorkspace(".", cwd),
     recoveryRoot: path.join(userDataPath, "git-recovery"),
+    turns: turnSnapshots,
   });
   registerCapabilitiesIpc({
     resolveWorkspace: (cwd) => resolveInWorkspace(".", cwd),
