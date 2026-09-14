@@ -20,7 +20,7 @@ export interface FileWorkbenchDocument {
 }
 
 /** Presentation shared by the production document controller and isolated Electron fixture. */
-export function FileWorkbench({ projectName, document, entries, query, onQueryChange, onOpen, onExpand, onChange, onSave, onCopyPath, onExternalOpen, location, locationToken, active = true, colorScheme = "light", editorRef, initialExpanded, initialTreeWidth, initialTreeOpen = true, onTreeWidthChange, onTreeOpenChange, navigation, content, notice, onLocate, onRefresh, initialPosition, onPositionChange, actions, externalOpen }: {
+export function FileWorkbench({ projectName, document, entries, query, onQueryChange, onOpen, onExpand, onChange, onSave, onCopyPath, onExternalOpen, location, locationToken, active = true, colorScheme = "light", editorRef, initialExpanded, initialTreeWidth, initialTreeOpen = true, onTreeWidthChange, onTreeOpenChange, navigation, content, notice, onLocate, onRefresh, initialPosition, onPositionChange, actions, externalOpen, editorTools = true }: {
   projectName: string;
   document: FileWorkbenchDocument | null;
   entries: readonly WorkbenchTreeEntry[];
@@ -51,6 +51,7 @@ export function FileWorkbench({ projectName, document, entries, query, onQueryCh
   onPositionChange?(position: EditorPosition): void;
   actions?: ReactNode;
   externalOpen?: ReactNode;
+  editorTools?: boolean;
 }) {
   const { t } = useI18n();
   const [treeOpen, setTreeOpen] = useState(initialTreeOpen);
@@ -62,7 +63,7 @@ export function FileWorkbench({ projectName, document, entries, query, onQueryCh
       {document?.readOnly && <span className="workbench-readonly">{t("workbench.readOnly")}</span>}
       <span className="workbench-toolbar-spacer" />
       {actions}
-      <WorkbenchButton label={t("workbench.wrap")} aria-pressed={wrap} onClick={() => setWrap(!wrap)}><WrapText size={16} /></WorkbenchButton>
+      {editorTools && <WorkbenchButton label={t("workbench.wrap")} aria-pressed={wrap} onClick={() => setWrap(!wrap)}><WrapText size={16} /></WorkbenchButton>}
       {onCopyPath && <WorkbenchButton label={t("workbench.copyPath")} disabled={!document} onClick={onCopyPath}><Copy size={16} /></WorkbenchButton>}
       {onLocate && <WorkbenchButton label={t("fileView.locate")} disabled={!document} onClick={() => { setTreeOpen(true); onTreeOpenChange?.(true); onLocate(); }}><LocateFixed size={16} /></WorkbenchButton>}
       {onRefresh && <WorkbenchButton label={t("workbench.refresh")} onClick={onRefresh}><RefreshCw size={16} /></WorkbenchButton>}
@@ -76,7 +77,7 @@ export function FileWorkbench({ projectName, document, entries, query, onQueryCh
     navigation={navigation ?? <WorkbenchFileTree entries={entries} selectedPath={document?.path} query={query} onQueryChange={onQueryChange}
       onOpen={onOpen} onExpand={onExpand} initialExpanded={initialExpanded} />}>
     {content ?? (document ? <Suspense fallback={<p className="workbench-empty" role="status">{t("workbench.editorLoading")}</p>}>
-      <CodeEditor ref={editorRef} documentId={document.id} path={document.path} value={document.content} readOnly={document.readOnly}
+      <CodeEditor key={document.id} ref={editorRef} documentId={document.id} path={document.path} value={document.content} readOnly={document.readOnly}
         wrap={wrap} colorScheme={colorScheme} active={active} location={location} locationToken={locationToken} onChange={onChange} onSave={onSave} initialPosition={initialPosition} onPositionChange={onPositionChange} />
     </Suspense> : <p className="workbench-empty">{t("workbench.selectFile")}</p>)}
   </WorkbenchSurface>;

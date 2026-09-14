@@ -1,4 +1,4 @@
-import type { DirectoryRequest, DocumentReadRequest, DocumentWriteRequest, FileSearchRequest, FileMutationRequest, FileOpenRequest, FileMutation, ProjectPath } from "../../shared/files";
+import type { DirectoryRequest, DocumentReadRequest, DocumentWriteRequest, FileSearchRequest, FileMutationRequest, FileOpenRequest, FileMutation, FileHtmlRequest, ProjectPath } from "../../shared/files";
 import { WorkspaceFileIndex } from "../workspace-file-index";
 import { FileDirectories } from "./file-directory";
 import { FileDocuments } from "./file-document";
@@ -75,6 +75,9 @@ export class FileService {
   previewUrl(request: ProjectPath) { return this.bound(request, false, async () => {
     const bound = await this.paths.resolve(request); return this.previews.url(bound.projectRoot, bound.path);
   }); }
+  renderHtml(request: FileHtmlRequest, owner: number, active: () => void) {
+    return this.bound(request, false, async () => { active(); return this.previews.renderHtml(owner, request); });
+  }
   clear(): void { this.directories.clear(); this.previews.clear(); if (!this.options.index) this.index.clear(); }
   close(): void { this.closed = true; this.subscriptions.close(); this.clear(); }
   async idle(): Promise<void> { await Promise.allSettled([...this.writes, ...this.requests, this.subscriptions.idle()]); }

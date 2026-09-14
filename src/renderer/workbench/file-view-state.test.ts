@@ -4,6 +4,14 @@ beforeEach(() => { const values = new Map<string, string>(); vi.stubGlobal("loca
   removeItem: (key: string) => values.delete(key), getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) }); });
 afterEach(() => vi.unstubAllGlobals());
 describe("file entry points and stored views", () => {
+  it("persists separate preview/source/chunk positions and rejects corrupt or unbounded preview state", () => {
+    const scope = fileScope("/formats", "one");
+    const position = { top: 1200, left: 10, from: 30, to: 40 };
+    writeFileView(scope, "source", { viewMode: "preview", previewPosition: { top: 800, left: 0 }, imageZoom: 1.5, pageOffset: 262144, pagePositions: { 262144: position }, position });
+    expect(readFileView(scope, "source")).toMatchObject({ viewMode: "preview", previewPosition: { top: 800 }, pageOffset: 262144, pagePositions: { 262144: position }, position });
+    writeFileView(scope, "corrupt", { previewPosition: { top: -1, left: 0 }, imageZoom: 5, pageOffset: Infinity, pagePositions: { bad: position, 12: { ...position, from: -1 } } });
+    expect(readFileView(scope, "corrupt")).toEqual({ pagePositions: {} });
+  });
   it("continues migrating valid sessions after malformed storage keys", () => {
     for (const suffix of ["broken", "null", "{}"])
       localStorage.setItem(`tacode:file-tabs:v1:${suffix}`, "{}");

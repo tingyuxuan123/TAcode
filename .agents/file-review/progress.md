@@ -105,3 +105,20 @@
 - 完整生产 App **3 阶段**、两个独立编辑/恢复进程 **12 阶段**、文件工作台 **7 阶段**、文件组件 **5 阶段**、生产 Git **23 阶段**，以及 BrowserPanel/live reload/resize、完整工作台/消息列表、App 文档与深层/201/8000+ 文件检索回归全部通过。工作台刷新 **170.5ms**、App 文档 **168.8ms**、Git **327/333ms**；编辑运行器支持独立报告路径，既有 FR-07/08 证据未覆盖。
 - 详情、原始报告和截图见 `docs/file-review-fr-09.md`、`docs/file-review-reference/fr-09-*.json`。测试的系统打开/定位为参数适配器，Windows 实际执行和分支整合仍待 FR-15；不实现跨卷复制移动。本轮仅 FR-09，专项 **9/15**，下一条 **FR-10：多格式预览与大文件**，尚未开始；完整目标保持 active。
 - 提交仍在独立工作树 `.worktrees/file-review-workbench` / `codex/file-review-workbench`，未合并；原工作区及另一运行任务未修改、切换、重置或停止，既有 UX 清单未改。
+
+## 2026-09-14 FR-10 开始
+
+- 在隔离工作树补多格式预览、版本绑定的超限分块只读和持久阅读状态；HTML 快照绑定独立项目预览域，预览未保存文字不写磁盘。
+- 本轮仅 FR-10，验收前 passes 保持 false；FR-11 尚未开始，原工作区不修改。
+
+## 2026-09-14 FR-10 完成
+
+- Markdown/HTML 源码与预览切换、相对图片/链接、图片与 SVG 预览（签名识别、缩放/适应窗口）、二进制类型大小与显式项目打开、空/缺失/失败/重试/加载/截断状态分别呈现；HTML 快照按项目隔离脚本、相对资源、fetch 和存储，无 Node/工作台桥，未保存文字不落盘。
+- 4 MiB 边界完整可编辑并真实保存；超限按 256 KiB 分块只读、可遍历到尾部且无缝隙，生产服务的部分写回被拒。字节区间工具栏支持开头/上一下一段/末尾和字节直达，每个分块独立保存精确滚动与选区，外部版本刷新、renderer reload 和窄窗英文布局都保持当前页。
+- 阅读位置与视图状态按项目+会话+路径持久化：源码位置、预览滚动、图片缩放、当前分块和各分块位置互相独立，越界/损坏数据丢弃。新增 HTML 快照注册表（owner/项目绑定、4 MiB+8 KiB 单份、16 份/64 MiB 上限、导航/崩溃/销毁释放）与生产预览协议承载快照。
+- 修复本轮发现的真实缺陷：HTML 预览重新激活偶发 15 秒不刷新（修复前 22 次运行失败 4 次，约 18%）。快照时间线证明新快照已创建却没有协议请求，iframe 的 `src` 与活动子 frame 不一致。原因是 effect 依赖整个 document 对象、每次状态变化都改写活动 iframe 的 `src`，在旧文档仍加载时 Chromium 丢弃导航。改为只依赖文档版本、每份快照独立 iframe 元素、替换后才释放旧快照、卸载释放显示中的快照；修复后同一烟测连续 **12 次全部通过**，重复建快照同步减少。
+- 最终全量 **142 文件 / 1197 用例**（110.32s，`--maxWorkers=1`）、typecheck、build、diff check 通过。原生 `test:file-formats` **10 阶段**、遍历 **32 个分块**、准确保存 4 MiB，结束后文件/Git 资源与 HTML 快照为 0，网络与 renderer 错误为空（[fr-10-result.json](docs/file-review-reference/fr-10-result.json)）。
+- 回归：编辑/重启恢复 **12 阶段**（[fr-10-editing-result.json](docs/file-review-reference/fr-10-editing-result.json)）、完整生产 App 退出 **3 阶段**（恢复文字精确、磁盘未改写）、文件工作台 **7 阶段**（刷新 **162.8 ms**，[fr-10-workbench-result.json](docs/file-review-reference/fr-10-workbench-result.json)）、文件组件 **5 阶段**、生产 Git **23 阶段**（刷新 **324/340 ms**）、BrowserPanel/live reload/resize、真实 App 文档（**127.2 ms**）与深层/201/8000+ 文件检索全部通过；专项网络、renderer 错误和关闭后资源为 0，中英文最终截图已检查。
+- 夹具修正：`scripts/fixtures/file-workbench.html` 的 CSP 与生产 `index.html` 对齐（预览 frame、blob 图片、wasm），App 文档烟测的超限文案断言更新为新的分块只读文案（仍断言截断状态出现），未放宽任何行为断言。
+- 详情与边界见 `docs/file-review-fr-10.md`。分块只读是设计约束，不实现大文件流式编辑；Windows、性能和分支整合仍待 FR-15；渲染层快照生命周期由原生烟测覆盖，仓库无 DOM 单测环境。
+- 专项 **10/15**；下一条仅 **FR-11：最近一轮审查**。提交仍在本工作树隔离分支、未合并；原工作区及另一运行任务未修改、切换、重置或停止，既有 UX 清单未改。

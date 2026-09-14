@@ -1,4 +1,5 @@
 export const DOCUMENT_EDIT_BYTES = 4 * 1024 * 1024;
+export const DOCUMENT_PAGE_BYTES = 256 * 1024;
 
 export type FileErrorCode = "invalidRequest" | "outsideProject" | "missing" | "notDirectory" | "notFile" | "changedDuringRead"
   | "staleCursor" | "conflict" | "readOnly" | "tooLarge" | "invalidEncoding" | "cancelled" | "exists" | "unavailable" | "failed";
@@ -28,6 +29,7 @@ export interface FileMetadata {
   encoding: "utf8" | "binary" | "invalid";
   offset: number;
   nextOffset?: number;
+  mediaType?: string;
 }
 export interface FileDocument extends ProjectPath {
   kind: "document";
@@ -37,7 +39,9 @@ export interface FileDocument extends ProjectPath {
   metadata: FileMetadata;
   previewUrl?: string;
 }
-export interface DocumentReadRequest extends ProjectPath { offset?: number; length?: number }
+export interface DocumentReadRequest extends ProjectPath { offset?: number; length?: number; expectedVersion?: string }
+export interface FileHtmlRequest extends ProjectPath { html: string }
+export interface FileHtmlPreview { kind: "htmlPreview"; id: string; url: string }
 export interface DocumentWriteRequest extends ProjectPath { content: string; expectedVersion: string }
 export type DocumentWriteResult = { kind: "saved"; document: FileDocument } | FileError;
 export interface FileDraft extends ProjectPath {
@@ -88,6 +92,8 @@ export interface FilesApi {
   reveal(request: ProjectPath): Promise<FileActionResult>;
   onMutation(listener: (mutation: FileMutation) => void): () => void;
   previewUrl(request: ProjectPath): Promise<string | FileError>;
+  renderHtml(request: FileHtmlRequest): Promise<FileHtmlPreview | FileError>;
+  releaseHtml(id: string): Promise<void>;
   subscribe(request: FileSubscribeRequest): Promise<{ mode: "native" | "polling" } | FileError>;
   unsubscribe(subscriptionId: string): Promise<void>;
   onUpdate(listener: (update: FileUpdate) => void): () => void;

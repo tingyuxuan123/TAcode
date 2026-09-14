@@ -11,6 +11,8 @@ export async function serveProjectPreview(request: Request, paths: ProjectFilePa
     const name = decodeURIComponent(url.pathname).replace(/^\//, "");
     const bound = await paths.resolve({ projectRoot: root, path: name });
     if (!bound.exists || !(await fs.stat(bound.file)).isFile()) return new Response("Not found", { status: 404 });
+    const snapshot = url.searchParams.get("tacode-html-preview");
+    if (snapshot) return new Response(registry.htmlSource(url.host, name, snapshot), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
     return await net.fetch(pathToFileURL(bound.file).toString());
   } catch (error) {
     return new Response(error instanceof Error ? error.message : "Forbidden", { status: error instanceof URIError ? 400 : 403 });

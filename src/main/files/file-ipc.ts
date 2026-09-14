@@ -45,7 +45,7 @@ export function registerFileIpc(options: FileServiceOptions & { host(): WebConte
     if (options.host() !== host || event.senderFrame !== host.mainFrame) throw new ProjectFileError("outsideProject", "Files are available only to the workbench main frame");
     if (!owners.has(host.id)) {
       const entry = { generation: 0, cleanup: () => {} };
-      const release = () => { entry.generation++; service.subscriptions.releaseOwner(host.id); };
+      const release = () => { entry.generation++; service.subscriptions.releaseOwner(host.id); service.previews.releaseHtml(host.id); };
       const navigation = (_event: Electron.Event, _url: string, inPlace: boolean, main: boolean) => { if (main && !inPlace) release(); };
       const destroyed = () => { release(); entry.cleanup(); };
       entry.cleanup = () => {
@@ -78,6 +78,10 @@ export function registerFileIpc(options: FileServiceOptions & { host(): WebConte
       if (typeof value[key] !== "number" || !Number.isSafeInteger(value[key])) throw new ProjectFileError("invalidRequest", "Invalid document byte range");
       request[key] = value[key];
     }
+    if (value.expectedVersion !== undefined) {
+      if (typeof value.expectedVersion !== "string") throw new ProjectFileError("invalidRequest", "Invalid expected document version");
+      request.expectedVersion = value.expectedVersion;
+    }
     return service.readDocument(request);
   });
   handle("files:write-document", (_host, raw, active) => {
@@ -95,6 +99,11 @@ export function registerFileIpc(options: FileServiceOptions & { host(): WebConte
     await drafts.remove(parseProjectPath(raw), active); return { kind: "checkpointed" };
   });
   handle("files:preview-url", (_host, raw) => service.previewUrl(parseProjectPath(raw)));
+  handle("files:render-html", (host, raw, active) => {
+    const value = record(raw); if (typeof value.html !== "string") throw new ProjectFileError("invalidRequest", "Invalid HTML preview");
+    return service.renderHtml({ ...parseProjectPath(raw), html: value.html }, host.id, active);
+  });
+  handle("files:release-html", (host, raw) => service.previews.releaseHtml(host.id, fileSubscriptionId(raw)));
   handle("files:inspect", (_host, raw) => service.inspect(parseProjectPath(raw)));
   handle("files:location", (_host, raw) => service.location(parseProjectPath(raw, true)));
   handle("files:editors", async () => ({ kind: "editors", editors: await service.editors() }));

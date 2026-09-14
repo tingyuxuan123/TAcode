@@ -47,6 +47,44 @@ describe("production files IPC", () => {
     expect(await invoke("files:write-document", { ...request(), expectedVersion: document.version, content: "stale" })).toMatchObject({ kind: "error", error: { code: "conflict" } });
   });
 
+  it("authorizes HTML snapshots only for the main frame and validates previews and page versions", async () => {
+    for (const channel of ["files:render-html", "files:release-html"]) expect(await invoke(channel, { ...request(), html: "<h1>Draft</h1>" }, { sender: host, senderFrame: {} } as IpcMainInvokeEvent)).toMatchObject({ error: { code: "outsideProject" } });
+    for (const raw of [{ ...request(), html: [] }, { ...request(), html: "\0" }, { ...request(), path: "../secret", html: "text" }]) expect(await invoke("files:render-html", raw)).toMatchObject({ kind: "error" });
+    expect(await invoke("files:release-html", "bad\ntoken")).toMatchObject({ error: { code: "invalidRequest" } });
+    for (const expectedVersion of [1, "bad", "a".repeat(64)]) expect(await invoke("files:read-document", { ...request(), expectedVersion })).toMatchObject({ kind: "error", error: { code: expectedVersion === "a".repeat(64) ? "conflict" : "invalidRequest" } });
+    const preview = await invoke("files:render-html", { ...request(), html: "<h1>Unsaved</h1>" });
+    expect(preview).toMatchObject({ kind: "htmlPreview" });
+    const url = new URL(preview.url);
+    expect(registration.service.previews.htmlSource(url.host, "source", preview.id)).toBe("<h1>Unsaved</h1>");
+    expect(await fs.readFile(path.join(root, "source"), "utf8")).toBe("old");
+    registration.service.previews.releaseHtml(host.id + 1, preview.id);
+    expect(registration.service.previews.stats().htmlSnapshots).toBe(1);
+    await invoke("files:release-html", preview.id);
+    expect(registration.service.previews.stats()).toEqual({ htmlSnapshots: 0, htmlBytes: 0 });
+  });
+
+  it("releases HTML snapshots on navigation, crash and destruction, and cancels late preparation", async () => {
+    const owner = host as unknown as EventEmitter;
+    for (const signal of ["did-start-navigation", "render-process-gone", "destroyed"]) {
+      expect(await invoke("files:render-html", { ...request(), html: "draft" })).toMatchObject({ kind: "htmlPreview" });
+      if (signal === "did-start-navigation") {
+        owner.emit(signal, {}, "file:///anchor", true, true);
+        owner.emit(signal, {}, "harness-preview://child", false, false);
+        expect(registration.service.previews.stats().htmlSnapshots).toBe(1);
+        owner.emit(signal, {}, "file:///reload", false, true);
+      } else owner.emit(signal);
+      expect(registration.service.previews.stats()).toEqual({ htmlSnapshots: 0, htmlBytes: 0 });
+    }
+    registration.dispose();
+    let release!: () => void; let entered!: () => void;
+    const held = new Promise<void>((resolve) => { entered = resolve; });
+    registration = registerFileIpc({ host: () => host, resolveProject: async () => { entered(); await new Promise<void>((resolve) => { release = resolve; }); return root; } });
+    const pending = invoke("files:render-html", { ...request(), html: "late draft" }); await held;
+    owner.emit("did-start-navigation", {}, "file:///reload", false, true); release();
+    expect(await pending).toMatchObject({ error: { code: "cancelled" } });
+    expect(registration.service.previews.stats()).toEqual({ htmlSnapshots: 0, htmlBytes: 0 });
+  });
+
   it("cancels pending subscriptions and writes during main-frame navigation, and removes all listeners on disposal", async () => {
     const document = await invoke("files:read-document", request());
     let release!: () => void; let entered!: () => void; const held = new Promise<void>((resolve) => { entered = resolve; });

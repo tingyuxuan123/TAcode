@@ -1,15 +1,22 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, ChevronsLeft, ChevronsRight, Code2, Eye } from "lucide-react";
 import { useI18n } from "../i18n";
 import { FileWorkbench } from "./file-workbench";
 import { editableDocument, useFileDocument } from "./file-document-store";
 import { FileEditDialog } from "./file-editing";
 import { ProjectFileTree } from "./project-file-tree";
-import { readFileView, writeFileView, type FileViewState } from "./file-view-state";
+import { readFileView, writeFileView, type EditorPosition, type FileViewState } from "./file-view-state";
 import { useWorkbenchVisible } from "./use-workbench-visible";
 import type { SourceLocation, WorkbenchTreeEntry } from "./types";
 import { useFileActions } from "./file-actions";
 import type { CodeEditorHandle } from "./code-editor";
+import { WorkbenchButton } from "./controls";
+import { BinarySummary, HtmlPreview, ImagePreview, MarkdownPreview } from "./file-preview-content";
+import { filePreviewKind } from "../../shared/file-format";
+import { DOCUMENT_PAGE_BYTES } from "../../shared/files";
+import { useFilePage } from "./use-file-page";
 const CodeEditor = lazy(() => import("./code-editor").then((module) => ({ default: module.CodeEditor })));
+type FileViewChange = Partial<FileViewState> | ((view: FileViewState) => Partial<FileViewState>);
 
 export interface ProjectFilePanelProps {
   root: string; scope: string; path?: string; active: boolean; location?: SourceLocation; reveal?: number;
@@ -25,8 +32,8 @@ function FileView(props: ProjectFilePanelProps) {
   const view = useRef(readFileView(scope, path ?? ""));
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [reveal, setReveal] = useState(0);
-  const update = useCallback((change: Partial<FileViewState>) => {
-    view.current = { ...view.current, ...change }; clearTimeout(timer.current);
+  const update = useCallback((change: FileViewChange) => {
+    view.current = { ...view.current, ...(typeof change === "function" ? change(view.current) : change) }; clearTimeout(timer.current);
     timer.current = setTimeout(() => writeFileView(scope, path ?? "", view.current), 150);
   }, [scope, path]);
   useEffect(() => () => { clearTimeout(timer.current); writeFileView(scope, path ?? "", view.current); }, [scope, path]);
@@ -35,13 +42,14 @@ function FileView(props: ProjectFilePanelProps) {
   const actions = useFileActions(root, path, onOpen, () => editor.current?.getLocation());
   const navigateFromTree = (value: string, options?: { preview?: boolean; literal?: boolean }) => {
     // A newly opened tab inherits navigation so a second click still reaches the same row.
-    if (value !== path && !Object.keys(readFileView(scope, value)).length) writeFileView(scope, value, { ...view.current, position: undefined });
+    if (value !== path && !Object.keys(readFileView(scope, value)).length) writeFileView(scope, value, { ...view.current, position: undefined,
+      viewMode: undefined, previewPosition: undefined, imageZoom: undefined, pageOffset: undefined, pagePositions: undefined });
     onOpen(value, options);
   };
   const navigation = <ProjectFileTree root={root} path={path} active={visible && treeVisible} view={view.current} onViewChange={update} onOpen={navigateFromTree} changes={changes} reveal={reveal + (props.reveal ?? 0)}
     onMenu={actions.openMenu} onCreate={actions.create} />;
   return <div ref={ref} className="project-file-panel" data-file-project={root} data-file-path={path ?? ""} data-file-active={visible}>
-    {path ? <DocumentView {...props} active={visible} navigation={navigation} view={view.current} update={update} actions={actions} editor={editor} onLocate={() => { setTreeVisible(true); setReveal((value) => value + 1); }}
+    {path ? <DocumentView {...props} active={visible} navigation={navigation} view={view} update={update} actions={actions} editor={editor} onLocate={() => { setTreeVisible(true); setReveal((value) => value + 1); }}
       onTreeOpen={(open) => { setTreeVisible(open); update({ treeOpen: open }); }} />
       : <FileWorkbench projectName={root.split(/[\\/]/).pop() ?? root} document={null} entries={[]} query="" onQueryChange={() => {}} onOpen={onOpen}
         actions={actions.toolbar} initialTreeWidth={view.current.treeWidth} initialTreeOpen={view.current.treeOpen} onTreeWidthChange={(treeWidth) => update({ treeWidth })}
@@ -50,7 +58,7 @@ function FileView(props: ProjectFilePanelProps) {
   </div>;
 }
 function DocumentView({ root, path = "", active, location, reveal, onOpen, navigation, view, update, onLocate, onTreeOpen, actions, editor }: ProjectFilePanelProps & {
-  navigation: React.ReactNode; view: FileViewState; update(change: Partial<FileViewState>): void; onLocate(): void; onTreeOpen(open: boolean): void;
+  navigation: React.ReactNode; view: React.RefObject<FileViewState>; update(change: FileViewChange): void; onLocate(): void; onTreeOpen(open: boolean): void;
   actions: ReturnType<typeof useFileActions>; editor: React.Ref<CodeEditorHandle>;
 }) {
   const { t } = useI18n(); const state = useFileDocument(root, path, active);
@@ -58,15 +66,46 @@ function DocumentView({ root, path = "", active, location, reveal, onOpen, navig
   // Hidden editors have no scroll box; apply shared disk updates when visible.
   if (active) displayed.current = { document: state.document, draft: state.draft };
   const { document, draft } = displayed.current ?? {};
+  const kind = filePreviewKind(path, document?.metadata.mediaType);
+  const [mode, setMode] = useState(view.current.viewMode);
+  const canRender = document && document.status !== "missing" && (kind === "image" || kind && (draft || document.status !== "binary" && document.status !== "truncated"));
+  const rendered = Boolean(canRender && (mode ?? (kind === "markdown" || kind === "image" ? "preview" : "source")) === "preview");
+  const page = useFilePage(document, active && !rendered && !draft, view.current.pageOffset, (pageOffset) => update({ pageOffset }));
+  const shown = !draft && document?.status === "truncated" && !rendered ? page.document : document;
+  const imageDocument = useMemo(() => document && draft ? { ...document, content: draft.content } : document, [document, draft]);
   const [actionError, setActionError] = useState<string>();
   const [comparison, setComparison] = useState<{ version?: string; content: string | null; writable: boolean }>();
   const compare = () => setComparison({ version: document?.version, content: document?.content ?? null, writable: editableDocument(document) });
-  const source = draft || document?.content !== null && document?.content !== undefined ? { id: state.key, path,
-    content: draft?.content ?? document!.content!, readOnly: Boolean(state.mutating) || !draft && (!editableDocument(document) || Boolean(state.recoveryError || state.recoveryLoading)), dirty: state.dirty, saving: state.saving } : null;
+  const source = draft || shown?.content !== null && shown?.content !== undefined ? { id: document?.status === "truncated" && !draft ? `${state.key}:${page.offset}` : state.key, path,
+    content: draft?.content ?? shown!.content!, readOnly: Boolean(state.mutating) || !draft && (!editableDocument(document) || Boolean(state.recoveryError || state.recoveryLoading)), dirty: state.dirty, saving: state.saving } : null;
   const save = () => { if (state.conflict) compare(); else void state.save(); };
-  const content = draft ? undefined : !document ? <p className="workbench-empty" role="status">{state.loading ? t("preview.reading") : t("preview.failed")}</p>
-    : document.status === "missing" ? <p className="workbench-empty">{t("preview.missing")}</p>
-      : document.status === "binary" ? <p className="workbench-empty">{t(document.metadata.encoding === "invalid" ? "fileView.invalidEncoding" : "preview.binary")}</p> : undefined;
+  const pagePositions = useRef(new Map(Object.entries(view.current.pagePositions ?? {})));
+  const rememberPosition = (position: EditorPosition) => {
+    if (document?.status !== "truncated" || draft) { update({ position }); return; }
+    const key = String(page.offset); pagePositions.current.delete(key); pagePositions.current.set(key, position);
+    while (pagePositions.current.size > 24) pagePositions.current.delete(pagePositions.current.keys().next().value!);
+    update({ pagePositions: Object.fromEntries(pagePositions.current) });
+  };
+  useEffect(() => {
+    if (!active || !rendered) return;
+    const keyboard = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && !event.isComposing) { event.preventDefault(); save(); } };
+    window.addEventListener("keydown", keyboard); return () => window.removeEventListener("keydown", keyboard);
+  }, [active, rendered, save]);
+  const changeMode = (next: "source" | "preview") => { setMode(next); update({ viewMode: next }); };
+  const modes = canRender && (draft || document!.content !== null) ? <div className="file-view-modes" role="group" aria-label={t("filePreview.mode")}>
+    <WorkbenchButton label={t("filePreview.source")} aria-pressed={!rendered} onClick={() => changeMode("source")}><Code2 size={15} /></WorkbenchButton>
+    <WorkbenchButton label={t("filePreview.preview")} aria-pressed={rendered} onClick={() => changeMode("preview")}><Eye size={15} /></WorkbenchButton>
+  </div> : undefined;
+  const body = draft?.content ?? document?.content ?? "";
+  const content = rendered && active && document?.previewUrl ? kind === "markdown" ? <MarkdownPreview body={body} url={document.previewUrl}
+    position={view.current.previewPosition} onPosition={(previewPosition) => update({ previewPosition })} onOpen={onOpen} />
+    : kind === "html" ? <HtmlPreview request={{ projectRoot: root, path }} body={body} url={document.previewUrl} active={active} revision={document}
+      position={view.current.previewPosition} onPosition={(previewPosition) => update({ previewPosition })} />
+      : imageDocument ? <ImagePreview document={imageDocument} zoom={view.current.imageZoom} onZoom={(imageZoom) => update({ imageZoom })}
+        position={view.current.previewPosition} onPosition={(previewPosition) => update({ previewPosition })} /> : undefined
+    : rendered ? <div className="file-preview-suspended" /> : draft ? undefined : !document || document.status === "truncated" && !shown ? <p className="workbench-empty" role="status">{state.loading || page.loading ? t("preview.reading") : t("preview.failed")}</p>
+      : document.status === "missing" ? <p className="workbench-empty">{t("preview.missing")}</p>
+        : shown?.status === "binary" ? <BinarySummary document={shown} /> : undefined;
   const notice = <>
     {actionError && <div className="file-document-notice" role="alert">{actionError}</div>}
     {state.recoveryError && <div className="file-document-notice" role="alert"><span>{t("fileEdit.recoveryLoadFailed")} {state.recoveryError.message}</span><button type="button" onClick={state.refresh}>{t("common.retry")}</button></div>}
@@ -82,13 +121,28 @@ function DocumentView({ root, path = "", active, location, reveal, onOpen, navig
     {document?.status === "missing" && draft && <div className="file-document-notice" role="alert">{t("fileEdit.deletedDraft")}</div>}
     {document?.status === "empty" && !draft && <div className="file-document-notice" role="status">{t("preview.empty")}</div>}
     {document?.status === "truncated" && <div className="file-document-notice" role="status">{t("fileView.truncated")}</div>}
+    {document?.status === "truncated" && !rendered && !draft && <div className="file-page-tools" data-file-page-version={shown?.version} data-file-offset={page.offset}>
+      <span role="status">{shown ? t("filePreview.range", { from: shown.metadata.offset, to: shown.metadata.offset + shown.metadata.readBytes, size: document.metadata.size }) : t("preview.reading")}</span>
+      <WorkbenchButton label={t("filePreview.first")} disabled={page.loading || page.offset === 0} onClick={() => page.go(0)}><ChevronsLeft size={15} /></WorkbenchButton>
+      <WorkbenchButton label={t("filePreview.previous")} disabled={page.loading || page.offset === 0} onClick={page.previous}><ArrowLeft size={15} /></WorkbenchButton>
+      <form onSubmit={(event) => { event.preventDefault(); page.go(Number(new FormData(event.currentTarget).get("offset"))); }}>
+        <input key={page.offset} type="number" name="offset" aria-label={t("filePreview.offset")} min={0} max={document.metadata.size - 1} step={1} defaultValue={page.offset} disabled={page.loading} />
+      </form>
+      <WorkbenchButton label={t("filePreview.next")} disabled={page.loading || !shown?.metadata.nextOffset} onClick={() => page.go(shown!.metadata.nextOffset!)}><ArrowRight size={15} /></WorkbenchButton>
+      <WorkbenchButton label={t("filePreview.last")} disabled={page.loading || !shown?.metadata.nextOffset} onClick={() => page.go(Math.max(0, document.metadata.size - DOCUMENT_PAGE_BYTES))}><ChevronsRight size={15} /></WorkbenchButton>
+    </div>}
+    {page.error && document?.status === "truncated" && !rendered && <div className="file-document-notice" role="alert"><span>{t("preview.failed")} {page.error.message}</span>
+      <button type="button" onClick={() => { page.retry(); state.refresh(); }}>{t("common.retry")}</button></div>}
+    {state.loading && document && <div className="file-document-notice" role="status">{t("preview.reading")}</div>}
   </>;
   return <><FileWorkbench projectName={root.split(/[\\/]/).pop() ?? root} document={source ?? (document ? { id: state.key, path, content: "", readOnly: true } : null)}
     entries={[]} query="" onQueryChange={() => {}} onOpen={onOpen} location={location} locationToken={reveal} active={active} navigation={navigation} content={content} notice={notice}
-    initialTreeWidth={view.treeWidth} initialTreeOpen={view.treeOpen} onTreeWidthChange={(treeWidth) => update({ treeWidth })} onTreeOpenChange={onTreeOpen}
-    initialPosition={view.position} onPositionChange={(position) => update({ position })} onLocate={onLocate} onRefresh={state.refresh}
+    initialTreeWidth={view.current.treeWidth} initialTreeOpen={view.current.treeOpen} onTreeWidthChange={(treeWidth) => update({ treeWidth })} onTreeOpenChange={onTreeOpen}
+    initialPosition={document?.status === "truncated" && !draft ? view.current.pagePositions?.[String(page.offset)] : view.current.position}
+    onPositionChange={rememberPosition}
+    onLocate={onLocate} onRefresh={() => { page.retry(); state.refresh(); }} editorTools={!rendered && Boolean(source)}
     onChange={state.edit} onSave={save}
-    actions={actions.toolbar} externalOpen={actions.openButton} editorRef={editor}
+    actions={<>{modes}{actions.toolbar}</>} externalOpen={actions.openButton} editorRef={editor}
     onCopyPath={actions.copyRelative}
     />
     {comparison && <FileEditDialog title={t("fileEdit.conflictTitle")} className="file-conflict-dialog" onCancel={() => { if (!state.saving) setComparison(undefined); }}>

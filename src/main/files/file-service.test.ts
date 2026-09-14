@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { watch, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DOCUMENT_EDIT_BYTES, type FileUpdate } from "../../shared/files";
+import { DOCUMENT_EDIT_BYTES, DOCUMENT_PAGE_BYTES, type FileUpdate } from "../../shared/files";
 import { WorkspaceFileIndex } from "../workspace-file-index";
 import { FileService } from "./file-service";
 
@@ -18,6 +18,31 @@ beforeEach(async () => {
 afterEach(async () => { service.close(); await service.idle(); await fs.rm(directory, { recursive: true, force: true }); });
 
 describe("complete project files", () => {
+  it("keeps the exact 4 MiB boundary editable and pages oversized UTF-8 without gaps or replacement characters", async () => {
+    await write("boundary.txt", "a".repeat(DOCUMENT_EDIT_BYTES));
+    expect(await service.readDocument(request("boundary.txt"))).toMatchObject({ status: "text", metadata: { size: DOCUMENT_EDIT_BYTES, readBytes: DOCUMENT_EDIT_BYTES, writable: true } });
+    const body = "\uFEFF" + "汉字😀\r\n".repeat(350000) + "尾部"; await write("large.txt", body);
+    let page = await service.readDocument(request("large.txt")); const version = page.version; const chunks: string[] = [];
+    expect(page.metadata.readBytes).toBeLessThanOrEqual(DOCUMENT_PAGE_BYTES);
+    while (true) {
+      expect(page.status).toBe("truncated"); expect(page.metadata.writable).toBe(false); expect(page.version).toBe(version);
+      expect(page.content).not.toBeNull(); chunks.push(page.content!);
+      if (page.metadata.nextOffset === undefined) break;
+      page = await service.readDocument({ ...request("large.txt"), offset: page.metadata.nextOffset, expectedVersion: version });
+    }
+    expect(chunks.join("")).toBe(body.slice(1));
+    await expect(service.writeDocument({ ...request("large.txt"), content: chunks.at(-1)!, expectedVersion: version! })).rejects.toMatchObject({ code: "tooLarge" });
+    await write("large.txt", body.replace("尾部", "后来"));
+    await expect(service.readDocument({ ...request("large.txt"), offset: DOCUMENT_PAGE_BYTES, expectedVersion: version })).rejects.toMatchObject({ code: "conflict" });
+    await expect(service.readDocument({ ...request("large.txt"), expectedVersion: "bad" })).rejects.toMatchObject({ code: "invalidRequest" });
+  });
+  it("reports actual image signatures and types while keeping raster data read-only", async () => {
+    await write("renamed.bin", Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]));
+    await write("image.gif", "GIF89a"); await write("shape.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    expect(await service.readDocument(request("renamed.bin"))).toMatchObject({ status: "binary", content: null, metadata: { mediaType: "image/png", writable: false } });
+    expect(await service.readDocument(request("image.gif"))).toMatchObject({ status: "binary", content: null, metadata: { mediaType: "image/gif", writable: false } });
+    expect(await service.readDocument(request("shape.svg"))).toMatchObject({ status: "text", metadata: { mediaType: "image/svg+xml", writable: true } });
+  });
   it("pages every directory entry, rejects stale/cross-scope cursors and browses hidden/ignored subtrees", async () => {
     for (let index = 0; index < 205; index++) await write(`dir/file-${String(index).padStart(3, "0")}.txt`, "x");
     await write(".hidden/deep.txt", "hidden"); await write("node_modules/pkg/entry.js", "generated");

@@ -43,7 +43,7 @@ export async function testFilePreview(main: BrowserWindow, project: string, cont
   await writeFile(path.join(project, "note.txt"), ""); await wait(() => evaluate(`${panel}.textContent.includes('这是一个空文件')`), "empty");
   controls.fail = true; await writeFile(path.join(project, "note.txt"), "retry content"); await wait(() => evaluate(`!!${panel}.querySelector('[role=alert]')`), "error");
   controls.fail = false; await evaluate(`${panel}.querySelector('[role=alert] button').click()`); await wait(() => evaluate(`${body}.textContent.includes('retry content')&&!${panel}.querySelector('[role=alert]')`), "retry");
-  controls.maxBytes = 4096; await writeFile(path.join(project, "note.txt"), "x".repeat(5000)); await wait(() => evaluate(`${panel}.textContent.includes('文件较大，当前仅显示开头')`), "truncated");
+  controls.maxBytes = 4096; await writeFile(path.join(project, "note.txt"), "x".repeat(5000)); await wait(() => evaluate(`${panel}.textContent.includes('文件超过完整编辑上限，当前分块只读')`), "truncated");
   await evaluate("Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.__copiedFilePath=text}}})");
   await evaluate(`${panel}.querySelector('button[aria-label=\"复制文件路径\"]').click()`); assert.equal(await evaluate("window.__copiedFilePath"), "note.txt");
   console.log(`App unified document smoke passed: ${refreshMs.toFixed(1)} ms refresh, scroll, hidden pause/reactivation, stale response, delete/empty/retry/truncated status and copy path.`);

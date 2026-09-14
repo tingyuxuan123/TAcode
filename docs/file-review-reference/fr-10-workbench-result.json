@@ -1,0 +1,29 @@
+{
+  "date": "2026-09-14T12:29:43.407Z",
+  "platform": "darwin",
+  "os": "25.6.0",
+  "stages": [
+    "Complete production index: file 201/8001, preview replacement and native double-click pin",
+    "Hidden/ignored directory expansion, literal colon filename and native tree keyboard open",
+    "Markdown, process rows, change summary and real Git review share one project/path tab and open the drawer",
+    "Native tab menu pin, drag reorder and keyboard reorder",
+    "Locate/filter reset, width/selection/scroll persistence and timely external update",
+    "Two same-name projects/sessions stay isolated; reload restores tab order, active file, width and reading positions",
+    "Close other files preserves tool panels; English/narrow layout, hidden pause/reactivation and owner cleanup"
+  ],
+  "refreshMs": 162.81154199999946,
+  "errors": [],
+  "network": [],
+  "resources": {
+    "subscriptions": 0,
+    "roots": 0,
+    "reads": 0
+  },
+  "git": {
+    "projects": 0,
+    "subscriptions": 0,
+    "reads": 0
+  },
+  "artifacts": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-workbench-artifacts-vQgG9l",
+  "boundary": "Production preload/files+Git IPC and WorkbenchPanels with native Chromium mouse/keyboard; temporary APFS projects."
+}

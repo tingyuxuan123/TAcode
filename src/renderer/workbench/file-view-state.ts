@@ -1,8 +1,12 @@
 import type { SourceLocation } from "./types";
 import { mutatedPath, pathWithin, type FileMutation } from "../../shared/files";
 
-export interface EditorPosition { top: number; left: number; from: number; to: number }
-export interface FileViewState { treeWidth?: number; treeOpen?: boolean; expanded?: string[]; treeScroll?: number; query?: string; position?: EditorPosition }
+export interface ScrollPosition { top: number; left: number }
+export interface EditorPosition extends ScrollPosition { from: number; to: number }
+export interface FileViewState {
+  treeWidth?: number; treeOpen?: boolean; expanded?: string[]; treeScroll?: number; query?: string; position?: EditorPosition;
+  viewMode?: "source" | "preview"; previewPosition?: ScrollPosition; imageZoom?: number; pageOffset?: number; pagePositions?: Record<string, EditorPosition>;
+}
 export interface SavedFileTab { path: string; preview: boolean; location?: SourceLocation }
 export interface SavedFileTabs { tabs: SavedFileTab[]; activePath?: string }
 export const fileScope = (root: string | undefined, session?: string): string => JSON.stringify([root ?? "", session ?? ""]);
@@ -29,6 +33,14 @@ export function readFileView(scope: string, path: string): FileViewState {
   if (Array.isArray(value.expanded)) state.expanded = value.expanded.filter((item) => typeof item === "string" && item.length <= 4096).slice(0, 2000);
   const position = value.position;
   if (position && [position.top, position.left, position.from, position.to].every((item) => finite(item))) state.position = position;
+  if (value.viewMode === "source" || value.viewMode === "preview") state.viewMode = value.viewMode;
+  if (value.previewPosition && [value.previewPosition.top, value.previewPosition.left].every((item) => finite(item))) state.previewPosition = value.previewPosition;
+  if (finite(value.imageZoom, 4)) state.imageZoom = value.imageZoom;
+  if (finite(value.pageOffset, Number.MAX_SAFE_INTEGER)) state.pageOffset = value.pageOffset;
+  if (value.pagePositions && typeof value.pagePositions === "object") {
+    state.pagePositions = Object.fromEntries(Object.entries(value.pagePositions).filter(([offset, position]) =>
+      /^\d+$/.test(offset) && finite(Number(offset), Number.MAX_SAFE_INTEGER) && position && [position.top, position.left, position.from, position.to].every((item) => finite(item))).slice(-24));
+  }
   return state;
 }
 export function writeFileView(scope: string, path: string, state: FileViewState): void {
