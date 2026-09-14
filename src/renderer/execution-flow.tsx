@@ -3,6 +3,7 @@ import { Brain, ChevronRight, CircleAlert, CircleHelp, FilePenLine, FileText, Gl
 import { FileIcon } from "@react-symbols/icons/utils";
 import { baseName, toolRow, workspaceRelative, type buildTurnPresentation, type ToolActivity, type WorkItem } from "./conversation";
 import { useI18n } from "./i18n";
+import { useScrollPin } from "./use-follow-scroll";
 
 type Presentation = ReturnType<typeof buildTurnPresentation>;
 type TextRenderer = (text: string, streaming?: boolean) => ReactNode;
@@ -33,11 +34,16 @@ const Thought = memo(function Thought({ itemId, text, active, expanded, pending,
 }) {
   const { t } = useI18n();
   const bodyId = useId();
-  // 展开块有高度上限：流式中内容在块内部增长，只要用户没有往上翻（距底 8px 内
-  // 算贴着底），就自动跟到最新一句；同 CodeBlock 的内部跟随行为。
+  // 展开块有高度上限：流式中内容在块内部增长，只要用户没有往上翻就自动跟到最新一句；
+  // 同 CodeBlock 的内部跟随行为（见 useScrollPin：往上滚过就交给用户，滚回底部再恢复）。
   const bodyRef = useRef<HTMLDivElement>(null);
-  const pinned = useRef(true);
-  const selfScroll = useRef(false);
+  const { attach, stick, reset } = useScrollPin();
+  const setBody = useCallback((node: HTMLDivElement | null) => {
+    bodyRef.current = node;
+    const detach = attach(node);
+    // React 19 的 ref 清理不会再回调 ref(null)，这里自己把引用一起清掉，避免后续读到已卸载的节点。
+    return detach ? () => { bodyRef.current = null; detach(); } : undefined;
+  }, [attach]);
   /** 内容超出可视区时，上/下边缘渐隐提示（对齐 ZCode 的 scroll mask）。 */
   const [mask, setMask] = useState<"none" | "top" | "bottom" | "both">("none");
   const syncMask = useCallback(() => {
@@ -50,37 +56,20 @@ const Thought = memo(function Thought({ itemId, text, active, expanded, pending,
   useLayoutEffect(() => {
     const node = bodyRef.current;
     if (!expanded || !node) return;
-    pinned.current = true;
-    if (active) {
-      // 进行中展开：直接看最新内容（已结束的思考从顶部读起）
-      selfScroll.current = true;
-      node.scrollTop = node.scrollHeight;
-      requestAnimationFrame(() => { selfScroll.current = false; });
-    }
+    reset();
+    // 进行中展开：直接看最新内容（已结束的思考从顶部读起）
+    if (active) stick(node);
     const follow = () => {
-      if (pinned.current && active) {
-        selfScroll.current = true;
-        node.scrollTop = node.scrollHeight;
-        requestAnimationFrame(() => { selfScroll.current = false; });
-      }
+      if (active) stick(node);
       syncMask();
     };
-    const onScroll = () => {
-      if (selfScroll.current) { selfScroll.current = false; syncMask(); return; }
-      pinned.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 8;
-      syncMask();
-    };
-    node.addEventListener("scroll", onScroll, { passive: true });
     // 容器与内容层都观察：文字增长改变 scrollHeight 时（容器高度不变）也能跟到
     const observer = new ResizeObserver(follow);
     observer.observe(node);
     if (node.firstElementChild) observer.observe(node.firstElementChild);
     syncMask();
-    return () => {
-      node.removeEventListener("scroll", onScroll);
-      observer.disconnect();
-    };
-  }, [expanded, active, syncMask]);
+    return () => observer.disconnect();
+  }, [expanded, active, syncMask, stick, reset]);
   // 预览取最后一个非空行：流式时正好是「正在想的那句」，尾部 600 字符足够覆盖它。
   const preview = useMemo(() => {
     if (!text) return "";
@@ -123,7 +112,7 @@ const Thought = memo(function Thought({ itemId, text, active, expanded, pending,
         <ChevronRight size={13} className={expanded ? "rotated" : ""} aria-hidden="true" />
       </button>
       {expanded && (
-        <div id={bodyId} ref={bodyRef} className="flow-thought-body" style={maskStyle}>
+        <div id={bodyId} ref={setBody} className="flow-thought-body" style={maskStyle}>
           <div className="flow-thought-plain">{text}</div>
         </div>
       )}

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { latestContextStats } from "./context-stats";
 import { SessionListLoader } from "./session-list-loader";
 import { ConversationFind } from "./conversation-find";
+import { DropdownSelect } from "./dropdown-select";
 import { matchesSession, type SessionFilter, type ConversationMatch } from "./session-search";
 import type {
   AgentSessionStats,
@@ -2288,9 +2289,13 @@ export function App() {
       >
         <div className="sidebar-search">
           <input type="search" value={sessionQuery} maxLength={500} onChange={event => setSessionQuery(event.target.value)} aria-label={t("find.sessions")} placeholder={t("find.sessions")} />
-          <select value={sessionFilter} onChange={event => setSessionFilter(event.target.value as SessionFilter)} aria-label={t("find.status")}>
-            {(["all", "running", "waiting", "failed"] as const).map(status => <option key={status} value={status}>{t(`find.status.${status}`)}</option>)}
-          </select>
+          <DropdownSelect
+            className="sidebar-status-dropdown"
+            value={sessionFilter}
+            options={(["all", "running", "waiting", "failed"] as const).map(status => ({ value: status, label: t(`find.status.${status}`) }))}
+            onChange={val => setSessionFilter(val as SessionFilter)}
+            aria-label={t("find.status")}
+          />
         </div>
         <div className="section-label">{t("nav.sectionProjects")}</div>
         {filteringSessions && visibleProjects.length === 0 && <p className="sidebar-empty">{t("find.noSessions")}</p>}

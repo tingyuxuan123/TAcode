@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, ChevronDown, FileText, FolderOpen, Plus, RefreshCw, Sparkles, Trash2, Upload } from "lucide-react";
+import { DropdownSelect } from "../dropdown-select";
 import type { CapabilityScope, ManagedSkill, SkillDocument } from "../../shared/capabilities";
 import { skillSlashCommand } from "../../shared/skills";
 import { useI18n } from "../i18n";
@@ -173,7 +174,7 @@ function SkillEditor({ id, workspace, onBack, onUsePrompt, onDirtyChange }: Capa
         <p className="cap-detail-description">{document.skill.description}</p>
         <div className="cap-actions"><button type="button" className="ghost" onClick={() => void window.harness.skills.reveal(id, workspace).catch((reason) => setError(errorText(reason)))}><FolderOpen size={14} />{t("cap.openFolder")}</button>{onUsePrompt && <button type="button" className="ghost" disabled={!document.skill.enabled || Boolean(document.skill.warning)} onClick={() => onUsePrompt(`${skillSlashCommand(document.skill.name)} `)}>{t("cap.useSkill")}</button>}</div>
         {document.skill.warning && <CapabilityNotice error>{document.skill.warning}</CapabilityNotice>}
-        <label>{t("cap.files")}<select aria-label={t("cap.files")} value={file} disabled={loading || busy} onChange={(event) => dirty ? setPendingFile(event.target.value) : void load(event.target.value)}><option value="SKILL.md">SKILL.md</option>{document.files.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+        <label>{t("cap.files")}<DropdownSelect aria-label={t("cap.files")} value={file} disabled={loading || Boolean(busy)} options={[{ value: "SKILL.md", label: "SKILL.md" }, ...document.files.map((item) => ({ value: item, label: item }))]} onChange={(val) => dirty ? setPendingFile(val) : void load(val)} /></label>
       </>}
       {error && <CapabilityNotice error>{error}<button type="button" className="cap-text-button" onClick={() => dirty ? setPendingFile(file) : void load(file)}>{t("cap.refresh")}</button></CapabilityNotice>}
       {loading ? <p>{t("cap.loading")}</p> : document && <>

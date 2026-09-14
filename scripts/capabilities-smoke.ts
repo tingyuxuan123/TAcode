@@ -75,6 +75,24 @@ try {
   await tab("MCP");
   await wait(async () => (await panelText()).includes("Filesystem"));
   await screenshot("mcp-panel.png");
+  stage = "scope dropdown opens below its trigger without truncating labels";
+  await host(`(${visible}).querySelector('.cap-scope-dropdown .dropdown-select-trigger').click()`);
+  await wait(() => host("!!document.querySelector('.dropdown-select-panel')"));
+  const dropdown = await host<{ panelTop: number; triggerBottom: number; panelWidth: number; longestLabel: number }>(`(() => {
+    const triggerEl = (${visible}).querySelector('.cap-scope-dropdown .dropdown-select-trigger');
+    const panel = document.querySelector('.dropdown-select-panel');
+    const labels = Array.from(panel.querySelectorAll('.dropdown-select-option-label'));
+    return {
+      panelTop: panel.getBoundingClientRect().top,
+      triggerBottom: triggerEl.getBoundingClientRect().bottom,
+      panelWidth: panel.getBoundingClientRect().width,
+      longestLabel: Math.max(...labels.map((label) => label.scrollWidth)) + 24,
+    };
+  })()`);
+  assert.ok(dropdown.panelTop >= dropdown.triggerBottom, `面板应贴在触发器下方：${JSON.stringify(dropdown)}`);
+  assert.ok(dropdown.panelWidth >= dropdown.longestLabel, `面板不能截断选项文案：${JSON.stringify(dropdown)}`);
+  await host("document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))");
+  await wait(() => host("!document.querySelector('.dropdown-select-panel')"));
 
   await tab("Skills"); await clickText("新建技能");
   await setField("技能名称", "created-in-sidebar"); await setField("描述", "A real saved skill"); await setField("技能说明", "Do the work."); await clickText("保存");
@@ -85,8 +103,9 @@ try {
   await setField("编辑 SKILL.md", `${await fsp.readFile(skillFile, "utf8")}\nSaved in the editor.\n`); await clickText("保存");
   await wait(async () => (await panelText()).includes("已保存")); assert.match(await fsp.readFile(skillFile, "utf8"), /Saved in the editor/);
   stage = "guard unsaved edits when closing a tab";
-  await host("new Promise(resolve => setTimeout(resolve, 80))");
   await setField("编辑 SKILL.md", `${await fsp.readFile(skillFile, "utf8")}\nUnsaved.\n`);
+  // 等待编辑器把 dirty 状态上报到外层再关标签，避免与 React 状态传播竞态。
+  await wait(async () => (await panelText()).includes("有未保存"));
   await host("Array.from(document.querySelectorAll('[role=tab]')).find(el => el.querySelector('.inspect-tab-label')?.textContent === 'Skills').querySelector('.inspect-tab-close').click()");
   await wait(() => host("document.querySelector('[role=dialog]')?.textContent.includes('放弃未保存')"));
   await host("Array.from(document.querySelectorAll('[role=dialog] button')).find(el => el.textContent === '继续编辑').click()");

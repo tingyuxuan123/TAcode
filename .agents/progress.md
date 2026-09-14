@@ -1221,3 +1221,32 @@
 - [x] 收敛底部常用连接（Catalog）：当用户已有配置时，常用连接自动折叠为底部的 `<details>`，默认不占空间，搜索匹配时自动展开；仅当用户没有任何配置时才平铺作为新手引导。
 - 验证：`pnpm typecheck` 通过；`pnpm test` 全量 **132 文件 / 1055 测试 100% 通过**；`pnpm test:capabilities` 与 `test-session-activity.mjs` 端到端冒烟测试全绿通过。
 - 文件：renderer/capabilities/runtime-status.tsx、mcp-panel.tsx、capabilities.css。
+
+## 2026-09-14：自定义纸墨风下拉选择器 `DropdownSelect`（方案 B）
+
+- [x] 彻底消除粗黑框与 macOS 原生浮窗错位：封装专用组件 `DropdownSelect`（`src/renderer/dropdown-select.tsx`），采用单一触发按钮 + Portal 精准定位，下拉菜单始终贴合在按钮正下方 4px（绝不再往左上方漂移遮挡搜索框）；采用纸面底色、发丝边与 `--shadow-overlay` 阴影，选中项带微小对勾。
+- [x] 消除外层悬空粗黑边框：在全局样式中重置输入控件与下拉触发器的 `:focus-visible` outline，聚焦时统一使用自身边框加深与微聚焦发光。
+- [x] 无感兼容器件：内部内联 `style={{ display: "none" }}` 隐藏真实 select 承载语义与 change 事件，杜绝任何双重显示，同时保证自动化测试与无障碍无缝兼容。
+- [x] 核心场景落地：侧栏会话搜索状态过滤器（全部状态）、能力面板作用域选择器（当前项目/全局）及 MCP 编辑器作用域选择统一接入。
+- 验证：`pnpm typecheck` 通过；`node scripts/test-capabilities.mjs` 与 `node scripts/test-session-activity.mjs` 两个端到端冒烟测试全绿通过；`git diff --check` 干净。
+- 文件：renderer/dropdown-select.tsx、App.tsx、capabilities/common.tsx、styles.css、capabilities/capabilities.css。
+
+## 2026-09-14：下拉选择器细节修正（去掉粗墨环、面板按内容自适应）
+
+- [x] 去掉展开/聚焦时的 2px 墨色外环：`DropdownSelect` 触发器不再用 `border-color: var(--ink)` + `box-shadow: 0 0 0 1px var(--ink)` 的硬描边，改为发丝边加深 + 极淡柔光（`color-mix(in srgb, var(--ink) 14%…)`），展开时不再出现套在黑框里的观感。
+- [x] 面板宽度按内容自适应：下拉面板不再被限制成触发器宽度（此前「当前项目 / 全局」被截断成「当前… / 全…」），改为 `min-width: 触发器宽度`、`max-width: 视口 - 16px`，并在 `useLayoutEffect` + `ResizeObserver` 里按实测宽度把面板夹回视口内，长选项完整可见且不会溢出屏幕。
+- [x] 统一更多场景：MCP 编辑器「连接方式」、技能编辑器「支持文件」、设置「界面/代码字体」也替换为同一 `DropdownSelect`；补 `.cap-form` 与 `.font-family-control` 的宽度/高度适配。
+- [x] 冒烟测试补一条几何断言：展开作用域下拉后断言「面板在触发器下方」且「面板宽度不小于最长选项文案宽度」，并把「关闭标签页保护未保存修改」一段改为等待面板出现「有未保存」再关标签，消除该段与 React 状态传播的竞态（此前偶发超时）。
+- 验证：`pnpm typecheck`；`pnpm test` **132 文件 / 1055 测试通过**；`node scripts/test-capabilities.mjs` 连续 3 次全绿；`test-session-activity.mjs` 与 `TACODE_SETTINGS_SMOKE=1` 的设置冒烟全绿；`git diff --check` 干净。
+- 文件：renderer/dropdown-select.tsx、App.tsx、appearance-settings.tsx、capabilities/common.tsx、capabilities/mcp-panel.tsx、capabilities/skills-panel.tsx、styles.css、capabilities.css、scripts/capabilities-smoke.ts。
+
+## 2026-09-14：修「会话往上滚一点就立刻弹回底部」
+
+- [x] 定位真实成因：`useFollowScroll` 的 `intent()` 用「当前距底是否 > 16px」判断是不是用户滚动，但跟随循环每帧把 `scrollTop` 贴回底部（96px 内是瞬时贴底），于是每个向上滚的 wheel 事件到达时距离都是 0 → 早退、`following` 永远关不掉；紧随其后的 `scroll` 事件把用户滚出去的位移当成虚拟列表的被动补偿，调 `followLatest()` 拉回。滚动条拖拽同理（`pointerdown` 在底部也早退）。时间线探针实测：8 次 `wheel(deltaY:-30)` 到达时 `fromBottom` 全部为 0，位移在下一帧（约 17ms）被抵消，用户滚的 240px 全部归零。
+- [x] 判据从「距离」换成「方向」：新增 `scrollIntent()`（wheel 方向 / 键盘方向，排除 Ctrl+滚轮的捏合缩放与纯横向位移）、`shouldReleaseFollow()`、`shouldReacquireFollow()`（带 `within` 供块内小滚动区复用）。跟随时只要手势向上且位置真动了（> 2px）就交还控制权；`down` 手势永不打断跟随；向上手势有效期内跟随循环让位、不写位置。
+- [x] 修掉恢复跟随的滞回陷阱：用户主动上滚离开后不再按「距底 16px 内」自动贴回（小幅上滚常常不到 16px，会被瞬时贴底打回），只有真触底或时效内的向下手势才恢复；非手势离开（跳转 / 换会话 / 程序化位移）保持旧行为。
+- [x] 同类毛病一并修（块内小滚动区）：抽出 `useScrollPin()`，用于代码块（`PlainCodeBlock`、`HighlightedCodeBlock`）与思考块（`Thought`，含渐隐遮罩回调）。原来只按「距底 ≤ 8px」判贴底，块内滚几像素也会被下一次内容增长拉回。
+- [x] 复现与回归：真实 Electron 探针新增输入驱动断言（往上滚 24px 不许被打回、停留稳定、增长期间阅读位置保持、往下滚回到底恢复跟随、无手势的程序化位移仍被跟随吸收），并把原来「程序化 scrollTop 离开底部」的竞态写法改成真实手势。
+- 验证：`pnpm typecheck` 通过；`npx vitest run src/renderer` **34 文件 / 298 测试通过**（新增 8 个纯策略断言）；`TACODE_SMOKE_ONLY=message-list node scripts/test-browser.mjs` 通过；**A/B 反向验证**：把 hook 临时换回 HEAD 版，同一条探针断言直接失败（`往上滚 24px 后 400ms 内被打回底部：距底 0px`），换回修复版即通过；块内跟随用 `stream-live-text` 夹具 A/B：旧 `codeblock.tsx` 在小幅上滚后增长把代码块拉回底部（4px→0），修复版保持（4px→154）且无手势时仍自动贴底；`pnpm test` 全量 **132 文件 / 1062-1063 测试通过**（`src/main/session-index.test.ts` 在并行跑时偶发 5s 超时，单跑 2.78s 通过，属磁盘争用，与本次改动无关）。
+- 文件：renderer/use-follow-scroll.ts（`scrollIntent` / `shouldReleaseFollow` / `shouldReacquireFollow` / `useScrollPin` + 手势与方向判据）、use-follow-scroll.test.ts、codeblock.tsx、execution-flow.tsx、scripts/message-list-smoke.ts。
+- 遗留：块内跟随（代码块/思考块）目前只有一次性探针验证，尚未固化成 `test-browser.mjs` 里的常驻冒烟；若要长期守护，可按同样方式加一个 `stream-live-text` 夹具入口（注意该夹具在围栏长度跨分段边界时会重建代码块，断言需先推两次让分段稳定）。

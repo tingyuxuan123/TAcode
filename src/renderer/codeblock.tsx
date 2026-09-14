@@ -5,6 +5,7 @@ import { getDisplayName, highlightToTokens, isHighlighterReady, onHighlighterRea
 import { tokenizeCode, type CodeToken } from "./highlight";
 import { rememberPosition, restorePosition, type ReadingPosition } from "./reading-position";
 import { canHighlightCode } from "./code-budget";
+import { useScrollPin } from "./use-follow-scroll";
 
 /**
  * CodeBlock — 块级代码组件。
@@ -109,14 +110,20 @@ function PlainCodeBlock({ code, language, maxHeight }: { code: string; language:
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const body = useRef<HTMLPreElement>(null);
-  const following = useRef(true);
+  // 流式跟随：内容增长时贴到最新，但用户往上滚过就交给他（见 useScrollPin）。
+  const { attach, stick } = useScrollPin();
   const size = useRef(code.length);
+  const setBody = useCallback((node: HTMLPreElement | null) => {
+    body.current = node;
+    const detach = attach(node);
+    // React 19 的 ref 清理不会再回调 ref(null)，这里自己把引用一起清掉，避免后续读到已卸载的节点。
+    return detach ? () => { body.current = null; detach(); } : undefined;
+  }, [attach]);
   useEffect(() => { if (copied) { const timer = setTimeout(() => setCopied(false), 2000); return () => clearTimeout(timer); } }, [copied]);
   useLayoutEffect(() => {
-    const node = body.current;
-    if (node && code.length > size.current && following.current) node.scrollTop = node.scrollHeight;
+    if (code.length > size.current) stick(body.current);
     size.current = code.length;
-  }, [code]);
+  }, [code, stick]);
   return <div className="code-block-wrapper" data-large-code>
     <div className="code-block-bar">
       <span className="code-block-lang">{language ? getDisplayName(language) : t("codeblock.untitled")} · {t("codeblock.plain")}</span>
@@ -124,7 +131,7 @@ function PlainCodeBlock({ code, language, maxHeight }: { code: string; language:
         {copied ? <Check size={13} /> : <Copy size={13} />}<span>{t(copied ? "common.copied" : "common.copy")}</span>
       </button>
     </div>
-    <pre className="code-block-body" ref={body} style={{ maxHeight }} onScroll={() => { const node = body.current!; following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 8; }}><code>{code}</code></pre>
+    <pre className="code-block-body" ref={setBody} style={{ maxHeight }}><code>{code}</code></pre>
   </div>;
 }
 
@@ -145,30 +152,20 @@ function HighlightedCodeBlock({ children, maxHeight = 280 }: CodeBlockProps) {
   // 流式跟随：代码区有 max-height，最新几行会落在块的内部滚动区之外。
   // 只在「内容在增长」且「用户没有主动滚上去」时跟到底部；用户滚回底部自动恢复跟随。
   const grownTo = useRef(trimmed.length);
-  const pinned = useRef(true);
-  const selfScroll = useRef(false);
-
-  useEffect(() => {
-    const node = bodyRef.current;
-    if (!node) return;
-    const onScroll = () => {
-      if (selfScroll.current) { selfScroll.current = false; return; }
-      pinned.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 8;
-    };
-    node.addEventListener("scroll", onScroll, { passive: true });
-    return () => node.removeEventListener("scroll", onScroll);
-  }, []);
+  const { attach, stick } = useScrollPin();
+  const setBody = useCallback((node: HTMLPreElement | null) => {
+    bodyRef.current = node;
+    const detach = attach(node);
+    // React 19 的 ref 清理不会再回调 ref(null)，这里自己把引用一起清掉，避免后续读到已卸载的节点。
+    return detach ? () => { bodyRef.current = null; detach(); } : undefined;
+  }, [attach]);
 
   useLayoutEffect(() => {
-    const node = bodyRef.current;
     const previous = grownTo.current;
     grownTo.current = trimmed.length;
-    if (!node || trimmed.length <= previous || !pinned.current) return;
-    selfScroll.current = true;
-    node.scrollTop = node.scrollHeight;
-    // 已经在底部时不会触发 scroll 事件，兜底把标记清掉，避免吞掉用户的下一次滚动。
-    requestAnimationFrame(() => { selfScroll.current = false; });
-  }, [trimmed]);
+    if (trimmed.length <= previous) return;
+    stick(bodyRef.current);
+  }, [trimmed, stick]);
 
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastUpdateRef = useRef(Date.now());
@@ -249,7 +246,7 @@ function HighlightedCodeBlock({ children, maxHeight = 280 }: CodeBlockProps) {
       </div>
       <pre
         className="code-block-body"
-        ref={bodyRef}
+        ref={setBody}
         style={{ maxHeight }}
       >
         <code>

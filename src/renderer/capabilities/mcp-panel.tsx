@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, CheckCircle2, ChevronDown, CircleDashed, Code2, Database, FileJson, FolderOpen, Globe, Plug, Plus, RefreshCw, Search, Server, Trash2, XCircle } from "lucide-react";
+import { DropdownSelect } from "../dropdown-select";
 import type { CapabilityScope, McpTestResult } from "../../shared/capabilities";
 import type { McpServerRow } from "../../shared/integrations";
 import { formatMcpServerJson, parseMcpArguments, parseMcpKeyValues, parseMcpServerJson, validateMcpServer } from "../../shared/mcp-config";
@@ -212,7 +213,7 @@ function McpEditor({ server, previousName, scope, workspace, onBack, onSaved, on
     </fieldset> : <fieldset disabled={Boolean(busy)} className="cap-fieldset">
       <label>{t("cap.serverName")}<input autoFocus value={values.name} required maxLength={100} placeholder="my-server" onChange={(event) => update("name", event.target.value)} /></label>
       <label>{t("cap.description")}<input value={values.description} onChange={(event) => update("description", event.target.value)} /></label>
-      <label>{t("cap.transport")}<select value={values.kind} onChange={(event) => update("kind", event.target.value as McpServerRow["kind"])}><option value="stdio">{t("cap.stdio")}</option><option value="http">{t("cap.http")}</option><option value="sse">{t("cap.sse")}</option></select></label>
+      <label>{t("cap.transport")}<DropdownSelect aria-label={t("cap.transport")} value={values.kind} options={[{ value: "stdio", label: t("cap.stdio") }, { value: "http", label: t("cap.http") }, { value: "sse", label: t("cap.sse") }]} onChange={(kind) => update("kind", kind as McpServerRow["kind"])} /></label>
       {values.kind === "stdio" ? <>
         <label>{t("cap.command")}<input value={values.command} required placeholder="npx" onChange={(event) => update("command", event.target.value)} /><small>{t("cap.commandHint")}</small></label>
         <label>{t("cap.args")}<textarea spellCheck={false} className="cap-mono" value={values.args} rows={4} placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/path/to/project'} onChange={(event) => update("args", event.target.value)} /><small>{t("cap.argsHint")}</small></label>

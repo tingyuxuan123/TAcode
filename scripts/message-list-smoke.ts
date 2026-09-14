@@ -95,6 +95,25 @@ export async function verifyMessageList(win: BrowserWindow): Promise<void> {
     throw new Error(`消息列表未到达期望状态（${label}）：${JSON.stringify({ itemCount: state.itemCount, viewport: state.viewport, boxes: state.boxes })}`);
   };
 
+  /** 当前距底距离（px）：> 0 表示停在上面，0 表示贴着最新。 */
+  const bottomGap = (): Promise<number> => evaluate(`(() => {
+    const box = document.querySelector('.conversation');
+    return Math.round(box.scrollHeight - box.scrollTop - box.clientHeight);
+  })()`);
+
+  /**
+   * 模拟一次真实滚动输入：先派发方向明确的 wheel 事件（生产监听器据此判定用户意图），
+   * 再把浏览器会写的 scrollTop 位移一并应用——合成的 wheel 事件本身不会滚动内容。
+   * 返回这次位移之后距底的距离。
+   */
+  const gesture = (direction: "up" | "down", pixels: number): Promise<number> => evaluate(`(() => {
+    const box = document.querySelector('.conversation');
+    const deltaY = ${direction === "up" ? -pixels : pixels};
+    box.dispatchEvent(new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true }));
+    box.scrollTop += deltaY;
+    return Math.round(box.scrollHeight - box.scrollTop - box.clientHeight);
+  })()`);
+
   const turns = await evaluate("window.__messageListFixture.turns");
 
   // 1. 窗口化：挂载条目数量级远小于历史轮数。
@@ -216,12 +235,64 @@ export async function verifyMessageList(win: BrowserWindow): Promise<void> {
   );
   assert(followed.itemCount < 40, `追加内容后挂载条目过多：${followed.itemCount}`);
 
-  // 6. 跳转到最早的一轮：条目自动挂载并贴到视口顶部。
-  //    先上滑离开底部（跟随关闭、锚点指向旧位置），再现跳转，覆盖「跳转被旧锚点拉回」的场景。
-  //    注意断言的是**收敛后**的落点：跳进未测量区域时 virtua 会按跳转前的旧内部偏移
-  //    做一次测量补偿（把落点推走一个估算误差，下一轮校正才落准），首次可见的位置
-  //    可能带一次短暂回弹，不能当契约。
-  await evaluate(`(() => { const box = document.querySelector('.conversation'); box.scrollTop -= 2500; })()`);
+  // 6. 用户往上滚一点：必须真的停在上面（本次修复的核心回归）。
+  //    成因：跟随循环每帧把 scrollTop 贴回底部（96px 内是瞬时贴底），旧的
+  //    「距底 ≤16px 就不算用户滚动」判据在跟随期间永远成立，于是用户滚出去的位移
+  //    被当成虚拟列表的被动补偿立刻拉回——表现就是「往上滚一点就弹回底部」。
+  const nudgeGap = await gesture("up", 24);
+  assert(nudgeGap >= 12, `往上滚 24px 后当场只剩 ${nudgeGap}px，位移被立刻拉回`);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const nudgedGap = await bottomGap();
+  assert(nudgedGap >= 12, `往上滚 24px 后 400ms 内被打回底部：距底 ${nudgedGap}px`);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const heldGap = await bottomGap();
+  assert(
+    Math.abs(heldGap - nudgedGap) <= 3,
+    `离开底部后位置不稳定（跟随循环仍在抢滚动）：${nudgedGap}px → ${heldGap}px`,
+  );
+
+  // 7. 离开底部期间内容继续增长：阅读位置保持，跟随保持关闭。
+  for (let round = 0; round < 3; round += 1) {
+    await evaluate("window.__messageListFixture.grow()");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  const grownGap = await bottomGap();
+  assert(
+    grownGap >= heldGap - 4,
+    `内容增长把阅读位置拉走了：距底 ${heldGap}px → ${grownGap}px`,
+  );
+
+  // 8. 往下滚回底部：跟随自动恢复，之后内容增长继续贴底。
+  await gesture("down", 600);
+  await wait(
+    (state) => state.viewport.scrollHeight - state.viewport.scrollTop - state.viewport.clientHeight <= 4,
+    "往下滚后恢复贴底",
+  );
+  for (let round = 0; round < 2; round += 1) {
+    await evaluate("window.__messageListFixture.grow()");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  const refollowed = await wait(
+    (state) => state.viewport.scrollHeight - state.viewport.scrollTop - state.viewport.clientHeight <= 4,
+    "恢复跟随后内容增长仍贴底",
+  );
+  assert(refollowed.itemCount < 40, `恢复跟随后挂载条目过多：${refollowed.itemCount}`);
+
+  // 9. 对照：没有手势的程序化位移仍要被跟随吸收。虚拟列表的测量补偿与浏览器锚定
+  //    也会这样改 scrollTop，把它当成「用户离开」就等于把流式期间的抖动放回来。
+  await evaluate(`(() => { const box = document.querySelector('.conversation'); box.scrollTop -= 24; })()`);
+  await wait(
+    (state) => state.viewport.scrollHeight - state.viewport.scrollTop - state.viewport.clientHeight <= 4,
+    "被动位移被跟随吸收",
+  );
+
+  // 10. 跳转到最早的一轮：条目自动挂载并贴到视口顶部。
+  //     先往上滚离开底部（跟随关闭、锚点指向旧位置），再跳转，覆盖「跳转被旧锚点拉回」的场景；
+  //     手势离开是前提——没有手势的程序化位移会被跟随当成被动补偿吸收掉（见第 9 步）。
+  //     注意断言的是**收敛后**的落点：跳进未测量区域时 virtua 会按跳转前的旧内部偏移
+  //     做一次测量补偿（把落点推走一个估算误差，下一轮校正才落准），首次可见的位置
+  //     可能带一次短暂回弹，不能当契约。
+  await gesture("up", 2_400);
   await wait((state) => state.viewport.scrollTop < state.viewport.scrollHeight - state.viewport.clientHeight - 100, "离开底部");
   await evaluate("window.__messageListFixture.scrollToAnchor('turn-user-0')");
   const jumped = await wait((state) => {
@@ -236,7 +307,7 @@ export async function verifyMessageList(win: BrowserWindow): Promise<void> {
   );
   assert(jumped.itemCount < 40, `跳转后挂载条目过多：${jumped.itemCount}`);
 
-  // 7. 跳转后位置保持：内容继续测量时不得被拉回旧位置。
+  // 11. 跳转后位置保持：内容继续测量时不得被拉回旧位置。
   await new Promise((resolve) => setTimeout(resolve, 400));
   const held = await read();
   assert(
@@ -244,7 +315,7 @@ export async function verifyMessageList(win: BrowserWindow): Promise<void> {
     `跳转后位置被内容测量拉走：当前锚点=${held.anchors.join(",")}`,
   );
 
-  // 8. 锚点查询：当前阅读位置能定位到具体轮次（轮次导航依赖它）。
+  // 12. 锚点查询：当前阅读位置能定位到具体轮次（轮次导航依赖它）。
   const anchor = await evaluate("window.__messageListFixture.anchorAt(160)");
   assert(
     typeof anchor === "string" && anchor.startsWith("turn-user-"),

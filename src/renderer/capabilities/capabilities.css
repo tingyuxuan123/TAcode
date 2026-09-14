@@ -14,6 +14,8 @@
 .cap-count { display: inline-flex; align-items: center; justify-content: center; min-width: 21px; padding: 1px 6px; border-radius: 99px; background: var(--inset); color: var(--ink-3); font-size: 11px; font-weight: 500; }
 .cap-intro { margin: 0; padding: 0 20px 10px; color: var(--ink-2); font-size: 12px; line-height: 1.65; }
 .cap-scope { max-width: 128px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink-2); padding: 6px 7px; font: inherit; font-size: 12px; }
+.cap-scope-dropdown { max-width: 128px; }
+.cap-scope-dropdown .dropdown-select-trigger { height: 29px; padding: 0 8px; background: var(--surface); color: var(--ink-2); font-size: 12px; }
 .cap-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 20px 14px; }
 .cap-search { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; height: 35px; padding: 0 10px; border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-hairline); color: var(--ink-3); }
 .cap-search:focus-within { outline: 1px solid var(--ink-2); }

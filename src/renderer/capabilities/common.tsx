@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, Search, ShieldCheck, X } from "lucide-react";
+import { DropdownSelect } from "../dropdown-select";
 import type { CapabilityScope } from "../../shared/capabilities";
 import { useI18n } from "../i18n";
 import { ConfirmDialog } from "../ui";
@@ -35,10 +36,16 @@ export function useCapabilityData<T>(load: () => Promise<T>, workspace?: string)
 
 export function CapabilityScopePicker({ scope, workspace, onChange }: { scope: CapabilityScope; workspace?: string; onChange(scope: CapabilityScope): void }) {
   const { t } = useI18n();
-  return <select className="cap-scope" aria-label={t("cap.scope")} value={scope} onChange={(event) => onChange(event.target.value as CapabilityScope)}>
-    {workspace && <option value="project">{t("cap.project")}</option>}
-    <option value="user">{t("cap.user")}</option>
-  </select>;
+  return <DropdownSelect
+    className="cap-scope-dropdown"
+    aria-label={t("cap.scope")}
+    value={scope}
+    options={[
+      ...(workspace ? [{ value: "project" as const, label: t("cap.project") }] : []),
+      { value: "user" as const, label: t("cap.user") },
+    ]}
+    onChange={(val) => onChange(val as CapabilityScope)}
+  />;
 }
 
 export function CapabilitySearch({ value, onChange, placeholder }: { value: string; onChange(value: string): void; placeholder: string }) {

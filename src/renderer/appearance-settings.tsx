@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, Minus, Plus, RotateCcw } from "lucide-react";
+import { DropdownSelect } from "./dropdown-select";
 import { applyTheme, readStoredTheme, THEMES, type ThemeId } from "../shared/theme";
 import {
   applyTypography, CODE_FONT_NAMES, CODE_FONTS, DEFAULT_TYPOGRAPHY, FONT_SIZE_LIMITS,
@@ -102,14 +103,17 @@ function FontSelector({ kind, settings, onChange }: {
     <div className="typography-row font-family-row">
       <label htmlFor={id}>{t(kind === "ui" ? "settings.uiFont" : "settings.codeFont")}</label>
       <div className="font-family-control">
-        <select id={id} value={settings[key]} onChange={(event) => onChange({ [key]: event.target.value })}>
-          {(kind === "ui" ? UI_FONTS : CODE_FONTS).map((font) => (
-            <option key={font} value={font} disabled={font in CODE_FONT_NAMES && !available[font]}>
-              {font in CODE_FONT_NAMES ? CODE_FONT_NAMES[font as keyof typeof CODE_FONT_NAMES] : t(FONT_LABEL[font])}
-              {font in CODE_FONT_NAMES && !available[font] ? ` (${t("settings.fontUnavailable")})` : ""}
-            </option>
-          ))}
-        </select>
+        <DropdownSelect
+          className="font-family-dropdown"
+          aria-label={t(kind === "ui" ? "settings.uiFont" : "settings.codeFont")}
+          value={settings[key]}
+          options={(kind === "ui" ? UI_FONTS : CODE_FONTS).map((font) => ({
+            value: font,
+            label: `${font in CODE_FONT_NAMES ? CODE_FONT_NAMES[font as keyof typeof CODE_FONT_NAMES] : t(FONT_LABEL[font])}${font in CODE_FONT_NAMES && !available[font] ? ` (${t("settings.fontUnavailable")})` : ""}`,
+            disabled: font in CODE_FONT_NAMES && !available[font],
+          }))}
+          onChange={(val) => onChange({ [key]: val })}
+        />
         {settings[key] === "custom" && (
           <div className="custom-font-input">
             <input id={`${id}-custom`} value={draft} maxLength={100} placeholder={t("settings.fontName")}
