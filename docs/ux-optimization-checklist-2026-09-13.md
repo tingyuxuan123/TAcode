@@ -146,7 +146,7 @@
 
   **定位与风险。** [主会话停止处理](/Users/yfdl/project/TAcode/src/renderer/App.tsx:1845)、[killProcessTree](/Users/yfdl/project/TAcode/src/main/process-tree.ts:4)、[终端停止](/Users/yfdl/project/TAcode/src/main/terminal-manager.ts:111)。风险中等到较高，涉及平台差异和子进程回收；进程 exit 回调中的最后清理不能机械改成等待异步。
 
-- [ ] **UX-13 · 大文件、长回答与最终排版有性能边界**
+- [x] **UX-13 · 大文件、长回答与最终排版有性能边界**
 
   **代码确认，优先做性能回放。** 文件读取虽已有 4 MiB 上限，`HighlightedFileCode` 仍对所读内容同步分词并渲染全部行。Markdown 在流式结束时切换为全文预处理和静态分块。主会话的分组和统计也会扫描历史，但已复用未变化的分组，不能仅凭大 O 判断它是当前最大瓶颈。
 

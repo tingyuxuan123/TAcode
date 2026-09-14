@@ -59,11 +59,14 @@ export function PromptToolbar({ children, action, down }: { children: ReactNode;
       const available = bar.current?.clientWidth ?? 0;
       if (available > 0) setMode(toolbarModeForWidth(available, rows[0].getBoundingClientRect().width, rows[1].getBoundingClientRect().width));
     };
-    measure();
-    const observer = new ResizeObserver(measure);
+    // 测量结果会改变工具栏高度；离开本轮 ResizeObserver 交付后再更新布局。
+    let frame = 0;
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; measure(); }); };
+    schedule();
+    const observer = new ResizeObserver(schedule);
     observer.observe(bar.current);
     rows.forEach((row) => observer.observe(row));
-    return () => { observer.disconnect(); probe.remove(); };
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); probe.remove(); };
   }, [children, action]);
 
   useEffect(() => { setOpen(false); }, [mode]);

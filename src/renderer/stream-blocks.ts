@@ -50,7 +50,7 @@ export function commonPrefixLength(a: string, b: string): number {
  * 创建**有状态**的文本 → 分段函数。每个 `Markdown` 实例持有一个（用 `useRef`），
  * 因为缓存的一生只服务一条持续追加的文本。
  */
-export function createStreamSegments(options: StreamSegmentsOptions = {}): (text: string) => string[] {
+export function createStreamSegments(options: StreamSegmentsOptions = {}): (text: string, repairTail?: boolean) => string[] {
   const target = options.target ?? DEFAULT_TARGET;
   const parse = options.parse ?? parseBlocks;
   const repair = options.repair ?? repairText;
@@ -60,6 +60,8 @@ export function createStreamSegments(options: StreamSegmentsOptions = {}): (text
   /** 增量重分块的窗口起点：倒数第二块的起点。窗口之前的块一概复用。 */
   let windowStart = 0;
   let cached: string[] = [];
+  let cachedRaw: string[] = [];
+  let repaired = true;
 
   const windowOffset = (list: string[], total: number): number =>
     list.length >= 2 ? total - list[list.length - 2]!.length - list[list.length - 1]!.length : 0;
@@ -96,8 +98,11 @@ export function createStreamSegments(options: StreamSegmentsOptions = {}): (text
     windowStart = windowOffset(blocks, input.length);
   };
 
-  return (input: string): string[] => {
-    if (input === text && cached.length) return cached;
+  return (input: string, repairTail = true): string[] => {
+    if (input === text && cached.length) {
+      if (repaired !== repairTail) { repaired = repairTail; cached = repairTail ? emit(cachedRaw) : cachedRaw; }
+      return cached;
+    }
 
     const extend = text.length > 0
       && blocks.length >= 2
@@ -115,7 +120,9 @@ export function createStreamSegments(options: StreamSegmentsOptions = {}): (text
       rebuild(input);
     }
 
-    cached = emit(group());
+    cachedRaw = group();
+    repaired = repairTail;
+    cached = repairTail ? emit(cachedRaw) : cachedRaw;
     return cached;
   };
 }

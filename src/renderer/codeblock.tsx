@@ -4,6 +4,7 @@ import { useI18n } from "./i18n";
 import { getDisplayName, highlightToTokens, isHighlighterReady, onHighlighterReady, type HighlightTokensResult } from "./shiki";
 import { tokenizeCode, type CodeToken } from "./highlight";
 import { rememberPosition, restorePosition, type ReadingPosition } from "./reading-position";
+import { canHighlightCode } from "./code-budget";
 
 /**
  * CodeBlock — 块级代码组件。
@@ -96,6 +97,38 @@ const FallbackLines = memo(function FallbackLines({ tokens }: { tokens: CodeToke
 });
 
 export function CodeBlock({ children, maxHeight = 280, className }: CodeBlockProps) {
+  const { language, code } = useMemo(() => extractCodeInfo(children), [children]);
+  const trimmed = code.replace(/\n$/, "");
+  return canHighlightCode(trimmed)
+    ? <HighlightedCodeBlock maxHeight={maxHeight} className={className}>{children}</HighlightedCodeBlock>
+    : <PlainCodeBlock code={trimmed} language={language} maxHeight={maxHeight} />;
+}
+
+/** 一个文本节点保留原文，避免为几千行代码创建数万 token 节点。 */
+function PlainCodeBlock({ code, language, maxHeight }: { code: string; language: string; maxHeight: number }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const body = useRef<HTMLPreElement>(null);
+  const following = useRef(true);
+  const size = useRef(code.length);
+  useEffect(() => { if (copied) { const timer = setTimeout(() => setCopied(false), 2000); return () => clearTimeout(timer); } }, [copied]);
+  useLayoutEffect(() => {
+    const node = body.current;
+    if (node && code.length > size.current && following.current) node.scrollTop = node.scrollHeight;
+    size.current = code.length;
+  }, [code]);
+  return <div className="code-block-wrapper" data-large-code>
+    <div className="code-block-bar">
+      <span className="code-block-lang">{language ? getDisplayName(language) : t("codeblock.untitled")} · {t("codeblock.plain")}</span>
+      <button type="button" className="code-block-copy" aria-label={t("common.copy")} onClick={() => { void navigator.clipboard.writeText(code).then(() => setCopied(true), () => {}); }}>
+        {copied ? <Check size={13} /> : <Copy size={13} />}<span>{t(copied ? "common.copied" : "common.copy")}</span>
+      </button>
+    </div>
+    <pre className="code-block-body" ref={body} style={{ maxHeight }} onScroll={() => { const node = body.current!; following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 8; }}><code>{code}</code></pre>
+  </div>;
+}
+
+function HighlightedCodeBlock({ children, maxHeight = 280 }: CodeBlockProps) {
   const { t } = useI18n();
   const { language, code } = useMemo(() => extractCodeInfo(children), [children]);
   const trimmed = code.replace(/\n$/, "");
@@ -291,6 +324,12 @@ export function HighlightedFileCode({ code, language, lineGutter = true }: {
   language: string;
   lineGutter?: boolean;
 }) {
+  return canHighlightCode(code)
+    ? <FileCodeTokens code={code} language={language} lineGutter={lineGutter} />
+    : <PreserveFileSelection><span className="file-code-plain" data-large-code>{code}</span></PreserveFileSelection>;
+}
+
+function FileCodeTokens({ code, language, lineGutter }: { code: string; language: string; lineGutter: boolean }) {
   const theme = useAppThemeLocal();
   const rawLines = useMemo(() => code.split("\n"), [code]);
   const shiki = useShikiTokens(code, language, theme);

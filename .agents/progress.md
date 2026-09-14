@@ -1147,3 +1147,12 @@
 - 边界：当前取消倒计时随视图维护，切换回来可重新取消；runtime/tools 的 exit 同步兜底仍保留，此项仅消除主进程正常清理路径的同步查询。
 - 文件：main/process-tree.ts、agent-host.ts、agent-manager.ts、terminal-manager.ts、index.ts；renderer/App.tsx、ui.tsx、styles.css；shared/i18n.ts；进程/终端测试和 stop-smoke.ts。
 - 下一项：UX-13 长回答、长代码和大文件性能边界，先用固定样本定位再比较。整份目标继续 active。
+
+## 2026-09-14：UX-13 长内容性能边界
+
+- [x] 短代码保留高亮，超出 32 Ki code units / 512 行 / 单行 2000 字符使用完整原文，避免为每行和 token 创建节点；原生搜索、选择和复制保留。Markdown 定稿沿用流式段边界，停止修补完整正文尾部。应用侧三处 ResizeObserver 布局写入延后一帧并清理调度。
+- [x] 固定回放 2000 轮历史、102498 字节回答、105779 字节代码和 4 MiB 文件。两构建各三次：文件出现中位数 **476.7 → 175.9 ms**、元素 **32851 → 17**，最长主线程任务 **349 → 151 ms**；输入 p95 两边都是约 19.5 ms，历史/流式不声称有普遍收益。报告和完整数据见 docs/ux-13-large-content-performance.md、对应 JSON。
+- 验证：全量首次两个既有测试发生 5 秒超时，降低为 4 workers 后 **128 文件 / 1042 测试通过**；typecheck、diff check 通过。大内容最终回归校验完整回答段数/复制、长代码精确复制及文件末尾搜索/4 MiB 精确复制；预览桌面回归通过，保存刷新 240.5 ms。已查看 ux-13/large-content.png。
+- 边界：轻量大文件模式保留全文、取消语法高亮与行号，并非逐行虚拟化；浏览器全文排版/查找仍有长任务。ResizeObserver 警告定位在虚拟行测量/消息高度变化附近，仍存在；没有修改全局 observer 或宣称已修复。
+- 文件：renderer/code-budget.ts、codeblock.tsx、file-preview.tsx、stream-blocks.ts、ui.tsx、App.tsx、prompt-toolbar.tsx；i18n、测试、large-content-smoke.ts 与性能文档。
+- 下一项：UX-14 会话标题/项目/状态筛选，当前对话全文查找和定位。整份目标继续 active。

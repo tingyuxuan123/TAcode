@@ -130,4 +130,15 @@ describe("createStreamSegments", () => {
     expect(segments.some((segment) => segment.includes(settled))).toBe(true);
     expect(segments.at(-1)!.endsWith("**")).toBe(true);
   });
+
+  it("keeps completed segment boundaries and stops repairing an unfinished tail on finalization", () => {
+    const split = createStreamSegments({ target: 20 });
+    const text = "第一段已经写完，是完整 markdown，不需要任何修补。\n\n未闭合 **强调";
+    const streaming = split(text);
+    const final = split(text, false);
+    expect(final.slice(0, -1)).toEqual(streaming.slice(0, -1));
+    expect(final.join("")).toBe(expected(text));
+    expect(split(text, false)).toBe(final);
+    expect(split(text)).toEqual(streaming);
+  });
 });

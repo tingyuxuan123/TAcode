@@ -15,6 +15,7 @@ import { WorkspaceWatchers } from "../src/main/workspace-watcher";
 import { readWorkspacePreview } from "../src/main/workspace-preview";
 import { testFilePreview, type PreviewSmokeControls } from "./file-preview-smoke";
 import { createPanelFixture, testPanelPerformance } from "./panel-performance-smoke";
+import { createLargeFixture, testLargeContent } from "./large-content-smoke";
 import { testStopping, type StopSmokeControls } from "./stop-smoke";
 import { initializeTacodeHome } from "../src/runtime/home";
 import { listTacodeThreads } from "../src/runtime/state";
@@ -53,6 +54,8 @@ async function smoke() {
   const startupSmoke = process.env.TACODE_STARTUP_SMOKE === "1";
   const listSmoke = process.env.TACODE_SESSION_LIST_SMOKE === "1";
   const filesSmoke = process.env.TACODE_FILES_SMOKE === "1";
+  const largeSmoke = process.env.TACODE_LARGE_SMOKE === "1";
+  const largeFixture = largeSmoke ? createLargeFixture() : undefined;
   const previewSmoke = process.env.TACODE_PREVIEW_SMOKE === "1";
   const panelsSmoke = process.env.TACODE_PANELS_SMOKE === "1";
   const stopSmoke = process.env.TACODE_STOP_SMOKE === "1";
@@ -84,7 +87,7 @@ async function smoke() {
     cwd: project, createdAt: now, updatedAt: now, messageCount: 2, pinned: false, archived: false,
   }));
   const panelFixture = panelsSmoke ? createPanelFixture(project, sessions[0].path) : undefined;
-  const transcript = (file: string) => panelFixture?.messages.get(file) ?? [
+  const transcript = (file: string) => (largeFixture && file === sessions[0].path ? largeFixture.messages : undefined) ?? panelFixture?.messages.get(file) ?? [
     { role: "user", content: [{ type: "text", text: `${path.basename(file)} 的问题` }], timestamp: Date.parse(now) + 1 },
     { role: "assistant", content: [{ type: "text", text: `${path.basename(file)} 的回复` }], stopReason: "stop", timestamp: Date.parse(now) + 2 },
   ];
@@ -202,7 +205,7 @@ async function smoke() {
     ipcMain.handle("app:log-diagnostic", () => {});
     ipcMain.handle("workspace:recent", () => [{ path: project, name: "project", updatedAt: now }]);
     ipcMain.handle("workspace:list", (_event, cwd, refresh) => {
-      if (filesSmoke || previewSmoke) {
+      if (filesSmoke || previewSmoke || largeSmoke) {
         fileListCalls++;
         if (failFileList) throw new Error("fixture file listing failed");
         return fileIndex.list(cwd, refresh);
@@ -210,7 +213,7 @@ async function smoke() {
       return imeSmoke ? ["src/", "src/App.tsx", "src/中文.ts"] : [];
     });
     ipcMain.handle("workspace:read", async (_event, file, cwd = project) => {
-      if (!previewSmoke) return { path: file, content: "", binary: false };
+      if (!previewSmoke && !largeSmoke) return { path: file, content: "", binary: false };
       previewControls.reads++;
       workspaceWatchers.watch(cwd);
       if (previewControls.fail) throw new Error("fixture read failure");
@@ -305,6 +308,12 @@ async function smoke() {
     manager.deactivate();
     await main.loadFile(process.env.TACODE_ACTIVITY_FIXTURE!);
     main.focus();
+    if (largeSmoke && largeFixture) {
+      stage = "large content performance";
+      await testLargeContent(main, project, largeFixture, event => emit(manager.findBySession(sessions[0].path)!, event), select, screenshot);
+      assert.deepEqual(rendererErrors.filter(message => !message.includes("ResizeObserver loop completed") && !message.includes("Electron Security Warning")), []);
+      return;
+    }
     if (stopSmoke) {
       stage = "stopping feedback and process isolation";
       await wait(() => evaluate("!!document.querySelector('.project-row')"));

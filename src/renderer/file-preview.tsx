@@ -3,6 +3,7 @@ import { Check, Copy, RefreshCw } from "lucide-react";
 import type { WorkspaceReadResult } from "../shared/types";
 import { useI18n } from "./i18n";
 import { rememberPosition, restorePosition, type ReadingPosition } from "./reading-position";
+import { canHighlightCode } from "./code-budget";
 
 const normalized = (value: string) => value.replaceAll("\\", "/").replace(/\/+$/, "");
 
@@ -65,6 +66,7 @@ export function FilePreviewStatus({ data, loading, error, refresh }: ReturnType<
       : data?.binary ? <p className="file-preview-notice" role="status">{t("preview.binary")}</p>
         : data && !data.content ? <p className="file-preview-notice" role="status">{t("preview.empty")}</p> : null}
     {data?.truncated && <p className="file-preview-notice" role="status">{t("preview.truncated")}</p>}
+    {data && !data.binary && data.content && (data.truncated || !/\.html?$/i.test(data.path)) && !canHighlightCode(data.content) && <p className="file-preview-notice">{t("preview.plain")}</p>}
   </>;
 }
 

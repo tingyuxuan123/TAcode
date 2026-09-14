@@ -1946,10 +1946,11 @@ export function App() {
       }
     };
 
-    const ro = new ResizeObserver(pin);
+    let frame = 0;
+    const ro = new ResizeObserver(() => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; pin(); }); });
     if (dock.current) ro.observe(dock.current);
     pin();
-    return () => ro.disconnect();
+    return () => { cancelAnimationFrame(frame); ro.disconnect(); };
   }, [home, steering.length]);
 
   // 会话列表条目：窗口化渲染（见 message-list.tsx），只有视口附近的条目会真正挂载。

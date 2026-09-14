@@ -319,9 +319,10 @@ export function Chat({
     if (!body) return;
     const measure = () => setChatBodyWidth(body.clientWidth);
     measure();
-    const observer = new ResizeObserver(measure);
+    let frame = 0;
+    const observer = new ResizeObserver(() => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; measure(); }); });
     observer.observe(body);
-    return () => observer.disconnect();
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
   }, []);
 
   const finishResizeRef = useRef<(() => void) | null>(null);
@@ -1301,8 +1302,9 @@ export function Markdown({ children, streaming }: { children: string; streaming?
     [children, streaming],
   );
   // 分段缓存的一生只服务一条持续追加的文本，所以按实例持有（见 stream-blocks.ts）。
-  const segments = useRef<((text: string) => string[]) | null>(null);
+  const segments = useRef<ReturnType<typeof createStreamSegments> | null>(null);
   if (!segments.current) segments.current = createStreamSegments();
+  const parseSegments = useCallback((text: string) => segments.current!(text, Boolean(streaming)), [streaming]);
   if (!source.trim()) return null;
   return (
     <Streamdown
@@ -1310,8 +1312,8 @@ export function Markdown({ children, streaming }: { children: string; streaming?
       // 尾部修补改由分段器只对最后一段做：remend 会扫全文，是流式每帧 O(累积文本) 的一环，
       // 而更早的段都是已闭合的 markdown，本来就不需要补。
       parseIncompleteMarkdown={false}
-      // 只有流式走分段；定稿时交回 Streamdown 的整段分块，保证最终 DOM 与分块语义不变。
-      parseMarkdownIntoBlocksFn={streaming ? segments.current : undefined}
+      // 定稿沿用相同块边界，稳定段不用在结束时拆散、重建；完整正文不再修补尾部。
+      parseMarkdownIntoBlocksFn={parseSegments}
       // 流式时启用 Streamdown 的逐词淡入：它按「已渲染字符数」记账，只给真正新增的
       // 文本节点包淡入 span，旧内容不会重放动画（StrictMode 也有专门的 rewind 兜底）。
       // 注意 animated 只负责建时间线，插件要 isAnimating 为真才会挂进渲染链。

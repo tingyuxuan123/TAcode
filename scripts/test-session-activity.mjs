@@ -15,16 +15,27 @@ try {
   await build({ entry: { preload: "src/preload/index.ts" }, format: ["cjs"], platform: "node", target: "node22", outDir: output, external: ["electron"], config: false, silent: true, outExtension: () => ({ js: ".cjs" }) });
   const baseline = process.env.TACODE_ACTIVITY_BASELINE === "1";
   const performanceFixture = process.env.TACODE_PANELS_SMOKE === "1";
-  const baselineFiles = new Set(performanceFixture ? ["src/renderer/browser/child-session-panel.tsx", "src/renderer/browser/side-chat-panel.tsx", "src/renderer/browser/workbench-panels.tsx", "src/renderer/styles.css"] : ["src/renderer/App.tsx", "src/renderer/ui.tsx", "src/renderer/styles.css"]);
+  const baselineFiles = new Set(process.env.TACODE_LARGE_SMOKE === "1" ? ["src/renderer/codeblock.tsx", "src/renderer/file-preview.tsx", "src/renderer/shiki.ts", "src/renderer/ui.tsx", "src/renderer/styles.css", "src/renderer/prompt-toolbar.tsx", "src/renderer/App.tsx"] : performanceFixture ? ["src/renderer/browser/child-session-panel.tsx", "src/renderer/browser/side-chat-panel.tsx", "src/renderer/browser/workbench-panels.tsx", "src/renderer/styles.css"] : ["src/renderer/App.tsx", "src/renderer/ui.tsx", "src/renderer/styles.css"]);
   const baselinePlugin = { name: "activity-navigation-baseline", enforce: "pre", load(id) {
     const file = path.relative(process.cwd(), id);
     if (baseline && baselineFiles.has(file)) return execFileSync("git", ["show", `${process.env.TACODE_ACTIVITY_BASELINE_REF ?? "HEAD"}:${file}`], { encoding: "utf8", maxBuffer: 2 ** 22 });
   } };
-  await buildRenderer({ configFile: false, plugins: [baselinePlugin, rendererPerformancePlugin(performanceFixture), react()], resolve: { alias: performanceFixture ? [{ find: /^react-dom\/client$/, replacement: "react-dom/profiling" }] : [] }, base: "./", logLevel: "warn", build: { outDir: path.join(output, "renderer"), emptyOutDir: true, rollupOptions: { input: "index.html" } } });
+  const resizeDiagnostic = { name: "resize-diagnostic", transformIndexHtml() {
+    if (process.env.TACODE_RESIZE_DIAGNOSTIC !== "1") return;
+    return [{ tag: "script", injectTo: "head-prepend", children: `(() => {
+      const Native = window.ResizeObserver; window.__resizeTrace = []; window.__resizeWarnings = [];
+      window.ResizeObserver = class extends Native { constructor(callback) { super((entries, observer) => {
+        window.__resizeTrace.push(entries.map(e => ({ class: e.target.className, width: e.contentRect.width, height: e.contentRect.height })));
+        window.__resizeTrace = window.__resizeTrace.slice(-12); callback(entries, observer);
+      }); } };
+      window.addEventListener('error', e => { if (e.message.includes('ResizeObserver loop')) window.__resizeWarnings.push(window.__resizeTrace.slice()); });
+    })()` }];
+  } };
+  await buildRenderer({ configFile: false, plugins: [baselinePlugin, resizeDiagnostic, rendererPerformancePlugin(performanceFixture), react()], resolve: { alias: performanceFixture ? [{ find: /^react-dom\/client$/, replacement: "react-dom/profiling" }] : [] }, base: "./", logLevel: "warn", build: { outDir: path.join(output, "renderer"), emptyOutDir: true, rollupOptions: { input: "index.html" } } });
   const env = { ...process.env, TACODE_ACTIVITY_FIXTURE: path.join(output, "renderer/index.html") };
   delete env.ELECTRON_RUN_AS_NODE;
   const benchmark = process.env.TACODE_STARTUP_BENCHMARK === "1";
-  const samples = benchmark ? Array.from({ length: 3 }, () => [0, 100, 1000].flatMap((count) => ["1", "0"].map((blocking) => ({ TACODE_STARTUP_SMOKE: "1", TACODE_STARTUP_COUNT: String(count), TACODE_STARTUP_BASELINE: blocking })))).flat() : [{}];
+  const samples = benchmark ? Array.from({ length: 3 }, () => [0, 100, 1000].flatMap((count) => ["1", "0"].map((blocking) => ({ TACODE_STARTUP_SMOKE: "1", TACODE_STARTUP_COUNT: String(count), TACODE_STARTUP_BASELINE: blocking })))).flat() : Array.from({ length: Math.max(1, Number(process.env.TACODE_LARGE_RUNS ?? 1)) }, () => ({}));
   const reports = [];
   for (const sample of samples) {
     let stdout = "";
