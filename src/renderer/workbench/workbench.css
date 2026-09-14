@@ -173,3 +173,21 @@
   .workbench-toolbar .workbench-button.has-label { width: 28px; padding: 0; }
   .workbench-toolbar .workbench-button.has-label > span { display: none; }
 }
+.project-file-panel, .project-file-tree {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.file-document-notice, .file-tree-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  color: var(--workbench-muted);
+}
+.file-document-notice button, .file-tree-notice button { flex-shrink: 0; }

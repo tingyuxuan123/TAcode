@@ -7,6 +7,7 @@ import { searchKeymap, highlightSelectionMatches, gotoLine } from "@codemirror/s
 import { tags } from "@lezer/highlight";
 import { useI18n } from "../i18n";
 import type { SourceLocation, WorkbenchColorScheme } from "./types";
+import type { EditorPosition } from "./file-view-state";
 
 export interface CodeEditorHandle {
   focus(): void;
@@ -57,7 +58,31 @@ const chinesePhrases = {
   "replace all": "替换全部", "close": "关闭", "Go to line": "转到行", "go": "跳转", "Search:": "查找：",
 };
 
-export function CodeEditor({ documentId, path, value, readOnly = false, wrap = true, colorScheme = "light", active = true, location, onChange, onSave, ref }: {
+const scrollRestorations = new WeakMap<EditorView, { top: number; left: number; cancel(): void }>();
+function restoreScroll(editor: EditorView, top: number, left: number) {
+  let cancelled = false;
+  let frame: number | undefined;
+  const restoration = { top, left, cancel: () => cancel() };
+  const cancel = () => {
+    cancelled = true;
+    if (frame !== undefined) cancelAnimationFrame(frame);
+    if (scrollRestorations.get(editor) === restoration) scrollRestorations.delete(editor);
+    for (const event of ["wheel", "touchstart", "pointerdown", "keydown"]) editor.dom.removeEventListener(event, cancel, true);
+  };
+  for (const event of ["wheel", "touchstart", "pointerdown", "keydown"]) editor.dom.addEventListener(event, cancel, true);
+  // Measure the target viewport before the scroll handler restores exact offsets.
+  editor.requestMeasure({ read: () => editor.lineBlockAtHeight(top).from, write: (target) => {
+    if (cancelled) return;
+    frame = requestAnimationFrame(() => {
+      if (cancelled) return;
+      scrollRestorations.set(editor, restoration);
+      editor.dispatch({ effects: EditorView.scrollIntoView(target, { y: "start", x: "start" }) });
+    });
+  } });
+  return cancel;
+}
+
+export function CodeEditor({ documentId, path, value, readOnly = false, wrap = true, colorScheme = "light", active = true, location, locationToken, onChange, onSave, initialPosition, onPositionChange, ref }: {
   documentId: string;
   path: string;
   value: string;
@@ -66,21 +91,26 @@ export function CodeEditor({ documentId, path, value, readOnly = false, wrap = t
   colorScheme?: WorkbenchColorScheme;
   active?: boolean;
   location?: SourceLocation;
+  locationToken?: number;
   onChange?(content: string): void;
   onSave?(): void;
+  initialPosition?: EditorPosition;
+  onPositionChange?(position: EditorPosition): void;
   ref?: Ref<CodeEditorHandle>;
 }) {
   const { locale } = useI18n();
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(null);
-  const callbacks = useRef({ onChange, onSave });
-  callbacks.current = { onChange, onSave };
+  const pendingScroll = useRef<(() => void) | undefined>(undefined);
+  const callbacks = useRef({ onChange, onSave, onPositionChange });
+  callbacks.current = { onChange, onSave, onPositionChange };
   const initial = useRef({ value, readOnly, wrap, colorScheme, locale });
   initial.current = { value, readOnly, wrap, colorScheme, locale };
   const compartments = useRef({ language: new Compartment(), writable: new Compartment(), wrapping: new Compartment(), syntax: new Compartment(), phrases: new Compartment() });
   const reveal = (target: SourceLocation) => {
     const editor = view.current;
     if (!editor) return;
+    pendingScroll.current?.();
     const line = editor.state.doc.line(Math.max(1, Math.min(editor.state.doc.lines, target.line)));
     const from = Math.min(line.to, line.from + Math.max(0, (target.column ?? 1) - 1));
     const end = target.endLine ? editor.state.doc.line(Math.max(1, Math.min(editor.state.doc.lines, target.endLine))).to : from;
@@ -92,6 +122,9 @@ export function CodeEditor({ documentId, path, value, readOnly = false, wrap = t
     if (!host.current) return;
     const config = initial.current;
     const parts = compartments.current;
+    const position = initialPosition;
+    let remembered = position;
+    let initialized = false;
     const editor = new EditorView({
       parent: host.current,
       state: EditorState.create({ doc: config.value, extensions: [
@@ -105,21 +138,50 @@ export function CodeEditor({ documentId, path, value, readOnly = false, wrap = t
         parts.language.of([]),
         EditorState.lineSeparator.of(config.value.includes("\r\n") ? "\r\n" : "\n"),
         EditorView.contentAttributes.of({ "aria-label": path, spellcheck: "false" }),
+        EditorView.scrollHandler.of((editor) => {
+          const restoration = scrollRestorations.get(editor);
+          if (!restoration) return false;
+          editor.scrollDOM.scrollTop = restoration.top;
+          editor.scrollDOM.scrollLeft = restoration.left;
+          restoration.cancel();
+          return true;
+        }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && update.transactions.some((transaction) => !transaction.annotation(Transaction.remote))) {
             callbacks.current.onChange?.(update.state.sliceDoc());
           }
+          if (update.selectionSet) remember();
         }),
       ] }),
     });
     view.current = editor;
-    return () => { view.current = null; editor.destroy(); };
+    function remember() {
+      if (!initialized || !editor.scrollDOM.clientHeight) return;
+      const selection = editor.state.selection.main;
+      remembered = { top: editor.scrollDOM.scrollTop, left: editor.scrollDOM.scrollLeft, from: selection.from, to: selection.to };
+      callbacks.current.onPositionChange?.(remembered);
+    }
+    editor.scrollDOM.addEventListener("scroll", remember);
+    let cancelRestore: (() => void) | undefined;
+    if (position) {
+      editor.dispatch({ selection: EditorSelection.single(Math.min(editor.state.doc.length, position.from), Math.min(editor.state.doc.length, position.to)) });
+      cancelRestore = restoreScroll(editor, position.top, position.left);
+      pendingScroll.current = cancelRestore;
+    }
+    initialized = true;
+    return () => { cancelRestore?.(); remember(); if (remembered) callbacks.current.onPositionChange?.(remembered); editor.scrollDOM.removeEventListener("scroll", remember); view.current = null; editor.destroy(); };
   }, [documentId]);
 
   useEffect(() => {
     const editor = view.current;
     if (!editor || editor.state.sliceDoc() === value) return;
+    pendingScroll.current?.();
+    const top = editor.scrollDOM.scrollTop; const left = editor.scrollDOM.scrollLeft; const selection = editor.state.selection.main;
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value }, annotations: [Transaction.remote.of(true), Transaction.addToHistory.of(false)] });
+    editor.dispatch({ selection: EditorSelection.single(Math.min(editor.state.doc.length, selection.from), Math.min(editor.state.doc.length, selection.to)) });
+    const cancelRestore = restoreScroll(editor, top, left);
+    pendingScroll.current = cancelRestore;
+    return cancelRestore;
   }, [value, documentId]);
 
   useEffect(() => {
@@ -145,6 +207,6 @@ export function CodeEditor({ documentId, path, value, readOnly = false, wrap = t
     return () => { disposed = true; };
   }, [documentId, path]);
   useEffect(() => { if (active) view.current?.requestMeasure(); }, [active, wrap]);
-  useEffect(() => { if (location) reveal(location); }, [documentId, location?.line, location?.column, location?.endLine]);
+  useEffect(() => { if (location) reveal(location); }, [documentId, location?.line, location?.column, location?.endLine, locationToken]);
   return <div className="workbench-code-editor" ref={host} data-document-id={documentId} />;
 }

@@ -1,0 +1,58 @@
+import type { SourceLocation } from "./types";
+
+export interface EditorPosition { top: number; left: number; from: number; to: number }
+export interface FileViewState { treeWidth?: number; treeOpen?: boolean; expanded?: string[]; treeScroll?: number; query?: string; position?: EditorPosition }
+export interface SavedFileTab { path: string; preview: boolean; location?: SourceLocation }
+export interface SavedFileTabs { tabs: SavedFileTab[]; activePath?: string }
+export const fileScope = (root: string | undefined, session?: string): string => JSON.stringify([root ?? "", session ?? ""]);
+const key = (scope: string, path: string) => `tacode:file-view:v1:${JSON.stringify([scope, path])}`;
+const tabsKey = (scope: string) => `tacode:file-tabs:v1:${scope}`;
+function read(value: string): unknown { try { return JSON.parse(localStorage.getItem(value) ?? "null"); } catch { return null; } }
+function write(value: string, data: unknown): void { try { localStorage.setItem(value, JSON.stringify(data)); } catch { /* In-memory views remain usable when storage is unavailable. */ } }
+const finite = (value: unknown, max = 100_000_000): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= max;
+export function readFileView(scope: string, path: string): FileViewState {
+  const value = read(key(scope, path)) as FileViewState | null;
+  if (!value || typeof value !== "object") return {};
+  const state: FileViewState = {};
+  if (finite(value.treeWidth, 2000) && value.treeWidth >= 200) state.treeWidth = value.treeWidth;
+  if (typeof value.treeOpen === "boolean") state.treeOpen = value.treeOpen;
+  if (finite(value.treeScroll)) state.treeScroll = value.treeScroll;
+  if (typeof value.query === "string" && value.query.length <= 4096) state.query = value.query;
+  if (Array.isArray(value.expanded)) state.expanded = value.expanded.filter((item) => typeof item === "string" && item.length <= 4096).slice(0, 2000);
+  const position = value.position;
+  if (position && [position.top, position.left, position.from, position.to].every((item) => finite(item))) state.position = position;
+  return state;
+}
+export function writeFileView(scope: string, path: string, state: FileViewState): void { write(key(scope, path), state); }
+export function readFileTabs(scope: string): SavedFileTabs {
+  const value = read(tabsKey(scope)) as SavedFileTabs | null;
+  if (!value || !Array.isArray(value.tabs)) return { tabs: [] };
+  const seen = new Set<string>(); let preview = false;
+  const tabs = value.tabs.filter((tab) => {
+    if (!tab || typeof tab.path !== "string" || !tab.path || tab.path.length > 4096 || tab.path.includes("\0") || seen.has(tab.path)) return false;
+    seen.add(tab.path); if (tab.preview && preview) return false; preview ||= Boolean(tab.preview); return true;
+  }).slice(0, 100).map((tab) => ({ path: tab.path, preview: Boolean(tab.preview) }));
+  return { tabs, activePath: tabs.some((tab) => tab.path === value.activePath) ? value.activePath : undefined };
+}
+export function writeFileTabs(scope: string, value: SavedFileTabs): void { write(tabsKey(scope), value); }
+
+/** Normalize all entry points without Node APIs; the main process repeats the boundary check. */
+export function projectFilePath(input: string, root: string, platform: NodeJS.Platform, literal = false): { path: string; location?: SourceLocation } {
+  const windows = platform === "win32";
+  const normalizedRoot = (windows ? root.replaceAll("\\", "/") : root).replace(/\/+$/, "");
+  let value = windows ? input.replaceAll("\\", "/") : input;
+  const line = literal ? null : value.match(/^(.+?):(\d+)(?::(\d+))?$/);
+  let location: SourceLocation | undefined;
+  if (line) { value = line[1]!; location = { line: Math.max(1, Math.min(100_000_000, Number(line[2]))), column: line[3] ? Math.max(1, Math.min(100_000_000, Number(line[3]))) : undefined }; }
+  const comparable = (text: string) => windows ? text.toLocaleLowerCase() : text;
+  if (comparable(value).startsWith(`${comparable(normalizedRoot)}/`)) value = value.slice(normalizedRoot.length + 1);
+  if (value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || (windows && /^[A-Za-z]:/.test(value))) throw new Error("outsideProject");
+  const parts: string[] = [];
+  for (const part of value.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") { if (!parts.length) throw new Error("outsideProject"); parts.pop(); } else parts.push(part);
+  }
+  const path = parts.join("/");
+  if (!path || path.length > 4096 || path.includes("\0")) throw new Error("invalidRequest");
+  return { path, location };
+}

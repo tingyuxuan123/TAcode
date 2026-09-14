@@ -9,16 +9,22 @@ import type { WorkbenchChange, WorkbenchTreeEntry } from "./types";
 const letters: Record<WorkbenchChange, string> = { added: "A", modified: "•", deleted: "D", renamed: "R", untracked: "U", conflict: "!" };
 const rowHeight = 28;
 
-export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryChange, onOpen, onExpand, initialExpanded = [], label, review = false }: {
+export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryChange, onOpen, onDoubleOpen, onExpand, initialExpanded = [], initialScroll, restoreReady = true, onScrollChange, onExpandedChange, reveal, label, review = false }: {
   entries: readonly WorkbenchTreeEntry[];
   selectedPath?: string;
   query?: string;
   onQueryChange(query: string): void;
   onOpen(path: string): void;
+  onDoubleOpen?(path: string): void;
   onExpand?(path: string): void;
   initialExpanded?: readonly string[];
   label?: string;
   review?: boolean;
+  initialScroll?: number;
+  restoreReady?: boolean;
+  onScrollChange?(top: number): void;
+  onExpandedChange?(paths: string[]): void;
+  reveal?: number;
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(() => new Set([...initialExpanded, ...ancestorPaths(selectedPath ?? "")]));
@@ -27,6 +33,9 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
   const list = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ start: 0, count: 40 });
   const root = useRef<HTMLDivElement>(null);
+  const pendingReveal = useRef(initialScroll === undefined ? selectedPath : undefined);
+  const pendingScroll = useRef(initialScroll);
+  const initialSelection = useRef(true);
   const rows = useMemo(() => visibleTreeRows(entries, expanded, query), [entries, expanded, query]);
   const measure = () => {
     const element = list.current;
@@ -47,6 +56,29 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, []);
   useLayoutEffect(measure, [rows]);
+  useLayoutEffect(() => {
+    if (!selectedPath) return;
+    if (!initialSelection.current && reveal !== undefined) { pendingReveal.current = selectedPath; pendingScroll.current = undefined; }
+    initialSelection.current = false;
+    for (const parent of ancestorPaths(selectedPath)) onExpand?.(parent);
+    setExpanded((current) => {
+      const parents = ancestorPaths(selectedPath);
+      if (parents.every((path) => current.has(path))) return current;
+      return new Set([...current, ...parents]);
+    });
+  }, [selectedPath, reveal]);
+  useLayoutEffect(() => {
+    if (pendingScroll.current !== undefined && restoreReady && rows.length && list.current?.clientHeight) {
+      list.current.scrollTop = pendingScroll.current; pendingScroll.current = undefined; measure();
+    }
+    if (!pendingReveal.current || !list.current?.clientHeight) return;
+    const index = rows.findIndex((row) => row.path === pendingReveal.current);
+    if (index < 0) return;
+    const element = list.current; const top = index * rowHeight;
+    if (top < element.scrollTop || top + rowHeight > element.scrollTop + element.clientHeight) element.scrollTop = Math.max(0, top - element.clientHeight / 2);
+    pendingReveal.current = undefined; measure();
+  }, [rows, reveal, restoreReady, viewport.count]);
+  useEffect(() => { onExpandedChange?.([...expanded]); }, [expanded, onExpandedChange]);
   useEffect(() => {
     // Git/files arrive asynchronously. Expand newly discovered default paths,
     // while preserving folders the user has already deliberately collapsed.
@@ -54,14 +86,6 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
     expansionDefaults.current = new Set(initialExpanded);
     if (added.length) setExpanded((current) => new Set([...current, ...added]));
   }, [initialExpanded]);
-  useEffect(() => {
-    if (!selectedPath) return;
-    setExpanded((current) => {
-      const parents = ancestorPaths(selectedPath);
-      if (parents.every((path) => current.has(path))) return current;
-      return new Set([...current, ...parents]);
-    });
-  }, [selectedPath]);
 
   const toggle = (row: WorkbenchTreeRow) => {
     setExpanded((current) => {
@@ -69,7 +93,7 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
       if (next.has(row.path)) next.delete(row.path); else next.add(row.path);
       return next;
     });
-    if (!row.expanded) onExpand?.(row.path);
+    onExpand?.(row.path);
   };
   const focusRow = (index: number) => {
     const row = rows[Math.max(0, Math.min(rows.length - 1, index))];
@@ -94,8 +118,11 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
     else if (event.key === "Home") focusRow(0);
     else if (event.key === "End") focusRow(rows.length - 1);
     else if (event.key === "ArrowRight") {
-      if (row.kind === "directory" && !row.expanded) toggle(row);
-      else if (row.kind === "directory") focusRow(index + 1);
+      if (row.kind === "directory") {
+        onExpand?.(row.path);
+        if (!row.expanded) toggle(row);
+        else if (rows[index + 1]?.parent === row.path) focusRow(index + 1);
+      }
     } else if (event.key === "ArrowLeft") {
       if (row.kind === "directory" && row.expanded) toggle(row);
       else focusRow(rows.findIndex((item) => item.path === row.parent));
@@ -117,7 +144,7 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
     </label>
     <div className="workbench-tree-content" role="tree" aria-label={label ?? t("workbench.files")}>
       {rows.length === 0 && <p className="workbench-empty">{t("workbench.emptyFiles")}</p>}
-      <div ref={list} className="workbench-tree-list" onScroll={measure}>
+      <div ref={list} className="workbench-tree-list" onScroll={() => { measure(); onScrollChange?.(list.current?.scrollTop ?? 0); }}>
         <div style={{ height: rows.length * rowHeight, position: "relative" }}>
           <div style={{ position: "absolute", insetInline: 0, top: start * rowHeight }}>
           {visible.map((row, offset) => <div key={row.path} role="treeitem" aria-level={row.depth + 1}
@@ -126,6 +153,7 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
             className={`workbench-tree-row${selectedPath === row.path ? " is-selected" : ""}${row.kind === "directory" ? " is-directory" : ""}`}
             style={{ paddingInlineStart: 8 + row.depth * 16 }}
             title={row.path} onFocus={() => setFocused(row.path)}
+            onDoubleClick={() => { if (row.kind !== "directory") onDoubleOpen?.(row.path); }}
             onKeyDown={(event) => onKeyDown(event, row, start + offset)}
             onClick={() => { setFocused(row.path); if (row.kind === "directory") toggle(row); else onOpen(row.path); }}>
             {row.depth > 0 && <span className="workbench-tree-guides" aria-hidden="true" style={{ width: row.depth * 16 }} />}

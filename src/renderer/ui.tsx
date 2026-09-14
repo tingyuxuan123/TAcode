@@ -19,7 +19,7 @@ import { EffortPicker, ModelPicker, usePickerPopover } from "./composer-pickers"
 import { PromptToolbar } from "./prompt-toolbar";
 import { MAX_DRAFT_IMAGE_SIZE, type DraftImage } from "./composer-drafts";
 import { useComposerDraft } from "./use-composer-draft";
-import { createImeGuard } from "./ime";
+import { createImeGuard, isImeKey } from "./ime";
 import { approvalTitle, baseName, cacheHitRate, collectFileChanges, delegateProgress, delegateStatusLabel, filterMentionPaths, formatCommand, isRecoverableRequestError, liveStatus, repairMarkdownTables, splitHttpUrls, splitPatch, stripEmptyMarkdown, spliceFileMention, toolCommand, toolPath, toolSummary, toolWritePreview, toolWriteSource, traceRows, webSearchCard, workspaceRelative, type ChatImage, type ChatMessage, type DelegateTaskState, type FileChange, type SessionFile, type SessionTodo, type ToolActivity, type TraceRow, type WorkItem } from "./conversation";
 import { tokenizeCode } from "./highlight";
 import { isTightTableCell } from "./markdown-table";
@@ -1526,7 +1526,8 @@ export function FlowSpinner({ size = 15, label }: { size?: number; label?: strin
   return <Loader size={size} className="flow-spinner" aria-hidden={label ? undefined : true} aria-label={label} />;
 }
 
-export type PanelTab = { id: string; label: string; title?: string; icon?: ReactNode };
+export type PanelTab = { id: string; label: string; title?: string; icon?: ReactNode; preview?: boolean; reorderable?: boolean };
+export type PanelTabCommand = { label: string; icon?: ReactNode; disabled?: boolean; run(): void };
 
 export type PanelAddItem = { type: string; label: string; icon: ReactNode; hint?: string };
 
@@ -1543,6 +1544,9 @@ export function PanelTabs({
   addItems,
   onPickType,
   onCloseTab,
+  onPinTab,
+  onReorder,
+  tabCommands,
   flush = false,
   children,
 }: {
@@ -1554,6 +1558,9 @@ export function PanelTabs({
   onPickType?(type: string): void;
   /** Show a close control per tab (open panels can be dismissed). */
   onCloseTab?(id: string): void;
+  onPinTab?(id: string): void;
+  onReorder?(id: string, target: string, after?: boolean): void;
+  tabCommands?(id: string): PanelTabCommand[];
   /** No padding/scroll body — for full-bleed panes like the browser. */
   flush?: boolean;
   children: ReactNode;
@@ -1564,11 +1571,29 @@ export function PanelTabs({
   const addWrapRef = useRef<HTMLDivElement>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
   const tabListRef = useRef<HTMLDivElement>(null);
+  const [tabMenu, setTabMenu] = useState<{ id: string; top: number; left: number } | null>(null);
+  const tabMenuRef = useRef<HTMLDivElement>(null);
+  const dragged = useRef<{ id: string; pointer: number; x: number; y: number; moving: boolean; target?: string; after?: boolean } | undefined>(undefined);
+  const clickAfterDrag = useRef(false);
+  const [dropTarget, setDropTarget] = useState<string>();
   const tabLayoutKey = tabs.map((tab) => `${tab.id}:${tab.label}`).join("\n");
 
   useEffect(() => {
     tabListRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [active, tabLayoutKey, headerHost]);
+
+  useEffect(() => {
+    if (!tabMenu) return;
+    tabMenuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    const close = () => setTabMenu(null);
+    const outside = (event: PointerEvent) => { if (!tabMenuRef.current?.contains(event.target as Node)) close(); };
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); close(); tabListRef.current?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus(); }
+    };
+    document.addEventListener("pointerdown", outside); document.addEventListener("keydown", key); window.addEventListener("resize", close); window.addEventListener("blur", close);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", key); window.removeEventListener("resize", close); window.removeEventListener("blur", close); };
+  }, [tabMenu]);
+  useEffect(() => { setTabMenu(null); }, [active, tabLayoutKey]);
 
   useEffect(() => {
     if (!addMenuPos) return;
@@ -1619,9 +1644,53 @@ export function PanelTabs({
             type="button"
             role="tab"
             aria-selected={tab.id === active}
-            className={tab.id === active ? "inspect-tab active" : "inspect-tab"}
+            className={`inspect-tab${tab.id === active ? " active" : ""}${tab.preview ? " is-preview" : ""}${dropTarget === tab.id ? " is-drop-target" : ""}`}
+            data-panel-id={tab.id}
+            data-file-preview={tab.preview === undefined ? undefined : tab.preview}
             title={tab.title || tab.label}
-            onClick={() => onSelect(tab.id)}
+            onClick={() => { if (!clickAfterDrag.current) onSelect(tab.id); }}
+            onDoubleClick={() => onPinTab?.(tab.id)}
+            onPointerDown={(event) => {
+              if (!tab.reorderable || !onReorder || event.button !== 0 || (event.target as HTMLElement).closest('.inspect-tab-close')) return;
+              dragged.current = { id: tab.id, pointer: event.pointerId, x: event.clientX, y: event.clientY, moving: false };
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              const drag = dragged.current; if (!drag || drag.pointer !== event.pointerId) return;
+              if (!drag.moving && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 6) return;
+              drag.moving = true;
+              const list = tabListRef.current; if (list) { const rect = list.getBoundingClientRect(); if (event.clientX < rect.left + 20) list.scrollLeft -= 16; else if (event.clientX > rect.right - 20) list.scrollLeft += 16; }
+              const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-panel-id]');
+              if (!target || !tabs.some((item) => item.id === target.dataset.panelId)) { drag.target = undefined; setDropTarget(undefined); return; }
+              drag.target = target.dataset.panelId; const rect = target.getBoundingClientRect(); drag.after = event.clientX > rect.left + rect.width / 2;
+              setDropTarget(drag.target);
+            }}
+            onPointerUp={(event) => {
+              const drag = dragged.current; if (!drag || drag.pointer !== event.pointerId) return;
+              dragged.current = undefined; setDropTarget(undefined);
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+              if (drag.moving) { clickAfterDrag.current = true; requestAnimationFrame(() => { clickAfterDrag.current = false; }); if (drag.target) onReorder?.(drag.id, drag.target, drag.after); }
+            }}
+            onPointerCancel={() => { dragged.current = undefined; setDropTarget(undefined); }}
+            onLostPointerCapture={() => { dragged.current = undefined; setDropTarget(undefined); }}
+            onContextMenu={(event) => {
+              if (!tabCommands?.(tab.id).length) return;
+              event.preventDefault(); setAddMenuPos(null); setTabMenu({ id: tab.id, top: Math.max(8, Math.min(event.clientY, window.innerHeight - 220)), left: Math.max(8, Math.min(event.clientX, window.innerWidth - 230)) });
+            }}
+            onKeyDown={(event) => {
+              if (isImeKey(event.nativeEvent)) return;
+              const index = tabs.findIndex((item) => item.id === tab.id);
+              if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                const next = tabs[index + (event.key === "ArrowLeft" ? -1 : 1)]; if (!next) return;
+                event.preventDefault();
+                if ((event.ctrlKey || event.metaKey) && event.shiftKey && tab.reorderable) onReorder?.(tab.id, next.id, event.key === "ArrowRight");
+                else { onSelect(next.id); requestAnimationFrame(() => tabListRef.current?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus()); }
+              } else if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); onCloseTab?.(tab.id); }
+              else if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") {
+                if (!tabCommands?.(tab.id).length) return; event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect();
+                setTabMenu({ id: tab.id, top: Math.max(8, Math.min(rect.bottom, window.innerHeight - 220)), left: Math.max(8, Math.min(rect.left, window.innerWidth - 230)) });
+              }
+            }}
           >
             {tab.icon}
             <span className="inspect-tab-label">{tab.label}</span>
@@ -1667,6 +1736,17 @@ export function PanelTabs({
     <div className="inspect">
       {headerHost ? createPortal(tabHeader, headerHost) : tabHeader}
       <div className={flush ? "inspect-body flush" : "inspect-body"}>{children}</div>
+      {tabMenu && createPortal(<div ref={tabMenuRef} className="panel-add-menu file-tab-menu" role="menu" style={{ top: tabMenu.top, left: tabMenu.left }}
+        onKeyDown={(event) => {
+          if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || isImeKey(event.nativeEvent)) return;
+          event.preventDefault(); const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+          const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+          buttons[next]?.focus();
+        }}>
+        {(tabCommands?.(tabMenu.id) ?? []).map((command) => <button key={command.label} className="panel-add-item" type="button" role="menuitem" disabled={command.disabled}
+          onClick={() => { setTabMenu(null); command.run(); }}><span className="panel-add-item-icon">{command.icon}</span><span>{command.label}</span></button>)}
+      </div>, document.body)}
       {addMenuPos &&
         createPortal(
           <div

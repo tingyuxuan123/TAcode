@@ -1165,3 +1165,10 @@
 - 独立工作树吸收 UX-09/10，完成生产文件 API、稳定目录分页与共享完整路径搜索、UTF-8 文档版本/原子保存、路径订阅及旧 HTML/浏览器项目预览绑定。4 MiB 上限、BOM/CRLF/mode、失效游标、保存冲突、越界链接、原生监听失败与退出在途读取均有回归。
 - 最终全量 **134 文件 / 1145 用例**、typecheck、build、diff check 通过；新文件服务、文件组件、23 阶段 Git、BrowserPanel 以及既有 UX 文件索引/预览 Electron smoke 通过。文件服务外部更新 **133.5 ms**，关闭后订阅/watcher/在途读取为 0，网络与 renderer 错误为 0。详见 `.agents/file-review/progress.md`、`docs/file-review-fr-06.md`。
 - 下一项 FR-07 生产文件树与统一标签，当前专项 **6/15**。新编辑与统一文件界面尚待后续阶段，完整目标继续 active；本轮仅 FR-06，在隔离分支提交，原工作区及既有 UX passes 未修改。
+
+## 2026-09-14：文件与审查专项 FR-07 完成
+
+- 在独立工作树 `codex/file-review-workbench` 接入生产文件树、共享项目/路径文档和按项目/会话保存的统一标签。聊天 Markdown、工具过程/变更摘要、Git 与树打开同一文件入口；支持预览替换、双击固定、菜单/拖动/键盘排序、关闭其他文件、树搜索定位、宽度及精确滚动/选区恢复，App 移除旧 FileDrawer 挂载。
+- 修复整段磁盘更新和隐藏会话共享更新后的阅读位置；完善原生夹具准备条件并修复极窄 Composer 弹层坐标，未放宽断言。最终全量 **137 文件 / 1157 用例**、typecheck、build、diff check，通过 7 阶段生产文件工作台、5 阶段文件组件、23 阶段 Git、完整工作台/消息列表、真实 App 文件索引/文档及 BrowserPanel/live reload/resize 回归。
+- 工作台刷新 **43.0 ms**、真实 App 文档刷新 **175.6 ms**；工作台网络与 renderer 错误为 0，关闭后文件/Git 订阅与读取资源为 0。详细进度、截图和边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-07.md`。
+- 专项 **7/15**；下一条 FR-08 为生产编辑/保存、版本冲突及未保存内容保护，当前文件仍只读。完整目标保持 active，原工作区及既有 UX 清单未修改。

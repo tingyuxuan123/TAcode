@@ -75,7 +75,15 @@ describe("shared session index", () => {
   it("uses filesystem notifications for external files and releases watchers on close", async () => {
     const changed = vi.fn();
     index = new SessionIndex({ onChanged: changed, debounceMs: 10 });
+    const ready = session("watch-ready");
+    await fs.writeFile(ready, transcript("watch-ready"));
     index.startWatching();
+    // fs.watch has no ready event. Observe a real notification before testing
+    // a single external creation, which macOS can miss during registration.
+    await vi.waitFor(async () => {
+      await fs.appendFile(ready, "\n");
+      expect(index.store.get("watch-ready")).toBeDefined();
+    }, { timeout: 3000 });
     await fs.writeFile(session("external"), transcript("external"));
     // macOS can batch fs.watch notifications for about one second. The default
     // 1000 ms assertion timeout races delivery when the full suite is busy.

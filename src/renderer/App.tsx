@@ -56,7 +56,6 @@ import {
   turnAnchors,
   upsertSessionSummary,
   type ChatMessage,
-  type FileChange,
   type RestoreFile,
   type SessionTodo,
 } from "./conversation";
@@ -65,7 +64,6 @@ import {
   AssistantTurn,
   Chat,
   Dots,
-  FileDrawer,
   FlowSpinner,
   Icon,
   Login,
@@ -571,20 +569,17 @@ export function App() {
   }, [loading, activeActivity]);
   const [fullscreen, setFullscreen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
-  const [preview, setPreview] = useState<FileChange>();
-  const browserPanels = useBrowserPanels(workspace);
-  const panelDispatch = browserPanels.dispatch;
-  // 侧边聊天锚定发起时的主会话（Codex 模式临时语义）：切换/新建会话后，
-  // 不属于新会话的临时侧边聊天一并关闭，runtime 由面板卸载逻辑兜底停止。
-  useEffect(() => {
-    panelDispatch({ type: "session-changed", ...(activeSession ? { sourceSession: activeSession } : {}) });
-  }, [activeSession, panelDispatch]);
+  const browserPanels = useBrowserPanels(workspace, activeSession);
   const sidebarLayout = useSidebarLayout();
   // 用户点开子会话的统一入口（侧栏行 + 委派卡片行都走这里）。除了把标签放进右侧
   // 工作台，还要把**关着的右侧抽屉拉开**：标签加进了一个看不见的抽屉等于没反应——
   // 这正是「点了子会话没效果」的根因。自动开标签（useDelegationTabs 的后台刷新）
   // 直接走 browserPanels 原入口、不经过这里，不抢抽屉。
   const [drawerSignal, setDrawerSignal] = useState(0);
+  const openFileFromClick = useCallback((path: string, options?: { preview?: boolean; literal?: boolean }) => {
+    try { browserPanels.openFile(path, options); setDrawerSignal((value) => value + 1); }
+    catch { setToast(t("fileView.outsideProject")); }
+  }, [browserPanels.openFile, t]);
   const openChildSessionFromClick = useCallback(
     (key: string, info: ChildSessionPanelInfo, options?: { activate?: boolean }) => {
       // 子会话标签锚定父会话（可见性跟会话走）：点击都发生在当前主会话的上下文里，
@@ -1333,7 +1328,6 @@ export function App() {
     sessionRef.current = undefined;
     setRunning(false);
     setUiRequest(undefined);
-    setPreview(undefined);
     setFeatureTodos([]);
     setAgentSkills([]);
     return true;
@@ -1356,7 +1350,6 @@ export function App() {
     setSteering([]);
     setRunning(false);
     setUiRequest(undefined);
-    setPreview(undefined);
     setFeatureTodos([]);
     setAgentSkills([]);
     setActiveSession(undefined);
@@ -1993,8 +1986,8 @@ export function App() {
             stopping={isLastGroup && stopping}
             errorRecovered={recovered}
             recoverableFailStreak={recoverableFailStreak}
-            onOpenFile={setPreview}
-            onOpenPath={(path) => browserPanels.openFile(path)}
+            onOpenFile={(file) => openFileFromClick(file.path, { literal: true })}
+            onOpenPath={(path) => openFileFromClick(path, { literal: true })}
             workspace={workspace}
             onRetry={showRetry ? () => {
               void sendMessage(t("composer.retryContinue"));
@@ -2190,7 +2183,7 @@ export function App() {
   );
 
   return (
-    <PreviewContext.Provider value={(filePath) => setPreview({ path: filePath, additions: 0, deletions: 0 })}>
+    <PreviewContext.Provider value={openFileFromClick}>
     <div className={["app", darwin && "darwin", fullscreen && "fullscreen"].filter(Boolean).join(" ")}>
       <SidebarNav
         collapsed={sidebarLayout.collapsed}
@@ -2342,7 +2335,7 @@ export function App() {
           messageList.current?.scrollToAnchor(id, { onSettled: follow.reanchor });
         }} />}
         inspect={workspace || browserPanels.tabs.some((tab) => tab.type === "skills" || tab.type === "mcp") ? (
-          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace} onUsePrompt={fillPrompt}
+          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace} onUsePrompt={fillPrompt} onOpenFile={openFileFromClick}
             sideChatProps={{
               workspace,
               provider: connected,
@@ -2354,8 +2347,8 @@ export function App() {
               permission,
             }}
             review={<GitReviewPanel projectRoot={workspace} active={browserPanels.active === "review"}
-              onOpenFile={browserPanels.openFile} onChooseProject={() => void openFolder()} onOpenTerminal={() => browserPanels.openPanel("terminal")} />}
-            files={<FilesPanel workspace={workspace} files={workingFiles} onOpen={browserPanels.openFile} />}
+              onOpenFile={(path) => openFileFromClick(path, { literal: true })} onChooseProject={() => void openFolder()} onOpenTerminal={() => browserPanels.openPanel("terminal")} />}
+            files={<FilesPanel workspace={workspace} scope={browserPanels.filesScope} active={browserPanels.active === "files"} files={workingFiles} onOpen={openFileFromClick} />}
           />
         ) : undefined}
       >
@@ -2451,7 +2444,6 @@ export function App() {
         )}
       </Chat>
       </PanelActionsProvider>
-      {preview && <FileDrawer file={preview} workspace={workspace} onClose={() => setPreview(undefined)} />}
 
       {/* 选中主聊天文字 → 浮出「在侧边聊天中询问」（Codex 模式入口之一）。 */}
       {workspace && <SelectionAskBar onAsk={(text) => browserPanels.openSideChat(activeSession, text)} />}

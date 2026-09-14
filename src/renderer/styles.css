@@ -4438,7 +4438,7 @@ textarea::selection,
   color: var(--ink);
 }
 .prompt-toolbar-controls[data-mode="menu"] {
-  position: fixed;
+  position: absolute;
   z-index: 95;
   flex-direction: column;
   align-items: stretch;
@@ -9356,3 +9356,7 @@ kbd {
 .session-history-controls p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .session-index-status { margin: 4px 16px 12px; display: flex; flex-wrap: wrap; gap: 6px; color: var(--ink-2); font-size: 11px; }
 .session-index-status details { width: 100%; overflow-wrap: anywhere; }
+.inspect-tab.is-preview .inspect-tab-label { font-style: italic; }
+.inspect-tab.is-drop-target { box-shadow: inset 2px 0 var(--ink); }
+.file-tab-menu { width: 220px; }
+.file-tab-menu .panel-add-item:disabled { opacity: .45; cursor: default; }

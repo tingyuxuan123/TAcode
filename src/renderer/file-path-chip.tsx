@@ -4,9 +4,7 @@ import { useI18n } from "./i18n";
 import { getFileName, stripLineCol } from "./file-path";
 
 /**
- * 应用到预览抽屉的上下文。
- * 由 App 层注入：接受一个文件路径，命中后用 FileDrawer 在应用内打开预览。
- * 这样 markdown 里的文件 chip 点击是应用内预览，而不是 shell.openPath（系统应用）。
+ * 由 App 注入统一文件入口；Markdown 路径与过程区/文件树共享工作台文档。
  */
 export const PreviewContext = createContext<((filePath: string) => void) | undefined>(undefined);
 
@@ -23,7 +21,7 @@ interface FilePathChipProps {
 
 /**
  * 文件路径芯片 — 在 markdown 里出现文件路径时，渲染为带文件图标的可点击 chip。
- * 点击通过 PreviewContext 触发应用内 FileDrawer 预览（不调用系统应用）。
+ * 点击通过 PreviewContext 打开工作台文件标签。
  */
 export const FilePathChip = memo(function FilePathChip({ filePath }: FilePathChipProps) {
   const { t } = useI18n();
@@ -33,7 +31,7 @@ export const FilePathChip = memo(function FilePathChip({ filePath }: FilePathChi
   const filename = getFileName(cleanPath);
 
   const handleClick = () => {
-    openPreview?.(cleanPath);
+    openPreview?.(filePath.trim());
   };
 
   return (

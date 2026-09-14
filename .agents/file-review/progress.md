@@ -64,3 +64,15 @@
 - 验证：最终 **134 文件 / 1145 用例**（`pnpm test --reporter=dot --maxWorkers=1`）、typecheck、build、diff check 通过。新文件服务定向 **14 回归**通过；`pnpm test:file-service` 4 阶段、`pnpm test:file-review` 5 阶段、`pnpm test:git-review` 23 阶段、实际 BrowserPanel 本地预览/live reload、UX 文件索引与预览 Electron 回归通过。文件服务更新 **133.5 ms**，订阅/根 watcher/在途读取计数均为 0，网络与 renderer 错误为 0；Git 外部刷新 355/316 ms，旧文本预览 245.8 ms。证据与边界见 `docs/file-review-fr-06.md`、`docs/file-review-reference/fr-06-result.json`。
 - 既有 UX App 夹具仍打印未注册的 Git subscribe/unsubscribe，文件读/列表失败为主动注入；该夹具用于文件索引/预览验收，Git 由独立生产 IPC 烟测覆盖。构建与全量测试顺序执行；Windows 和整体性能仍待 FR-15。原工作区 main/b1f3d97 未修改、切换或重置。
 - 下一项 FR-07：生产文件树与统一标签；本轮未开始 FR-07，专项完成 **6/15**，完整复刻目标保持 active。
+## 2026-09-14 FR-07 开始
+
+- 接续独立工作树中的 FR-07 改动：统一项目/路径文档，按项目/会话持久化标签及阅读位置，接入生产文件树和聊天/审查的文件入口。
+- 正在完成预览替换、固定、排序、关闭其他文件及滚动恢复验收。FR-07 passes 保持 false；编辑保存属于下一项 FR-08。
+
+## 2026-09-14 FR-07 完成
+
+- 生产 `ProjectFilePanel` / `ProjectFileTree` 接入共享项目+路径文档和完整索引；Markdown、工具过程、变更摘要、Git 审查及文件树统一打开工作台标签，展开外层抽屉，移除 App 的旧 FileDrawer 挂载。真实冒号文件名和 Markdown 行/列引用分别处理。
+- 项目/会话独立保存标签、预览/固定状态、顺序、树筛选/展开/宽度和滚动/选区。原生双击固定、菜单、指针拖动与键盘排序、关闭其他文件、方向键搜索定位可用；隐藏会话保留显示版本，激活时应用共享磁盘更新，精确恢复阅读位置。
+- 修复 CodeMirror 整段替换后的测量/滚动补偿和隐藏文档更新写入零位置；原生验收保持精确像素/选区断言。对齐既有工作台转录/报告与草稿 fillToken 夹具，文件索引监听用例先观察真实通知；另修复 backdrop-filter 下极窄 Composer 菜单坐标，边界断言未放宽。
+- 验证：最终 **137 文件 / 1157 用例**（`pnpm test --reporter=dot --maxWorkers=1`）、typecheck、build、diff check 通过。新共享文档/状态/标签定向 **4 文件 / 41 用例**、生产文件工作台 **7 阶段**、文件组件 **5 阶段**、生产 Git **23 阶段**、完整工作台/消息列表、真实 App 文件索引与文档、BrowserPanel/live reload/resize 回归通过。工作台刷新 **43.0 ms**、App 文档刷新 **175.6 ms**；工作台网络/renderer 错误为 0，关窗后文件及 Git 资源计数为 0。详见 `docs/file-review-fr-07.md` 和 `docs/file-review-reference/fr-07-result.json`，中英文最终截图已保存并检查。
+- 本阶段生产文档只读；下一项 **FR-08：编辑、保存、版本冲突和未保存内容保护**。专项 **7/15**，完整目标保持 active。原工作区及另一运行任务未修改、切换或重置，既有 UX passes 未改。
