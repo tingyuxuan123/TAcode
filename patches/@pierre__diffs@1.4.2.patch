@@ -1,0 +1,40 @@
+diff --git a/dist/components/CodeView.js b/dist/components/CodeView.js
+index 2fd5213232a3c550d483dcdf61497ed40f070a9b..6190bc07a330c89cb9ac8af92d48f6e3b72f0b90 100644
+--- a/dist/components/CodeView.js
++++ b/dist/components/CodeView.js
+@@ -180,6 +180,8 @@ var CodeView = class CodeView {
+ 	scrollAnimation;
+ 	root;
+ 	resizeObserver;
++	resizeFrame;
++	pendingResizeEntries = new Map();
+ 	container = document.createElement("div");
+ 	stickyContainer = document.createElement("div");
+ 	stickyOffset = document.createElement("div");
+@@ -401,6 +403,9 @@ var CodeView = class CodeView {
+ 		};
+ 	}
+ 	reset() {
++		if (this.resizeFrame != null) cancelAnimationFrame(this.resizeFrame);
++		this.resizeFrame = void 0;
++		this.pendingResizeEntries.clear();
+ 		dequeueRender(this.computeRenderRangeAndEmit);
+ 		this.clearReadySubscription();
+ 		this.restoreScrollInteractions();
+@@ -1789,6 +1794,16 @@ var CodeView = class CodeView {
+ 		this.scrollAnimation = void 0;
+ 	};
+ 	handleResize = (entries) => {
++		for (const entry of entries) this.pendingResizeEntries.set(entry.target, entry);
++		if (this.resizeFrame != null) return;
++		this.resizeFrame = requestAnimationFrame(() => {
++			this.resizeFrame = void 0;
++			const pending = [...this.pendingResizeEntries.values()];
++			this.pendingResizeEntries.clear();
++			if (this.root != null) this.applyResizeEntries(pending);
++		});
++	};
++	applyResizeEntries = (entries) => {
+ 		let shouldRender = false;
+ 		for (const entry of entries) if (entry.target === this.stickyContainer) {
+ 			const blockSize = entry.borderBoxSize[0].blockSize;

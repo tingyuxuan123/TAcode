@@ -76,6 +76,17 @@ describe("browser tools across a mid-session permission switch", () => {
     const events: AgentEvent[] = [];
     const errors: string[] = [];
     const host = new AgentHost((event) => events.push(event), (error) => errors.push(error));
+    const promptTools = async (message: string, requestCount: number) => {
+      const settled = events.filter((event) => event.type === "agent_settled").length;
+      await host.request("prompt", { message });
+      // A loaded test host may need more than 300 ms to start its RPC worker.
+      // Assert against the actual gateway request and settled turn, not a timer.
+      await vi.waitFor(() => {
+        expect(bodies).toHaveLength(requestCount);
+        expect(events.filter((event) => event.type === "agent_settled").length).toBeGreaterThan(settled);
+      }, { timeout: 10_000 });
+      return requestToolNames(bodies.at(-1)!);
+    };
 
     try {
       await host.start({
@@ -92,19 +103,14 @@ describe("browser tools across a mid-session permission switch", () => {
         desktopProvider: { config, apiKey: "" },
       });
 
-      await host.request("prompt", { message: "first" });
-      // 生成结束（mock 网关直接收尾）：此刻请求体里的工具名就是模型看到的工具。
-      await new Promise((done) => setTimeout(done, 300));
-      const before = requestToolNames(bodies.at(-1) ?? "{}");
+      const before = await promptTools("first", 1);
       expect(before).toContain("read_file");
       expect(before).toContain("browser_navigate");
       expect(before).toContain("browser_list_tabs");
 
       // 复现故障动作：会话中途切换权限模式（界面上的权限选择器走的就是这条命令）。
       await host.request("prompt", { message: "/permissions full" });
-      await host.request("prompt", { message: "second" });
-      await new Promise((done) => setTimeout(done, 300));
-      const after = requestToolNames(bodies.at(-1) ?? "{}");
+      const after = await promptTools("second", 2);
       // 旧实现在这里会变成不含 browser_*，模型随后调用即 `Tool browser_navigate not found`。
       expect(after).toContain("read_file");
       expect(after).toContain("browser_navigate");
@@ -113,9 +119,7 @@ describe("browser tools across a mid-session permission switch", () => {
       // plan 模式（F3）：浏览器工具仍在下发给模型的表里，交互限制改由调用期拒绝
       // （否则模型会先撞一次 `Tool browser_click not found`）。
       await host.request("prompt", { message: "/permissions plan" });
-      await host.request("prompt", { message: "third" });
-      await new Promise((done) => setTimeout(done, 300));
-      const planned = requestToolNames(bodies.at(-1) ?? "{}");
+      const planned = await promptTools("third", 3);
       expect(planned).toContain("read_file");
       expect(planned).toContain("update_plan");
       expect(planned).toContain("browser_navigate");

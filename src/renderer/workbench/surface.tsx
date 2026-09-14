@@ -3,10 +3,11 @@ import { useI18n } from "../i18n";
 import type { WorkbenchColorScheme } from "./types";
 import "./workbench.css";
 
-export function WorkbenchSurface({ toolbar, navigation, children, treeOpen, colorScheme = "light", initialTreeWidth = 352, onTreeWidthChange, kind = "file" }: {
+export function WorkbenchSurface({ toolbar, navigation, children, context, treeOpen, colorScheme = "light", initialTreeWidth = 352, onTreeWidthChange, kind = "file" }: {
   toolbar: ReactNode;
   navigation: ReactNode;
   children: ReactNode;
+  context?: ReactNode;
   treeOpen: boolean;
   colorScheme?: WorkbenchColorScheme;
   initialTreeWidth?: number;
@@ -31,6 +32,7 @@ export function WorkbenchSurface({ toolbar, navigation, children, treeOpen, colo
   return <section className={`code-workbench is-${kind}${treeOpen ? " is-tree-open" : ""}`} data-color-scheme={colorScheme}
     style={{ "--workbench-tree-width": treeWidth + "px" } as CSSProperties} ref={root}>
     <header className="workbench-toolbar">{toolbar}</header>
+    {context}
     <div className="workbench-body">
       <main className="workbench-content">{children}</main>
       {treeOpen && <>

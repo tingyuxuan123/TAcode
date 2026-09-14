@@ -24,3 +24,11 @@
 - 路径父目录 realpath/O_NOFOLLOW、异步子进程和取消/超时/输出边界；两次核对发现读取竞态后有界重试。未跟踪文本有总量预算，超限和空/二进制分开；行数仍来自 Git。
 - 定向 26 用例通过；全量 121 文件 / 1053 用例、typecheck、diff check 通过。详细证据见 docs/file-review-fr-02.md。
 - 下一项 FR-03：Git typed IPC、项目隔离和实时订阅，接入 ReviewWorkbench。FR-04/05 的写操作、FR-06 起的生产文件服务、评论/AI 及总验收仍未完成；目标保持 active。
+
+## 2026-09-14 FR-03 完成
+
+- 生产 Git IPC / preload、GitReviewService 与原生监听接入审查标签，四种真实范围、分支/提交选择、全路径筛选、统计、布局/上下文和文件定位可用。非文本/空/冲突/超限元数据独立于源码；历史只读，计划确认与 Agent /undo 保留在聊天。
+- 主 frame / 已打开项目授权、每项目查询合并、旧响应隔离、取消中授权与读取、隐藏面板/窗口的订阅及 Worker 释放，监听失效时显式轮询。针对真实布局循环记录 @pierre/diffs 的局部 pnpm 补丁。
+- 文件：src/main/git/{git-service,git-watch,git-ipc}、shared/git、preload、App、renderer/workbench 组件/状态及本地化；真实 Electron scripts/git-review-smoke.ts、夹具、22 项定向回归与依赖补丁。
+- 验证：全量 125 文件 / 1075 用例（maxWorkers=4）、typecheck、build、diff check 通过；组件及生产 Git Electron smoke 通过，外部刷新 385 / 390 ms，0 网络请求、0 renderer 错误、关闭后 0 订阅/读取。默认并发旧 state.test 刷新超时，单独及限制并发全量均通过，未改其断言。详情 docs/file-review-fr-03.md。
+- 下一项 FR-04：批量/文件/hunk 暂存、取消暂存、还原，快照校验、补丁预检与本地恢复点。另一任务仍在原工作区运行；本分支继续隔离，FR-06 前再整合其已提交变化。总目标保持 active。

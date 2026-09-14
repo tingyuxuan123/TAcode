@@ -1122,3 +1122,9 @@
 - 独立 Git 读取服务及 26 个真实仓库用例完成；四种范围、worktree、特殊路径、二进制/冲突状态和读取竞态均有验证。
 - 全量 121 文件 / 1053 测试、typecheck 通过。详细进度与边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-02.md`。
 - 下一项 FR-03：将真实 Git 快照、项目隔离和订阅接到审查组件。仍在独立分支实施，原工作区不切换/重置。
+
+## 2026-09-14：文件与审查专项 FR-03
+
+- 真实 Git 审查、主进程订阅/授权、项目与旧响应隔离、隐藏释放和元数据呈现完成；计划确认与 Agent /undo 入口保留。
+- 全量 125 文件 / 1075 用例（4 个测试进程）、typecheck、build、组件及生产 Git Electron smoke 通过。外部变化刷新 385 / 390 ms，0 网络和 renderer 错误；详见 `.agents/file-review/progress.md`、`docs/file-review-fr-03.md`。
+- 下一项 FR-04：真实暂存、取消暂存和可恢复还原。全部复刻目标继续 active，本阶段没有改动原工作区或既有 UX 清单。

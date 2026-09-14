@@ -11,3 +11,4 @@ minimumReleaseAgeExclude:
   - tether-agent-core
 patchedDependencies:
   '@earendil-works/pi-coding-agent@0.83.0': patches/@earendil-works__pi-coding-agent@0.83.0.patch
+  '@pierre/diffs@1.4.2': patches/@pierre__diffs@1.4.2.patch

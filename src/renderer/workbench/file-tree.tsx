@@ -22,6 +22,7 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(() => new Set([...initialExpanded, ...ancestorPaths(selectedPath ?? "")]));
+  const expansionDefaults = useRef(new Set(initialExpanded));
   const [focused, setFocused] = useState(selectedPath ?? "");
   const list = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ start: 0, count: 40 });
@@ -46,6 +47,13 @@ export function WorkbenchFileTree({ entries, selectedPath, query = "", onQueryCh
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, []);
   useLayoutEffect(measure, [rows]);
+  useEffect(() => {
+    // Git/files arrive asynchronously. Expand newly discovered default paths,
+    // while preserving folders the user has already deliberately collapsed.
+    const added = initialExpanded.filter((path) => !expansionDefaults.current.has(path));
+    expansionDefaults.current = new Set(initialExpanded);
+    if (added.length) setExpanded((current) => new Set([...current, ...added]));
+  }, [initialExpanded]);
   useEffect(() => {
     if (!selectedPath) return;
     setExpanded((current) => {

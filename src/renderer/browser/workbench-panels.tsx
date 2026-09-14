@@ -57,8 +57,8 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
   // 快捷键提示跟随平台样式；浏览器暂无快捷键，不显示提示。
   const isMac = window.harness.platform === "darwin";
   const shortcutHint = (mac: Parameters<typeof t>[0], other: Parameters<typeof t>[0]) => (isMac ? t(mac) : t(other));
-  // 审查保留工作台内边距；其余面板自己管理滚动和内边距。
-  const flush = activeTab !== undefined && activeTab.type !== "review";
+  // Each panel owns its padding and scrolling, including the Git workbench.
+  const flush = activeTab !== undefined;
   const [pendingSideChatClose, setPendingSideChatClose] = useState<SideChatPanelTab | null>(null);
   const [dontAskClose, setDontAskClose] = useState(false);
   const [dirtyCapabilities, setDirtyCapabilities] = useState<Record<string, boolean>>({});

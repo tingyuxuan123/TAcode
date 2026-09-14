@@ -19,6 +19,7 @@
     "test": "vitest run",
     "test:browser": "pnpm build && node scripts/test-browser.mjs",
     "test:file-review": "node scripts/test-file-review.mjs",
+    "test:git-review": "node scripts/test-git-review.mjs",
     "test:capabilities": "pnpm build && node scripts/test-capabilities.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "pack": "pnpm build && electron-builder --mac --win",

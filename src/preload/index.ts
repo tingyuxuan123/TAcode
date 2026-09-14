@@ -72,6 +72,12 @@ const api: DesktopApi = {
     restore: (files, cwd) => ipcRenderer.invoke("workspace:restore", files, cwd),
     onChanged: (listener) => subscribe<string>("workspace:changed", listener),
   },
+  git: {
+    subscribe: (request) => ipcRenderer.invoke("git:subscribe", request),
+    unsubscribe: (subscriptionId) => ipcRenderer.invoke("git:unsubscribe", subscriptionId),
+    refresh: (subscriptionId) => ipcRenderer.invoke("git:refresh", subscriptionId),
+    onUpdate: (listener) => subscribe("git:update", listener),
+  },
   vision: {
     config: () => ipcRenderer.invoke("vision:config"),
     saveConfig: (config) => ipcRenderer.invoke("vision:save-config", config),

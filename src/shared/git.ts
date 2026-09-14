@@ -92,4 +92,37 @@ export interface GitSnapshot {
 }
 
 export type GitErrorCode = "missingGit" | "notRepository" | "invalidReference" | "noCommits" | "noMergeBase"
-  | "outsideProject" | "invalidPath" | "changedDuringRead" | "cancelled" | "timedOut" | "outputLimit" | "invalidOutput" | "failed";
+  | "outsideProject" | "invalidPath" | "invalidRequest" | "changedDuringRead" | "cancelled" | "timedOut" | "outputLimit" | "invalidOutput" | "failed";
+
+/** Repository-only queries let the user choose a branch before reading a diff. */
+export type GitReviewQuery = GitComparison | { kind: "repository" };
+export interface GitFailure { code: GitErrorCode; message: string; details?: string }
+export type GitReviewResult =
+  | { kind: "ready"; snapshot: GitSnapshot; branches: readonly GitBranch[] }
+  | { kind: "repository"; repository: GitRepositoryInfo; branches: readonly GitBranch[] }
+  | Exclude<GitRepositoryState, { kind: "repository" }>
+  | { kind: "error"; error: GitFailure };
+export type GitWatchMode = "native" | "polling";
+export interface GitSubscribeRequest {
+  /** Chosen before invoking IPC so an in-flight subscription can be cancelled. */
+  subscriptionId: string;
+  projectRoot: string;
+  query: GitReviewQuery;
+}
+export interface GitReviewUpdate extends GitSubscribeRequest {
+  sequence: number;
+  loading: boolean;
+  /** Loading events omit large payloads; the previous immutable result remains visible. */
+  result?: GitReviewResult;
+  watchMode: GitWatchMode;
+}
+export interface GitApi {
+  subscribe(request: GitSubscribeRequest): Promise<void>;
+  unsubscribe(subscriptionId: string): Promise<void>;
+  refresh(subscriptionId: string): Promise<void>;
+  onUpdate(listener: (update: GitReviewUpdate) => void): () => void;
+}
+
+export function gitReviewQueryKey(query: GitReviewQuery): string {
+  return JSON.stringify(query.kind === "commit" ? [query.kind, query.commit] : query.kind === "branch" ? [query.kind, query.base] : [query.kind]);
+}

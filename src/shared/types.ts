@@ -299,6 +299,7 @@ export interface DesktopApi {
     restore(files: Array<{ path: string; content: string | null; mode?: number }>, cwd?: string): Promise<{ restored: string[]; failed: Array<{ path: string; error: string }> }>;
     onChanged(listener: (root: string) => void): () => void;
   };
+  git: import("./git").GitApi;
   vision: {
     config(): Promise<{
       provider?: "deepseek" | "custom";

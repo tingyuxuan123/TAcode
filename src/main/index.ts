@@ -64,6 +64,7 @@ import { SessionIndex } from "./session-index";
 import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { registerCapabilitiesIpc } from "./capabilities-ipc";
+import { registerGitIpc } from "./git/git-ipc";
 import { TerminalManager } from "./terminal-manager";
 import { apiBaseUrl, listModels } from "../shared/openai-models";
 import { fallbackSessionTitle as firstMessageTitle } from "../shared/session-title";
@@ -626,7 +627,12 @@ function installMenu(): void {
 
 import { registerProviderIpcHandlers, desktopProviderStatus, resolveDesktopProvider, resolveDesktopServiceId } from "./providers";
 
+let gitIpc: ReturnType<typeof registerGitIpc> | undefined;
 function registerIpc(): void {
+  gitIpc = registerGitIpc({
+    host: () => mainWindow?.webContents,
+    resolveProject: (cwd) => resolveInWorkspace(".", cwd),
+  });
   registerCapabilitiesIpc({
     resolveWorkspace: (cwd) => resolveInWorkspace(".", cwd),
     resolveProjectFile: (file, cwd) => resolveInWorkspace(file, cwd),
@@ -2418,6 +2424,7 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   quitting = true;
   workspaceWatcher?.close();
+  gitIpc?.dispose();
   closeAllBrowserPopups();
   closeAllDetachedBrowserWindows();
   Promise.all([

@@ -7,7 +7,9 @@ import { ChevronRight, ExternalLink } from "lucide-react";
 import { useI18n } from "../i18n";
 import { WorkbenchButton, WorkbenchStats } from "./controls";
 import { WorkbenchFileSymbol } from "./file-symbol";
-import { createWorkbenchDiff } from "./diff-model";
+import { createWorkbenchDiff, workbenchDiffCacheKey } from "./diff-model";
+import { hasWorkbenchDiffSummary } from "./git-review-model";
+import { DiffSummary } from "./diff-summary";
 import { loadWorkbenchLightTheme, workbenchDiffCSS } from "./diff-theme";
 import type { WorkbenchColorScheme, WorkbenchDiffFile } from "./types";
 
@@ -34,6 +36,8 @@ export interface DiffViewerProps {
   onActiveFileChange?(path: string): void;
   onSelectionChange?(selection: CodeViewLineSelection | null): void;
   onWorkerStateChange?(state: WorkerStats): void;
+  initialScrollPosition?: number;
+  onScrollPositionChange?(position: number): void;
   ref?: Ref<DiffViewerHandle>;
 }
 
@@ -47,19 +51,21 @@ function WorkerObserver({ onChange }: { onChange?: (state: WorkerStats) => void 
   return null;
 }
 
-function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false, onOpenFile, onActiveFileChange, onSelectionChange, ref }: DiffViewerProps) {
+function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false, onOpenFile, onActiveFileChange, onSelectionChange, initialScrollPosition = 0, onScrollPositionChange, ref }: DiffViewerProps) {
   const { t } = useI18n();
   const viewer = useRef<CodeViewHandle<undefined, undefined>>(null);
   const container = useRef<HTMLDivElement>(null);
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const pendingTarget = useRef<{ path: string; line?: number; side?: "additions" | "deletions" } | null>(null);
+  const navigationSelection = useRef<string | undefined>(undefined);
   const byId = useMemo(() => new Map(files.map((file) => [file.id, file])), [files]);
-  const diffCache = useRef(new Map<string, { version: number; fileDiff: ReturnType<typeof createWorkbenchDiff> }>());
+  const diffCache = useRef(new Map<string, { version: string; fileDiff: ReturnType<typeof createWorkbenchDiff> }>());
   const parsed = useMemo(() => {
-    const next = new Map<string, { version: number; fileDiff: ReturnType<typeof createWorkbenchDiff> }>();
+    const next = new Map<string, { version: string; fileDiff: ReturnType<typeof createWorkbenchDiff> }>();
     const result = files.map((file) => {
       const previous = diffCache.current.get(file.id);
-      const record = previous?.version === file.version ? previous : { version: file.version, fileDiff: createWorkbenchDiff(file) };
+      const version = workbenchDiffCacheKey(file);
+      const record = previous?.version === version ? previous : { version, fileDiff: createWorkbenchDiff(file) };
       next.set(file.id, record);
       return { id: file.id, type: "diff" as const, ...record };
     });
@@ -76,17 +82,22 @@ function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false,
       // CodeView treats equal versions as immutable, including presentation
       // state. Keep content cache keys separate from the view's revision.
       const item = previous?.type === "diff" && previous.fileDiff === source.fileDiff && previous.collapsed === isCollapsed
-        ? previous : { ...source, collapsed: isCollapsed, version: ++viewVersion.current };
+        ? previous : { ...source, collapsed: isCollapsed, version: ++viewVersion.current,
+          annotations: hasWorkbenchDiffSummary(byId.get(source.id)!) ? [{ side: "additions" as const, lineNumber: 0 }] : undefined };
       next.set(source.id, item);
     }
     itemCache.current = next;
     return [...next.values()];
-  }, [parsed, folded]);
+  }, [parsed, folded, byId]);
   useEffect(() => { setFolded(collapsed ? new Set(files.map((file) => file.id)) : new Set()); }, [collapsed]);
   const revealTarget = () => {
     const target = pendingTarget.current;
     const file = target && files.find((file) => file.path === target.path);
     if (!target || !file || !viewer.current) return;
+    // Near the end of a short list, scrollTo must clamp to the bottom and a
+    // preceding file can stay at the top. Keep the explicitly chosen file until
+    // the user scrolls the diff themselves.
+    navigationSelection.current = file.id;
     if (target.line) viewer.current.scrollTo({ type: "line", id: file.id, lineNumber: target.line, side: target.side ?? "additions", align: "center", behavior: "instant" });
     else viewer.current.scrollTo({ type: "item", id: file.id, align: "start", behavior: "instant" });
     pendingTarget.current = null;
@@ -100,6 +111,18 @@ function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false,
   };
   useImperativeHandle(ref, () => ({ revealFile: (path) => queueTarget(path), revealLine: queueTarget }));
   useEffect(revealTarget, [items]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => { if (initialScrollPosition) viewer.current?.scrollTo({ type: "position", position: initialScrollPosition, behavior: "instant" }); });
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const clear = () => { navigationSelection.current = undefined; };
+    const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    for (const event of events) element.addEventListener(event, clear, { capture: true, passive: true });
+    return () => { for (const event of events) element.removeEventListener(event, clear, true); };
+  }, []);
 
   return <CodeView ref={viewer} containerRef={container} className="workbench-diff-viewer" items={items}
     options={{ theme: highlighterOptions.theme, themeType: colorScheme, diffStyle: layout, overflow: wrap ? "wrap" : "scroll",
@@ -109,13 +132,17 @@ function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false,
       layout: { paddingTop: 0, paddingBottom: 72, gap: 0 },
       unsafeCSS: workbenchDiffCSS }}
     onSelectedLinesChange={onSelectionChange}
-    onScroll={(_top, instance) => {
+    onScroll={(position, instance) => {
+      onScrollPositionChange?.(position);
+      if (navigationSelection.current && byId.has(navigationSelection.current)) return;
+      navigationSelection.current = undefined;
       const top = container.current?.getBoundingClientRect().top;
       if (top === undefined) return;
       const visible = instance.getRenderedItems().find((item) => item.element.getBoundingClientRect().bottom > top + 38);
       const file = visible && byId.get(visible.id);
       if (file) onActiveFileChange?.(file.path);
     }}
+    renderAnnotation={(_annotation, item) => { const file = byId.get(item.id); return file ? <DiffSummary file={file} /> : null; }}
     renderCustomHeader={(item) => {
       const file = byId.get(item.id);
       if (!file) return null;

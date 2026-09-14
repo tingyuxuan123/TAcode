@@ -68,7 +68,6 @@ import {
   FileDrawer,
   FlowSpinner,
   Icon,
-  InspectPanel,
   Login,
   PromptBar,
   SelectionAskBar,
@@ -79,6 +78,8 @@ import {
 } from "./ui";
 import { MessageList, type MessageListHandle, type MessageListItem } from "./message-list";
 import { WorkbenchPanels } from "./browser/workbench-panels";
+import { GitReviewPanel } from "./workbench/git-review-panel";
+import { SessionReviewActions } from "./workbench/session-review-actions";
 import { useBrowserPanels } from "./browser/use-browser-panels";
 import { FilesPanel } from "./browser/files-panel";
 import { useDelegationTabs } from "./browser/use-delegation-tabs";
@@ -761,6 +762,7 @@ export function App() {
   const todos = chatTodos.length ? chatTodos : featureTodos;
   const progressTasks = useMemo(() => collectProgressTasks(messages, tools), [messages, tools]);
   const planApproval = planAwaitingApproval(permission, running, todos);
+  const canUndoTurn = !running && workingFiles.some((file) => file.kind === "edit");
   const darwin = window.harness.platform === "darwin";
   const connected = activeChatProvider(providers);
   const modelOptions = useMemo(() => composerModelOptions(providers, model, chatModels), [providers, model, chatModels]);
@@ -2064,6 +2066,11 @@ export function App() {
         ),
       });
     }
+    if (planApproval || canUndoTurn) {
+      items.push({ key: "session-review-actions", render: () => <SessionReviewActions key={transcriptKey}
+        planApproval={planApproval} canUndo={canUndoTurn} onApprovePlan={() => void approvePlan()}
+        onRefinePlan={(text) => void refinePlan(text)} onUndo={() => void undoLastTurn()} /> });
+    }
     // 全部命中时保持上一次的数组引用：MessageList / Virtualizer 的 props 在
     // 流式帧里真正稳定，虚拟列表内部不再做无谓的按帧对账。
     const previous = lastListItems.current;
@@ -2073,7 +2080,7 @@ export function App() {
     }
     lastListItems.current = items;
     return items;
-  }, [groups, recoverableStreaks, running, stopping, uiRequest, loading, messages, activeActivity, t]);
+  }, [groups, recoverableStreaks, running, stopping, uiRequest, loading, messages, activeActivity, t, planApproval, canUndoTurn, transcriptKey, approvePlan, refinePlan, undoLastTurn]);
 
   const homeRecents = (
     workspace
@@ -2346,18 +2353,8 @@ export function App() {
               effortLevels: thinkingLevels,
               permission,
             }}
-            review={
-            <InspectPanel
-              files={workingFiles}
-              todos={todos}
-              running={running}
-              planApproval={planApproval}
-              onApprovePlan={() => void approvePlan()}
-              onRefinePlan={(text) => void refinePlan(text)}
-              onOpen={(file) => browserPanels.openFile(file.path)}
-              onUndo={() => void undoLastTurn()}
-            />
-          }
+            review={<GitReviewPanel projectRoot={workspace} active={browserPanels.active === "review"}
+              onOpenFile={browserPanels.openFile} onChooseProject={() => void openFolder()} onOpenTerminal={() => browserPanels.openPanel("terminal")} />}
             files={<FilesPanel workspace={workspace} files={workingFiles} onOpen={browserPanels.openFile} />}
           />
         ) : undefined}
@@ -2434,7 +2431,7 @@ export function App() {
               )}
             </div>
           )}
-          {(groups.length > 0 || Boolean(uiRequest)) && (
+          {(groups.length > 0 || Boolean(uiRequest) || planApproval || canUndoTurn) && (
             <MessageList
               ref={messageList}
               items={listItems}

@@ -41,7 +41,9 @@ describe("shared session index", () => {
     expect(changed).toHaveBeenCalledOnce();
     expect(createStore).toHaveBeenCalledOnce();
     expect(index.store.get("500")?.title).toBe("更新一条");
-  });
+  // Includes creating and initially reconciling 1000 real files under full-suite
+  // I/O contention; the incremental-read assertions above remain unchanged.
+  }, 15_000);
 
   it("discovers external additions/removals and keeps pinned/archive changes through delayed indexing", async () => {
     const removed = vi.fn();

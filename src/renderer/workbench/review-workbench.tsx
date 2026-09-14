@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDownToLine, ChevronsDownUp, Columns2, Folders, GitCommitHorizontal, RefreshCw, RotateCcw, Rows2, WrapText } from "lucide-react";
 import { useI18n } from "../i18n";
 import { WorkbenchButton, WorkbenchStats } from "./controls";
@@ -11,7 +11,7 @@ import type { ReviewScope, WorkbenchColorScheme, WorkbenchDiffFile } from "./typ
 const DiffViewer = lazy(() => import("./diff-viewer").then((module) => ({ default: module.DiffViewer })));
 const scopes: ReviewScope[] = ["unstaged", "staged", "commit", "branch", "lastTurn"];
 
-export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRefresh, onStageAll, onUnstageAll, onDiscardAll, onCommit, busy = false, error, colorScheme = "light", onWorkerStateChange, onSelectionChange, initialTreeWidth = 374 }: {
+export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRefresh, onStageAll, onUnstageAll, onDiscardAll, onCommit, busy = false, error, colorScheme = "light", onWorkerStateChange, onSelectionChange, initialTreeWidth = 374, scopeDetails, emptyState, paused = false, comparisonKey = scope, disabledScopes = [] }: {
   files: readonly WorkbenchDiffFile[];
   scope: ReviewScope;
   onScopeChange(scope: ReviewScope): void;
@@ -23,6 +23,11 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
   onCommit?(): void;
   busy?: boolean;
   error?: string;
+  scopeDetails?: ReactNode;
+  emptyState?: ReactNode;
+  paused?: boolean;
+  comparisonKey?: string;
+  disabledScopes?: readonly ReviewScope[];
   colorScheme?: WorkbenchColorScheme;
   initialTreeWidth?: number;
   onWorkerStateChange?: DiffViewerProps["onWorkerStateChange"];
@@ -35,18 +40,27 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
   const [wrap, setWrap] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [selectedPath, setSelectedPath] = useState(files[0]?.path);
+  useEffect(() => { setSelectedPath((current) => files.some((file) => file.path === current) ? current : files[0]?.path); }, [files]);
   const viewer = useRef<DiffViewerHandle>(null);
+  const pendingReveal = useRef<string | undefined>(undefined);
+  const attachViewer = useCallback((handle: DiffViewerHandle | null) => {
+    viewer.current = handle;
+    if (handle && pendingReveal.current) { handle.revealFile(pendingReveal.current); pendingReveal.current = undefined; }
+  }, []);
+  const scroll = useRef({ key: comparisonKey, position: 0 });
+  if (scroll.current.key !== comparisonKey) scroll.current = { key: comparisonKey, position: 0 };
   const filtered = useMemo(() => { const needle = query.trim().toLocaleLowerCase(); return needle ? files.filter((file) => file.path.toLocaleLowerCase().includes(needle)) : files; }, [files, query]);
   const entries = useMemo(() => files.map((file) => ({ path: file.path, kind: "file" as const, change: file.change })), [files]);
   const expanded = useMemo(() => [...new Set(files.flatMap((file) => ancestorPaths(file.path)))], [files]);
   const stats = useMemo(() => files.reduce((total, file) => ({ additions: total.additions + file.additions, deletions: total.deletions + file.deletions }), { additions: 0, deletions: 0 }), [files]);
   const canMutate = scope === "unstaged" || scope === "staged";
-  return <WorkbenchSurface kind="review" treeOpen={treeOpen} colorScheme={colorScheme} initialTreeWidth={initialTreeWidth}
+  return <WorkbenchSurface kind="review" treeOpen={treeOpen} colorScheme={colorScheme} initialTreeWidth={initialTreeWidth} context={scopeDetails}
     toolbar={<>
-      <select className="workbench-scope" aria-label={t("workbench.scope")} value={scope} onChange={(event) => onScopeChange(event.target.value as ReviewScope)} disabled={busy}>
-        {scopes.map((value) => <option value={value} key={value}>{t(`workbench.${value}`)}</option>)}
+      <select className="workbench-scope" aria-label={t("workbench.scope")} value={scope} onChange={(event) => onScopeChange(event.target.value as ReviewScope)}>
+        {scopes.map((value) => <option value={value} key={value} disabled={disabledScopes.includes(value)}>{t(`workbench.${value}`)}</option>)}
       </select>
       <WorkbenchStats {...stats} />
+      {!canMutate && <span className="workbench-readonly">{t("workbench.readOnly")}</span>}
       <span className="workbench-toolbar-spacer" />
       <WorkbenchButton label={t(collapsed ? "workbench.expandAll" : "workbench.collapseAll")} aria-pressed={collapsed} onClick={() => setCollapsed(!collapsed)}><ChevronsDownUp size={16} /></WorkbenchButton>
       <WorkbenchButton label={t("workbench.wrap")} aria-pressed={wrap} onClick={() => setWrap(!wrap)}><WrapText size={16} /></WorkbenchButton>
@@ -58,12 +72,16 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
       {onCommit && <WorkbenchButton label={t("workbench.commitOrPush")} className="has-label is-outlined" disabled={busy} onClick={onCommit}><GitCommitHorizontal size={16} /><span>{t("workbench.commitOrPush")}</span></WorkbenchButton>}
     </>}
     navigation={<WorkbenchFileTree entries={entries} query={query} onQueryChange={setQuery} selectedPath={selectedPath} initialExpanded={expanded} review
-      onOpen={(path) => { setSelectedPath(path); viewer.current?.revealFile(path); }} label={t("workbench.fileChanges")} />}>
+      onOpen={(path) => {
+        setSelectedPath(path);
+        if (viewer.current) viewer.current.revealFile(path); else pendingReveal.current = path;
+      }} label={t("workbench.fileChanges")} />}>
     {error && <div role="alert" className="workbench-notice">{error}</div>}
-    {filtered.length ? <Suspense fallback={<p className="workbench-empty" role="status">{t("workbench.diffLoading")}</p>}>
-      <DiffViewer ref={viewer} files={filtered} layout={layout} wrap={wrap} colorScheme={colorScheme} collapsed={collapsed}
+    {!paused && filtered.length ? <Suspense fallback={<p className="workbench-empty" role="status">{t("workbench.diffLoading")}</p>}>
+      <DiffViewer key={comparisonKey} ref={attachViewer} files={filtered} layout={layout} wrap={wrap} colorScheme={colorScheme} collapsed={collapsed}
+        initialScrollPosition={scroll.current.position} onScrollPositionChange={(position) => { scroll.current.position = position; }}
         onOpenFile={onOpenFile} onActiveFileChange={setSelectedPath} onWorkerStateChange={onWorkerStateChange} onSelectionChange={onSelectionChange} />
-    </Suspense> : <p className="workbench-empty" role="status">{t(busy ? "workbench.loading" : files.length ? "workbench.emptyFiles" : "workbench.emptyDiff")}</p>}
+    </Suspense> : <div className="workbench-empty" role="status">{emptyState ?? t(busy ? "workbench.loading" : files.length ? "workbench.emptyFiles" : "workbench.emptyDiff")}</div>}
     {canMutate && files.length > 0 && (onStageAll || onUnstageAll || onDiscardAll) && <div className="workbench-review-actions">
       {onDiscardAll && <WorkbenchButton className="has-label" label={t("workbench.discardAll")} disabled={busy} onClick={onDiscardAll}><RotateCcw size={14} /><span>{t("workbench.discardAll")}</span></WorkbenchButton>}
       {scope === "unstaged" && onStageAll && <WorkbenchButton className="has-label" label={t("workbench.stageAll")} disabled={busy} onClick={onStageAll}><ArrowDownToLine size={14} /><span>{t("workbench.stageAll")}</span></WorkbenchButton>}

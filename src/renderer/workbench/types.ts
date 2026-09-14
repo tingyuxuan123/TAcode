@@ -1,3 +1,5 @@
+import type { GitFileDiff } from "../../shared/git";
+
 export type WorkbenchChange = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflict";
 
 export interface WorkbenchTreeEntry {
@@ -19,7 +21,9 @@ export interface WorkbenchDiffFile {
   additions: number;
   deletions: number;
   /** Changes whenever either side of this immutable comparison changes. */
-  version: number;
+  version: number | string;
+  /** Non-text state stays separate from displayed source; never placeholder code. */
+  metadata?: Pick<GitFileDiff, "old" | "new" | "conflictStages">;
 }
 
 export interface SourceLocation {
