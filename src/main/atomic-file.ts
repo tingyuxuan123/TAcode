@@ -27,6 +27,8 @@ export interface AtomicWriteOptions {
   mode?: number;
   /** 是否在 rename 前后 fsync 文件与目录，默认开启。 */
   fsync?: boolean;
+  /** Revalidate a document version immediately before publishing the replacement. */
+  beforeCommit?: () => Promise<void>;
 }
 
 async function syncDirectory(directory: string): Promise<void> {
@@ -57,9 +59,11 @@ async function performWrite(
   try {
     handle = await open(temp, "w", mode);
     await handle.writeFile(data);
+    if (options.mode !== undefined) await handle.chmod(mode);
     if (options.fsync !== false) await handle.sync().catch(() => undefined);
     await handle.close();
     handle = undefined;
+    await options.beforeCommit?.();
     await rename(temp, target);
     if (options.fsync !== false) await syncDirectory(directory);
   } catch (error) {
@@ -80,7 +84,9 @@ export function writeFileAtomic(
   const previous = writeQueues.get(target) ?? Promise.resolve();
   const next = previous.then(run, run);
   // 队列本身吞掉失败，避免链上未处理的 rejection；调用方仍拿到真实的 next。
-  writeQueues.set(target, next.catch(() => undefined));
+  const settled = next.catch(() => undefined);
+  writeQueues.set(target, settled);
+  void settled.then(() => { if (writeQueues.get(target) === settled) writeQueues.delete(target); });
   return next;
 }
 

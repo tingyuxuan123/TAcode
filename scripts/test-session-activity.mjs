@@ -18,7 +18,7 @@ try {
     const file = path.relative(process.cwd(), id);
     if (baseline && baselineFiles.has(file)) return execFileSync("git", ["show", `${process.env.TACODE_ACTIVITY_BASELINE_REF ?? "HEAD"}:${file}`], { encoding: "utf8", maxBuffer: 2 ** 22 });
   } };
-  await buildRenderer({ configFile: false, plugins: [baselinePlugin, react()], base: "./", logLevel: "warn", build: { outDir: path.join(output, "renderer"), emptyOutDir: true, rollupOptions: { input: "index.html" } } });
+  await buildRenderer({ configFile: false, plugins: [baselinePlugin, react()], base: "./", logLevel: "warn", worker: { format: "es" }, build: { outDir: path.join(output, "renderer"), emptyOutDir: true, rollupOptions: { input: "index.html" } } });
   const env = { ...process.env, TACODE_ACTIVITY_FIXTURE: path.join(output, "renderer/index.html") };
   delete env.ELECTRON_RUN_AS_NODE;
   const benchmark = process.env.TACODE_STARTUP_BENCHMARK === "1";

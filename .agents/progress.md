@@ -1159,3 +1159,9 @@
 - 文件：main/workspace-preview.ts、workspace-watcher.ts、index.ts；renderer/file-preview.tsx、reading-position.ts、codeblock.tsx、shiki.ts、ui.tsx、browser 文件标签；shared/preload、index.html、样式和测试。
 - 验证：全量 **124 文件 / 1033 测试通过**，`pnpm typecheck`、`git diff --check` 通过。`TACODE_PREVIEW_SMOKE=1 node scripts/test-session-activity.mjs` 使用真实 watcher/读取和生产 renderer，保存到预览更新 **238.3 ms**；覆盖滚动/选区、隐藏激活、过期响应、删除/空/失败重试及截断复制。已查看 `ux-10/file-preview-refreshed.png`；fixture read failure 为主动注入。
 - 下一项：UX-11 多聊天面板消息合批、隐藏面板减少渲染和性能回放。整份目标继续 active。
+
+## 2026-09-14：文件与审查专项 FR-06
+
+- 独立工作树吸收 UX-09/10，完成生产文件 API、稳定目录分页与共享完整路径搜索、UTF-8 文档版本/原子保存、路径订阅及旧 HTML/浏览器项目预览绑定。4 MiB 上限、BOM/CRLF/mode、失效游标、保存冲突、越界链接、原生监听失败与退出在途读取均有回归。
+- 最终全量 **134 文件 / 1145 用例**、typecheck、build、diff check 通过；新文件服务、文件组件、23 阶段 Git、BrowserPanel 以及既有 UX 文件索引/预览 Electron smoke 通过。文件服务外部更新 **133.5 ms**，关闭后订阅/watcher/在途读取为 0，网络与 renderer 错误为 0。详见 `.agents/file-review/progress.md`、`docs/file-review-fr-06.md`。
+- 下一项 FR-07 生产文件树与统一标签，当前专项 **6/15**。新编辑与统一文件界面尚待后续阶段，完整目标继续 active；本轮仅 FR-06，在隔离分支提交，原工作区及既有 UX passes 未修改。

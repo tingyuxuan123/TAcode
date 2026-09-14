@@ -275,6 +275,7 @@ export interface WorkspaceReadResult {
 
 export interface DesktopApi {
   platform: NodeJS.Platform;
+  files: import("./files").FilesApi;
   capabilities: import("./capabilities").CapabilitiesApi;
   skills: import("./capabilities").SkillsApi;
   mcp: import("./capabilities").McpApi;

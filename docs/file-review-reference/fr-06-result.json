@@ -1,0 +1,20 @@
+{
+  "date": "2026-09-14T08:16:24.624Z",
+  "platform": "darwin",
+  "os": "25.6.0",
+  "stages": [
+    "Production preload: stable paging, file 201/8001, hidden and ignored paths, stale cursors",
+    "Real atomic saves preserve BOM/CRLF/mode; conflict and partial writes are refused",
+    "Two project origins, browser URLs, relative images/fetch/storage and preview authorization",
+    "External path update, renderer reload and destroyed-window resource cleanup"
+  ],
+  "refreshMs": 133.50908300000015,
+  "network": [],
+  "errors": [],
+  "resources": {
+    "subscriptions": 0,
+    "roots": 0,
+    "reads": 0
+  },
+  "boundary": "Temporary APFS projects; production files IPC/preload/protocol; service acceptance, no FR-07/08 interface"
+}

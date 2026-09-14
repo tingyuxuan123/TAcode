@@ -49,3 +49,18 @@
 - 定向提交/IPC/store **3 文件 / 30 回归**通过；生产 Electron Git 烟测 **23 个阶段**通过，包含本地裸仓库提交推送、不同名称目标分支、hook 拒绝、非快进拒绝、取消、子目录范围保护、reload/关闭清理；refresh **305 / 311 ms**，0 网络请求、0 renderer 错误，关闭后项目/订阅/读取为 0。另通过文件组件 5 阶段 Electron 烟测。详情及截图见 `docs/file-review-fr-05.md` 和 `docs/file-review-reference/fr-05-result.json`。
 - 最终全量 **127 文件 / 1121 用例**（`--maxWorkers=1`）、typecheck、build、diff check 均通过。构建与全量测试必须顺序执行，避免清理正在使用的 RPC 产物；此前 macOS 文件通知用例在并行负载下抖动，未放宽断言，最终单进程通过。Windows hook/凭据/权限和大规模性能仍由 FR-15 验收；总目标保持 active。
 - 下一项 FR-06：吸收生产文件索引和读取服务，原工作区及其运行任务未修改。
+
+## 2026-09-14 FR-06 开始
+
+- 在独立工作树吸收 UX-09/10：原提交 `2ffc3ac` / `d18d584`，本分支 `1eebeda` / `ee1a0d5`。进度文档冲突保留两套记录，退出清理合并文件监听与 Git IPC，未修改原工作区。
+- 正在补完整文件 API：目录/搜索分页、版本读写、路径订阅、项目绑定预览。FR-06 尚未验收，passes 保持 false；本轮不开始 FR-07。
+
+## 2026-09-14 FR-06 完成
+
+- 生产 `DesktopApi.files`、主 frame IPC、目录稳定分页/缓存、共享完整路径检索、UTF-8 文档版本读取/原子保存及项目路径订阅完成。正常文件树和 `@` 保持共享索引；隐藏/忽略目录可显式浏览与检索，页游标变化会报过期。
+- 文档区分空/缺失/二进制/非法编码/截断，4 MiB 完整编辑与超限字节分块只读。保存保留 BOM/CRLF/mode，并在 rename 前复核版本、权限、路径授权和 owner；并发同版本写入只有一个成功。补齐非法 UTF-8 前导字节回归和退出等待在途读/订阅初始化的资源核对。
+- 旧预览读取、HTML 文件面板/抽屉和 BrowserAutomation 统一项目绑定 URL，未知/旧 workspace host 禁止回退活动项目。两个同名 HTML 的相对图片、fetch 资源与 localStorage 在 Electron 保持项目隔离；主 frame 导航、进程退出和销毁释放路径订阅，原生失败有明确 polling 状态。
+- 文件：`src/main/files/*`、`src/shared/files.ts`、main/index、atomic-file、workspace-file-index、preload、共享 preview、BrowserAutomation/preview-target 和两个旧 HTML 预览入口；新 `scripts/file-service-smoke.ts` 与运行器。两个既有 Vite 烟测夹具对齐生产 ES Worker 配置，修复默认 IIFE 无法构建 diff worker 的夹具错误。
+- 验证：最终 **134 文件 / 1145 用例**（`pnpm test --reporter=dot --maxWorkers=1`）、typecheck、build、diff check 通过。新文件服务定向 **14 回归**通过；`pnpm test:file-service` 4 阶段、`pnpm test:file-review` 5 阶段、`pnpm test:git-review` 23 阶段、实际 BrowserPanel 本地预览/live reload、UX 文件索引与预览 Electron 回归通过。文件服务更新 **133.5 ms**，订阅/根 watcher/在途读取计数均为 0，网络与 renderer 错误为 0；Git 外部刷新 355/316 ms，旧文本预览 245.8 ms。证据与边界见 `docs/file-review-fr-06.md`、`docs/file-review-reference/fr-06-result.json`。
+- 既有 UX App 夹具仍打印未注册的 Git subscribe/unsubscribe，文件读/列表失败为主动注入；该夹具用于文件索引/预览验收，Git 由独立生产 IPC 烟测覆盖。构建与全量测试顺序执行；Windows 和整体性能仍待 FR-15。原工作区 main/b1f3d97 未修改、切换或重置。
+- 下一项 FR-07：生产文件树与统一标签；本轮未开始 FR-07，专项完成 **6/15**，完整复刻目标保持 active。

@@ -68,6 +68,10 @@ import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { registerCapabilitiesIpc } from "./capabilities-ipc";
 import { registerGitIpc } from "./git/git-ipc";
+import { registerFileIpc } from "./files/file-ipc";
+import { ProjectPreviewRegistry } from "./files/preview-registry";
+import { ProjectFilePaths } from "./files/file-path";
+import { serveProjectPreview } from "./files/preview-server";
 import { TerminalManager } from "./terminal-manager";
 import { apiBaseUrl, listModels } from "../shared/openai-models";
 import { fallbackSessionTitle as firstMessageTitle } from "../shared/session-title";
@@ -184,7 +188,7 @@ process.env.TACODE_CREDENTIALS_STORE = "file";
 
 let mainWindow: BrowserWindow | undefined;
 // 第二个参数把当前工作区交给浏览器自动化：browser_navigate 传 path 时直接预览工作区文件。
-const browserAutomation = new BrowserAutomation(() => mainWindow, () => activeAgentCwd);
+const browserAutomation = new BrowserAutomation(() => mainWindow, () => activeAgentCwd, (root, relative) => previewRoots.url(root, relative));
 
 /** 本地诊断日志（只写本机、限大小、可轮转，不上传；写入前脱敏已知凭据）。 */
 const diagnostics = new LocalLogger({
@@ -423,10 +427,12 @@ async function loadLoadedSessions(): Promise<void> {
   if (pruned) persistLoadedSessions();
 }
 const workspaceFiles = new WorkspaceFileIndex();
-const previewRoots = new Map<string, string>();
+const previewRoots = new ProjectPreviewRegistry();
+const previewPaths = new ProjectFilePaths((root) => resolveInWorkspace(".", root));
 const workspaceWatchers = new WorkspaceWatchers((root, paths) => {
   if (paths) for (const file of paths) workspaceFiles.changed(root, file);
   else workspaceFiles.changed(root);
+  fileIpc?.service.changed(root);
   mainWindow?.webContents.send("workspace:changed", { root, paths });
 }, () => sendAppCommand("workspace-watch-failed"));
 let updateCheckStarted = false;
@@ -574,6 +580,7 @@ function createWindow(): void {
     workspaceWatchers.close();
     workspaceFiles.clear();
     previewRoots.clear();
+    fileIpc?.service.clear();
     // Close browser popups and detached browser windows so they don't outlive the shell
     // (macOS keeps the app alive after the window closes).
     closeAllBrowserPopups();
@@ -637,7 +644,19 @@ function installMenu(): void {
 import { registerProviderIpcHandlers, desktopProviderStatus, resolveDesktopProvider, resolveDesktopServiceId } from "./providers";
 
 let gitIpc: ReturnType<typeof registerGitIpc> | undefined;
+let fileIpc: ReturnType<typeof registerFileIpc> | undefined;
 function registerIpc(): void {
+  fileIpc = registerFileIpc({
+    host: () => mainWindow?.webContents,
+    resolveProject: (root) => resolveInWorkspace(".", root),
+    index: workspaceFiles,
+    previews: previewRoots,
+    watchProject: watchWorkspace,
+    changed: (root, paths) => {
+      if (paths) for (const file of paths) workspaceFiles.changed(root, file); else workspaceFiles.changed(root);
+      mainWindow?.webContents.send("workspace:changed", { root, paths });
+    },
+  });
   gitIpc = registerGitIpc({
     host: () => mainWindow?.webContents,
     resolveProject: (cwd) => resolveInWorkspace(".", cwd),
@@ -796,12 +815,8 @@ function registerIpc(): void {
         );
         const root = path.resolve(cwd!);
         watchWorkspace(root);
-        const host = `workspace-${createHash("sha256").update(root).digest("hex").slice(0, 32)}`;
-        previewRoots.delete(host);
-        previewRoots.set(host, root);
-        while (previewRoots.size > 12) previewRoots.delete(previewRoots.keys().next().value!);
-        const previewPath = path.relative(root, resolved).split(path.sep).map(encodeURIComponent).join("/");
-        return { ...await readWorkspacePreview(resolved, relativePath), previewUrl: `${PREVIEW_SCHEME}://${host}/${previewPath}` };
+        const previewPath = path.relative(root, resolved).split(path.sep).join("/");
+        return { ...await readWorkspacePreview(resolved, relativePath), previewUrl: previewRoots.url(root, previewPath) };
       } catch (error) {
         if (
           error &&
@@ -1718,23 +1733,12 @@ const recentWorkspaces = {
 
 async function servePreview(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const name = decodeURIComponent(url.pathname).replace(/^\/+/, "");
-  let target: string;
-  if (url.host === UPLOADS_HOST) {
-    // basename only: this host serves staged uploads, never an arbitrary path on disk.
-    target = path.join(visionUploadsDir(), path.basename(name));
-  } else {
-    try {
-      const root = url.host.startsWith("workspace-") ? previewRoots.get(url.host) : undefined;
-      if (url.host.startsWith("workspace-") && !root) throw new Error("预览项目已关闭，请刷新预览。");
-      target = await resolveInWorkspace(name, root);
-    } catch (error) {
-      return new Response(
-        error instanceof Error ? error.message : "Forbidden",
-        { status: 403 },
-      );
-    }
-  }
+  if (url.host !== UPLOADS_HOST) return serveProjectPreview(request, previewPaths, previewRoots);
+  let name: string;
+  try { name = decodeURIComponent(url.pathname).replace(/^\/+/, ""); }
+  catch { return new Response("Invalid path", { status: 400 }); }
+  // basename only: this host serves staged uploads, never an arbitrary path on disk.
+  const target = path.join(visionUploadsDir(), path.basename(name));
   try {
     return await net.fetch(pathToFileURL(target).toString());
   } catch {
@@ -2253,11 +2257,13 @@ app.on("before-quit", (event) => {
   quitting = true;
   workspaceWatchers.close();
   gitIpc?.dispose();
+  fileIpc?.dispose();
   closeAllBrowserPopups();
   closeAllDetachedBrowserWindows();
   Promise.all([
     historyMaintenance.cancel(),
     gitIpc?.idle() ?? Promise.resolve(),
+    fileIpc?.idle() ?? Promise.resolve(),
     agentManager.stopAll(),
     delegationCoordinator?.close() ?? Promise.resolve(),
   ])

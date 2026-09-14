@@ -17,6 +17,7 @@ interface IndexEntry {
 /** 完整路径索引；浏览分页由 UI 处理，搜索不依赖截断的目录列表。 */
 export class WorkspaceFileIndex {
   private roots = new Map<string, IndexEntry>();
+  constructor(private readonly includeIgnored = false) {}
   private entry(root: string): IndexEntry {
     let entry = this.roots.get(root);
     if (!entry) entry = { paths: new Set(), sorted: [], full: true, dirty: new Set() };
@@ -30,7 +31,7 @@ export class WorkspaceFileIndex {
     const entry = this.entry(path.resolve(root));
     if (!relative) { entry.full = true; return; }
     const file = relative.replaceAll("\\", "/").replace(/\/$/, "");
-    if (!skipWorkspacePath(file) && !path.isAbsolute(file) && !file.split("/").includes("..")) entry.dirty.add(file);
+    if ((this.includeIgnored || !skipWorkspacePath(file)) && !path.isAbsolute(file) && !file.split("/").includes("..")) entry.dirty.add(file);
   }
 
   list(root: string, refresh = false): Promise<string[]> {
@@ -78,7 +79,7 @@ export class WorkspaceFileIndex {
     catch (error) { if (relative && (error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
     for await (const entry of directory) {
       const name = relative ? `${relative}/${entry.name}` : entry.name;
-      if (skipWorkspacePath(name)) continue;
+      if (!this.includeIgnored && skipWorkspacePath(name)) continue;
       if (entry.isDirectory()) { result.add(`${name}/`); await this.walk(root, name, result); }
       else if (entry.isFile()) result.add(name);
     }

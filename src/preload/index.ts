@@ -61,7 +61,18 @@ const api: DesktopApi = {
     minimize: () => ipcRenderer.invoke("window:minimize"),
     toggleMaximize: () => ipcRenderer.invoke("window:toggle-maximize"),
     close: () => ipcRenderer.invoke("window:close"),
-  },  workspace: {
+  },
+  files: {
+    directory: (request) => ipcRenderer.invoke("files:directory", request),
+    search: (request) => ipcRenderer.invoke("files:search", request),
+    readDocument: (request) => ipcRenderer.invoke("files:read-document", request),
+    writeDocument: (request) => ipcRenderer.invoke("files:write-document", request),
+    previewUrl: (request) => ipcRenderer.invoke("files:preview-url", request),
+    subscribe: (request) => ipcRenderer.invoke("files:subscribe", request),
+    unsubscribe: (id) => ipcRenderer.invoke("files:unsubscribe", id),
+    onUpdate: (listener) => subscribe("files:update", listener),
+  },
+  workspace: {
     choose: () => ipcRenderer.invoke("workspace:choose"),
     recent: () => ipcRenderer.invoke("workspace:recent"),
     forget: (workspacePath) => ipcRenderer.invoke("workspace:forget", workspacePath),

@@ -6,7 +6,6 @@ import { contextCapacity, generationSpeed } from "./context-stats";
 import { Bot, Check, Download, Info, Loader, MessageCirclePlus, PanelLeftClose, PanelLeftOpen, Blocks, Target, X } from "lucide-react";
 import { Streamdown, defaultRehypePlugins, defaultRemarkPlugins, type Components } from "streamdown";
 import type { AgentSessionStats, ExtensionUiRequest, PermissionMode } from "../shared/types";
-import { workspacePreviewUrl } from "../shared/preview";
 import { skillUserDisplay } from "../shared/skills";
 import { visibleUserText, visionResultSections, visionToolChips } from "../shared/vision-api";
 import { defaultCustomProfile, type CustomApiProfile } from "../shared/chat-profiles";
@@ -2101,11 +2100,11 @@ export function FileDrawer({ file, workspace, onClose }: { file: FileChange; wor
           ))}
         </div>
       )}
-      {diff || !ready ? null : preview && html ? (
+      {diff || !ready ? null : preview && html && data.previewUrl ? (
         <iframe
           className="file-frame"
           title={t("preview.title", { path: file.path })}
-          src={`${data.previewUrl ?? previewUrl(file.path)}?revision=${revision}`}
+          src={`${data.previewUrl}?revision=${revision}`}
           sandbox="allow-scripts allow-same-origin allow-forms"
         />
       ) : preview ? (
@@ -2131,9 +2130,6 @@ function splitView(patch: string) {
     right: row.kind === "del" ? undefined : ++nextNo,
   }));
 }
-
-/** Served by the main process from the workspace, so relative assets and page storage both work. */
-const previewUrl = workspacePreviewUrl;
 
 function mentionAt(text: string, cursor: number): { start: number; query: string } | undefined {
   const before = text.slice(0, cursor);
