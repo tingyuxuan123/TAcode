@@ -132,6 +132,30 @@
 .workbench-conflict-stages { margin-top: 10px !important; }
 .session-review-actions { margin: 12px 0; }
 .session-review-actions .inspect-undo { width: auto; }
+.workbench-hunk-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 9px; min-height: 31px; padding: 4px 10px; border-block: 1px solid var(--workbench-border); background: var(--workbench-bg); color: var(--workbench-secondary); font: 11px/1.5 var(--workbench-sans); }
+.workbench-hunk-actions > span { flex: 1 1 auto; }
+.workbench-hunk-actions code { font: 10px var(--workbench-mono); color: var(--workbench-muted); }
+.workbench-hunk-actions button { font: inherit; color: var(--workbench-secondary); border: 0; border-radius: 4px; background: transparent; padding: 2px 4px; cursor: pointer; white-space: nowrap; }
+.workbench-hunk-actions button:hover { background: var(--workbench-hover); color: var(--workbench-ink); }
+.workbench-hunk-actions button:disabled { opacity: .4; cursor: default; }
+.workbench-mutation-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 8px 13px; border-bottom: 1px solid var(--workbench-border); font-size: 12px; color: var(--workbench-secondary); }
+.workbench-mutation-notice p, .workbench-operation-error p { margin: 0; }
+.workbench-operation-error { color: var(--workbench-red); min-width: 0; font-size: 12px; }
+.workbench-operation-error pre { max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.6 var(--workbench-mono); }
+.workbench-mutation-notice button, .workbench-dialog button { border: 1px solid var(--workbench-border); border-radius: 7px; padding: 5px 10px; background: var(--workbench-bg); color: var(--workbench-ink); cursor: pointer; white-space: nowrap; }
+.workbench-mutation-notice button:hover, .workbench-dialog button:hover { background: var(--workbench-hover); }
+.workbench-dialog { margin: auto; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 64px); padding: 20px; overflow: auto; border: 1px solid var(--workbench-border); border-radius: 12px; background: var(--workbench-bg); color: var(--workbench-ink); box-shadow: 0 16px 60px #0003; font: 13px/1.6 var(--workbench-sans); }
+.workbench-dialog::backdrop { background: #0004; }
+.workbench-dialog h2 { font-size: 16px; font-weight: 600; margin: 0 0 10px; }
+.workbench-dialog p { margin: 8px 0; }
+.workbench-dialog button:disabled { opacity: .45; cursor: default; }
+.workbench-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.workbench-dialog .is-destructive { color: var(--workbench-red); }
+.workbench-confirm-paths { list-style: none; padding: 8px 10px; margin: 10px 0; max-height: 200px; overflow: auto; border: 1px solid var(--workbench-border); border-radius: 6px; background: var(--workbench-hover); }
+.workbench-confirm-paths li { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.8 var(--workbench-mono); }
+.workbench-recovery-list { padding: 0; margin: 12px 0; list-style: none; }
+.workbench-recovery-list > li { padding: 10px 0; border-block-start: 1px solid var(--workbench-border); }
+.workbench-recovery-list > li > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--workbench-secondary); }
 @keyframes workbench-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .workbench-button .is-spinning { animation: none; } }
 @container (max-width: 600px) { .workbench-breadcrumb > span:not(:last-child) { display: none; } }

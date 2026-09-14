@@ -9,6 +9,7 @@ export function gitSnapshotFiles(snapshot: Pick<GitSnapshot, "files">): Workbenc
     return { id: file.id, version: file.version, path: file.path, previousPath: file.previousPath,
       oldContent: text ? file.old.content : null, newContent: text ? file.new.content : null,
       change: file.change, additions: file.additions, deletions: file.deletions,
+      hunks: !file.binary && file.change !== "conflict" && [file.old.state, file.new.state].every((state) => state === "missing" || state === "text") ? file.hunks : undefined,
       metadata: { old: file.old, new: file.new, conflictStages: file.conflictStages } };
   });
 }

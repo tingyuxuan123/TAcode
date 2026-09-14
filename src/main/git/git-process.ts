@@ -9,6 +9,8 @@ export class GitReadError extends Error {
 }
 
 export interface GitRunOptions {
+  /** Main-process generated alternate index; never accepted from renderer input. */
+  indexFile?: string;
   input?: Buffer | string;
   signal?: AbortSignal;
   allowExitCodes?: readonly number[];
@@ -28,6 +30,7 @@ export class GitProcess {
       if (/^GIT_(DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|PREFIX|NAMESPACE|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+|EXTERNAL_DIFF|DIFF_OPTS|TRACE.*)$/.test(name)) delete env[name];
     }
     Object.assign(env, { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", LC_ALL: "C" });
+    if (options.indexFile) env.GIT_INDEX_FILE = options.indexFile;
     return new Promise((resolve, reject) => {
       const child = spawn(this.executable, ["--no-pager", "--literal-pathspecs", "-c", "color.ui=false", "-c", "core.quotepath=false", "-c", "core.fsmonitor=false", "-c", "diff.suppressBlankEmpty=false", ...args], {
         cwd, env, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],

@@ -48,6 +48,7 @@ async function smoke() {
   const session = window.webContents.session;
   let delayNextRead = false; let heldRead = false; let releaseRead: (() => void) | undefined;
   const registration = registerGitIpc({ host: () => window.webContents,
+    recoveryRoot: path.join(profile, "git-recovery"),
     resolveProject: async (root) => { if (!allowed.has(root)) throw new Error("Folder is not an opened project"); return root; },
     reader: (root) => {
       const reader = new GitReader(root);
@@ -80,6 +81,11 @@ async function smoke() {
     window.webContents.sendInputEvent({ type: "mouseUp", ...location, button: "left", clickCount: 1 }); await delay(80);
   };
   const select = (selector: string, value: string) => evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+  const replaceInput = async (selector: string, value: string) => {
+    await click(selector);
+    await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); e.focus(); e.select(); })()`);
+    await window.webContents.insertText(value);
+  };
   const state = "document.querySelector('.git-review-panel')?.dataset.reviewState";
   const ready = () => wait(`${state} === 'ready'`, "ready repository snapshot");
   const code = "[...document.querySelectorAll('diffs-container')].map(e => e.shadowRoot?.querySelector('pre')?.textContent ?? '').join('\\n')";
@@ -126,19 +132,17 @@ async function smoke() {
     await capture("git-empty");
     stage("Binary, oversized, empty and permission metadata stay separate from source");
 
-    await select('.workbench-scope', "staged"); await ready();
-    await wait(hasCode("value5 = 500"), "HEAD to index diff");
+    await select('.workbench-scope', "staged"); await wait(`document.querySelector('.workbench-scope')?.value === 'staged' && ${state} === 'ready' && ${hasCode("value5 = 500")}`, "staged comparison");
     assert.ok(!(await evaluate(hasCode("value65 = 650"))));
     await capture("git-staged");
-    await select('.workbench-scope', "commit"); await ready();
-    await wait(hasCode("value10 = 1000"), "first parent to commit diff");
+    await select('.workbench-scope', "commit"); await wait(`document.querySelector('.workbench-scope')?.value === 'commit' && ${state} === 'ready' && ${hasCode("value10 = 1000")}`, "commit comparison");
     assert.equal(await evaluate("document.querySelector('.workbench-readonly')?.textContent"), "只读");
     await capture("git-commit");
-    await click('#review-commit-ref'); window.webContents.selectAll(); await window.webContents.insertText("does-not-exist"); await key("Enter");
+    await replaceInput('#review-commit-ref', "does-not-exist"); await key("Enter");
     await wait(`${state} === 'error'`, "invalid reference error");
     assert.match(await evaluate<string>("document.querySelector('[role=\"alert\"]').textContent"), /找不到/);
     await capture("git-error");
-    await click('#review-commit-ref'); window.webContents.selectAll(); await window.webContents.insertText(rootCommit); await key("Enter"); await ready();
+    await replaceInput('#review-commit-ref', rootCommit); await key("Enter"); await ready();
     await wait(hasCode("value1 = 1"), "root commit against empty tree");
     await select('.workbench-scope', "branch");
     await wait(`${state} === 'repository'`, "branch choice before comparison");
@@ -148,7 +152,7 @@ async function smoke() {
     await capture("git-branch");
     stage("Staged, commit, root commit, branch choice, merge base and reference-error recovery");
 
-    await select('.workbench-scope', "unstaged"); await ready(); await click('[data-tree-path="src/alpha.ts"]');
+    await select('.workbench-scope', "unstaged"); await wait(`document.querySelector('.workbench-scope')?.value === 'unstaged' && ${state} === 'ready'`, "unstaged comparison after history"); await click('[data-tree-path="src/alpha.ts"]');
     let started = Date.now(); lines[64] = "export const value65 = 999;"; await write(a, "src/alpha.ts", source(lines));
     await wait(hasCode("value65 = 999"), "automatic external file refresh"); refreshMs.push(Date.now() - started);
     started = Date.now(); await git(a, ["add", "src/alpha.ts"]);
@@ -190,6 +194,86 @@ async function smoke() {
 
     await window.webContents.reload(); await ready();
     assert.equal(registration.service.stats().subscriptions, 1, "reload has one fresh subscription");
+    const c = path.join(directory, "mutation-project"); await fs.mkdir(c); allowed.add(c);
+    await git(c, ["init", "-qb", "main"]); await git(c, ["config", "user.name", "TACode fixture"]); await git(c, ["config", "user.email", "fixture@example.invalid"]);
+    const original = source(Array.from({ length: 80 }, (_, index) => `export const item${index + 1} = ${index + 1};`));
+    const firstEdit = original.replace("item3 = 3;", "item3 = 300;");
+    const twoEdits = firstEdit.replace("item63 = 63;", "item63 = 6300;");
+    const withUnstaged = twoEdits.replace("item33 = 33;", "item33 = 3300;");
+    await write(c, "source.ts", original); await git(c, ["add", "--all"]); await git(c, ["commit", "-qm", "baseline"]); await write(c, "source.ts", twoEdits);
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(c)})`); await wait(`${state} === 'ready' && document.querySelector('.git-review-panel')?.dataset.reviewProject === ${JSON.stringify(c)}`, "mutation project snapshot");
+    const applied = () => wait("document.querySelector('[data-mutation-result=\"applied\"]') && document.querySelector('.git-review-panel').dataset.reviewState === 'ready'", "successful Git action and refreshed snapshot");
+    const cIndex = () => git(c, ["show", ":source.ts"]);
+    const cWorking = () => fs.readFile(path.join(c, "source.ts"), "utf8");
+    await wait("document.querySelectorAll('[data-git-action=\"stage-hunk\"]').length === 2", "two real Git hunk action bars");
+    await capture("git-hunk-actions");
+    await click('[data-git-action="stage-hunk"]'); await applied();
+    assert.equal(await cIndex(), firstEdit.trimEnd()); assert.equal(await cWorking(), twoEdits);
+    await select('.workbench-scope', "staged"); await wait("document.querySelector('.workbench-scope')?.value === 'staged' && document.querySelectorAll('[data-git-action=\"unstage-hunk\"]').length > 0", "staged mutation actions");
+    await click('[data-git-action="unstage-hunk"]'); await applied();
+    assert.equal(await cIndex(), original.trimEnd()); assert.equal(await cWorking(), twoEdits);
+    await select('.workbench-scope', "unstaged"); await wait("document.querySelector('.workbench-scope')?.value === 'unstaged' && document.querySelectorAll('[data-git-action=\"stage-file\"]').length > 0", "unstaged mutation actions");
+    await click('[data-git-action="stage-file"]'); await applied();
+    assert.equal(await cIndex(), twoEdits.trimEnd());
+    stage("Native hunk and file actions change the real index and preserve the working copy");
+
+    await write(c, "source.ts", withUnstaged);
+    await select('.workbench-scope', "staged"); await wait(`document.querySelector('.workbench-scope')?.value === 'staged' && ${state} === 'ready' && document.querySelectorAll('[data-git-action="discard-hunk"]').length > 0`, "staged discard actions");
+    await click('[data-git-action="discard-hunk"]');
+    await wait("document.querySelector('dialog[open]')?.textContent.includes('仅还原选定的 1 个代码块')", "concrete hunk discard confirmation");
+    assert.equal(await cIndex(), twoEdits.trimEnd()); assert.equal(await cWorking(), withUnstaged);
+    await capture("git-discard-confirmation");
+    await key("Escape"); await wait("!document.querySelector('dialog[open]')", "Escape cancels without mutation");
+    assert.equal(await cIndex(), twoEdits.trimEnd());
+    await click('[data-git-action="discard-hunk"]'); await wait("document.querySelector('dialog[open]')", "second confirmation");
+    await click('dialog .is-destructive'); await applied();
+    assert.equal(await cIndex(), original.replace("item63 = 63;", "item63 = 6300;").trimEnd());
+    assert.equal(await cWorking(), withUnstaged.replace("item3 = 300;", "item3 = 3;"));
+    await click('[aria-label="还原恢复点"]'); await wait("document.querySelector('.workbench-recovery-list button')", "durable recovery point visible");
+    await capture("git-recovery-list");
+    await click('.workbench-recovery-list button'); await wait("document.querySelector('dialog[open]')?.textContent.includes('恢复这次还原前的改动')", "recovery confirmation");
+    await click('dialog .workbench-dialog-actions button:last-child');
+    await wait("document.querySelector('.workbench-recovery-list')?.textContent.includes('已恢复')", "recovery succeeds through production IPC");
+    await click('dialog .workbench-dialog-actions button:last-child');
+    await wait("!document.querySelector('dialog[open]') && document.querySelectorAll('[data-git-action=\"discard-hunk\"]').length > 0", "staged actions after recovery");
+    assert.equal(await cIndex(), twoEdits.trimEnd()); assert.equal(await cWorking(), withUnstaged);
+    stage("Discard confirms before writing, preserves extra unstaged edits, and offers durable recovery");
+
+    const overlap = withUnstaged.replace("item3 = 300;", "item3 = 333;"); await write(c, "source.ts", overlap);
+    await wait("document.querySelectorAll('[data-git-action=\"discard-hunk\"]:not(:disabled)').length > 0", "discard action available after overlap edit");
+    await click('[data-git-action="discard-hunk"]');
+    await wait("document.querySelector('.workbench-operation-error')?.textContent.includes('补丁')", "overlapping staged edit is rejected");
+    assert.equal(await evaluate("Boolean(document.querySelector('dialog[open]'))"), false);
+    assert.equal(await cIndex(), twoEdits.trimEnd()); assert.equal(await cWorking(), overlap);
+    await select('.workbench-scope', "unstaged"); await wait(`document.querySelector('.workbench-scope')?.value === 'unstaged' && ${state} === 'ready' && document.querySelectorAll('[data-git-action="stage-file"]').length > 0`, "unstaged actions after overlap");
+    const lock = path.join(c, ".git/index.lock"); await fs.writeFile(lock, "another Git process");
+    await click('[data-git-action="stage-file"]');
+    await wait("document.querySelector('.workbench-operation-error')?.textContent.includes('占用')", "index lock failure shown");
+    assert.equal(await fs.readFile(lock, "utf8"), "another Git process"); await fs.unlink(lock);
+    await wait("document.querySelectorAll('[data-git-action=\"discard-file\"]:not(:disabled)').length > 0", "discard file action available");
+    await click('[data-git-action="discard-file"]'); await wait("document.querySelector('dialog[open]')", "prepared file discard");
+    const lateEdit = overlap + "// edited after confirmation opened\n"; await write(c, "source.ts", lateEdit);
+    await click('dialog .is-destructive');
+    await wait("document.querySelector('.workbench-operation-error')?.textContent.includes('已变化')", "stale confirmation rejected");
+    assert.equal(await cWorking(), lateEdit); assert.equal(await cIndex(), twoEdits.trimEnd());
+    await capture("git-stale-confirmation");
+    stage("Overlapping patches, foreign index locks and edits made during confirmation preserve all changes");
+
+    await write(c, "新增.bin", Buffer.from([0, 1, 255])); await click('[aria-label="刷新"]'); await ready();
+    await click('[aria-label="暂存全部"]'); await applied();
+    await select('.workbench-scope', "staged"); await ready(); await click('[aria-label="取消暂存全部"]'); await applied();
+    assert.equal(await cIndex(), original.trimEnd()); assert.equal(await cWorking(), lateEdit);
+    await select('.workbench-scope', "unstaged"); await ready(); await click('[aria-label="还原全部"]');
+    await wait("document.querySelector('dialog[open]')?.textContent.includes('新增.bin')", "batch discard names every affected file");
+    await click('dialog .is-destructive'); await applied();
+    assert.equal(await cWorking(), original); await assert.rejects(fs.stat(path.join(c, "新增.bin")), { code: "ENOENT" });
+    await window.webContents.reload(); await ready(); await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(c)})`); await ready();
+    await click('[aria-label="还原恢复点"]'); await wait("document.querySelectorAll('.workbench-recovery-list > li').length === 2", "recovery history survives renderer reload");
+    await capture("git-recovery-after-reload"); await click('dialog .workbench-dialog-actions button:last-child');
+    stage("Batch stage, unstage and discard work with binary additions; recovery history survives reload");
+
+    // Keep actual text changes visible for the narrow dark-theme artifact.
+    await write(c, "source.ts", twoEdits); await click('[aria-label="刷新"]'); await ready();
     assert.equal(network.length, 0, "all Git, code and worker resources are local");
     assert.deepEqual(errors, [], "renderer stays error free");
     await evaluate("window.gitReviewFixture.setColorScheme('dark'); window.gitReviewFixture.setLocale('en')"); await delay(200);
@@ -205,7 +289,7 @@ async function smoke() {
     if (!window.isDestroyed()) { await capture("failure").catch(() => {}); await fs.writeFile(path.join(artifacts, "failure.html"), await evaluate<string>("document.body.outerHTML")).catch(() => {}); }
     await fs.writeFile(path.join(artifacts, "failure.json"), JSON.stringify({ error: String(error), stages, errors, network, service: registration.service.stats(), renderer: window.isDestroyed() ? undefined : await evaluate("window.gitReviewFixture?.state()") }, null, 2));
   } finally {
-    clearTimeout(watchdog); releaseRead?.(); registration.dispose(); if (!window.isDestroyed()) window.destroy();
+    clearTimeout(watchdog); releaseRead?.(); registration.dispose(); await registration.idle(); if (!window.isDestroyed()) window.destroy();
     session.flushStorageData();
     await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); app.exit(failed ? 1 : 0);
   }

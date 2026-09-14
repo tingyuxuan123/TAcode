@@ -92,7 +92,8 @@ export interface GitSnapshot {
 }
 
 export type GitErrorCode = "missingGit" | "notRepository" | "invalidReference" | "noCommits" | "noMergeBase"
-  | "outsideProject" | "invalidPath" | "invalidRequest" | "changedDuringRead" | "cancelled" | "timedOut" | "outputLimit" | "invalidOutput" | "failed";
+  | "outsideProject" | "invalidPath" | "invalidRequest" | "changedDuringRead" | "cancelled" | "timedOut" | "outputLimit" | "invalidOutput" | "failed"
+  | "staleSnapshot" | "indexLocked" | "patchRejected" | "unsupportedChange" | "recoveryConflict" | "recoveryFailed";
 
 /** Repository-only queries let the user choose a branch before reading a diff. */
 export type GitReviewQuery = GitComparison | { kind: "repository" };
@@ -121,7 +122,42 @@ export interface GitApi {
   unsubscribe(subscriptionId: string): Promise<void>;
   refresh(subscriptionId: string): Promise<void>;
   onUpdate(listener: (update: GitReviewUpdate) => void): () => void;
+  prepareMutation(request: GitPrepareMutationRequest): Promise<GitMutationPreview | Extract<GitMutationResult, { kind: "error" }>>;
+  applyMutation(token: string): Promise<GitMutationResult>;
+  cancelMutation(token: string): Promise<void>;
+  listRecoveries(projectRoot: string): Promise<GitRecoveryPoint[]>;
+  restoreRecovery(projectRoot: string, recoveryId: string): Promise<GitMutationResult>;
 }
+
+export type GitMutationAction = "stage" | "unstage" | "discard";
+export type GitMutationTarget = { kind: "all" } | { kind: "file"; fileId: string }
+  | { kind: "hunks"; fileId: string; hunkIds: readonly string[] };
+export interface GitPrepareMutationRequest {
+  subscriptionId: string;
+  snapshotId: string;
+  action: GitMutationAction;
+  target: GitMutationTarget;
+}
+export interface GitMutationPreview {
+  token: string;
+  projectRoot: string;
+  action: GitMutationAction;
+  scope: "unstaged" | "staged";
+  paths: readonly string[];
+  hunkCount?: number;
+  expiresAt: number;
+}
+export interface GitRecoveryPoint {
+  id: string;
+  projectRoot: string;
+  createdAt: number;
+  paths: readonly string[];
+  scope: "unstaged" | "staged";
+  status: "prepared" | "applied" | "needsAttention" | "rolledBack" | "restored";
+}
+export type GitMutationResult =
+  | { kind: "applied"; projectRoot: string; action: GitMutationAction | "recover"; recovery?: GitRecoveryPoint }
+  | { kind: "error"; error: GitFailure; recovery?: GitRecoveryPoint };
 
 export function gitReviewQueryKey(query: GitReviewQuery): string {
   return JSON.stringify(query.kind === "commit" ? [query.kind, query.commit] : query.kind === "branch" ? [query.kind, query.base] : [query.kind]);

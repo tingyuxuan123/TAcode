@@ -8,6 +8,7 @@ import { GitReviewStore, gitReviewStateKey } from "./git-review-store";
 import { ReviewWorkbench } from "./review-workbench";
 import type { ReviewScope, WorkbenchColorScheme } from "./types";
 import { useWorkbenchVisible } from "./use-workbench-visible";
+import { GitMutationDialogs, GitMutationNotice, useGitMutationActions } from "./git-mutation-actions";
 
 const branchKey = (root: string) => `tacode:review-base:${root}`;
 function readBase(root: string): string {
@@ -41,13 +42,14 @@ function ProjectGitReview({ projectRoot, active, onOpenFile, onChooseProject, on
   const queryKey = gitReviewQueryKey(query);
   const store = useMemo(() => new GitReviewStore(window.harness.git), []);
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const actions = useGitMutationActions(store, projectRoot, queryKey);
   useEffect(() => {
     if (!projectRoot || !visible) return;
     return store.connect(projectRoot, query);
   }, [store, projectRoot, queryKey, visible]);
   const current = state.key === gitReviewStateKey(projectRoot ?? "", query);
   const result = current ? state.result : undefined;
-  const busy = Boolean(projectRoot && visible && (!current || state.loading));
+  const busy = Boolean(projectRoot && visible && (!current || state.loading)) || actions.busy;
   const snapshot = result?.kind === "ready" ? result.snapshot : undefined;
   const branchCache = useRef<readonly GitBranch[]>([]);
   if (result?.kind === "ready" || result?.kind === "repository") branchCache.current = result.branches;
@@ -98,7 +100,13 @@ function ProjectGitReview({ projectRoot, active, onOpenFile, onChooseProject, on
     data-review-project={projectRoot} data-snapshot-id={snapshot?.id} data-review-active={visible} aria-busy={busy}>
     <ReviewWorkbench files={files} scope={scope} onScopeChange={setScope} onOpenFile={onOpenFile}
       onRefresh={projectRoot ? store.refresh : undefined} busy={busy} paused={!visible} comparisonKey={queryKey}
+      onMutation={snapshot && !snapshot.readOnly ? actions.onMutation : undefined}
+      onStageAll={snapshot && scope === "unstaged" ? () => actions.onMutation("stage", { kind: "all" }) : undefined}
+      onUnstageAll={snapshot && scope === "staged" ? () => actions.onMutation("unstage", { kind: "all" }) : undefined}
+      onDiscardAll={snapshot && !snapshot.readOnly ? () => actions.onMutation("discard", { kind: "all" }) : undefined}
+      onRecoveries={projectRoot ? actions.showRecoveries : undefined}
       onWorkerStateChange={onWorkerStateChange}
-      colorScheme={colorScheme} scopeDetails={scopeDetails} emptyState={emptyState} disabledScopes={["lastTurn"]} />
+      colorScheme={colorScheme} scopeDetails={scopeDetails || actions.phase || actions.result ? <>{scopeDetails}<GitMutationNotice actions={actions} onRefresh={store.refresh} /></> : undefined}
+      dialogs={<GitMutationDialogs actions={actions} />} emptyState={emptyState} disabledScopes={["lastTurn"]} />
   </div>;
 }

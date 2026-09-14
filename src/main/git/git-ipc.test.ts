@@ -1,11 +1,12 @@
 import { EventEmitter } from "node:events";
 import os from "node:os";
+import path from "node:path";
 import type { IpcMainInvokeEvent, WebContents } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { handlers } = vi.hoisted(() => ({ handlers: new Map<string, (...args: any[]) => unknown>() }));
 vi.mock("electron", () => ({ ipcMain: { handle: (name: string, handler: (...args: any[]) => unknown) => handlers.set(name, handler), removeHandler: (name: string) => handlers.delete(name) } }));
-import { parseGitSubscribeRequest, registerGitIpc } from "./git-ipc";
+import { parseGitMutationRequest, parseGitSubscribeRequest, registerGitIpc } from "./git-ipc";
 let dispose: (() => void) | undefined;
 afterEach(() => { dispose?.(); dispose = undefined; handlers.clear(); });
 
@@ -23,7 +24,7 @@ describe("Git IPC boundary", () => {
     const emitter = new EventEmitter(); const mainFrame = {};
     const host = Object.assign(emitter, { id: 5, mainFrame, send: vi.fn(), isDestroyed: () => false }) as unknown as WebContents;
     let allow!: (project: string) => void;
-    const registration = registerGitIpc({ host: () => host, resolveProject: () => new Promise((resolve) => { allow = resolve; }) });
+    const registration = registerGitIpc({ host: () => host, recoveryRoot: path.join(os.tmpdir(), "tacode-git-ipc-unused"), resolveProject: () => new Promise((resolve) => { allow = resolve; }) });
     dispose = registration.dispose;
     const request = { projectRoot: os.tmpdir(), subscriptionId: "sub", query: { kind: "unstaged" } };
     const subscribe = handlers.get("git:subscribe")!;
@@ -37,5 +38,12 @@ describe("Git IPC boundary", () => {
     expect(registration.service.stats()).toEqual({ projects: 0, subscriptions: 0, reads: 0 });
     expect(host.send).not.toHaveBeenCalled();
     dispose(); expect(emitter.listenerCount("did-start-navigation")).toBe(0);
+  });
+
+  it("accepts only snapshot identifiers and known operation targets, never renderer patches or paths", () => {
+    const request = { subscriptionId: "sub", snapshotId: "a".repeat(64), action: "stage", target: { kind: "hunks", fileId: "b".repeat(64), hunkIds: ["c".repeat(64)] } };
+    expect(parseGitMutationRequest(request)).toEqual(request);
+    for (const bad of [{ ...request, action: "reset" }, { ...request, snapshotId: "HEAD" }, { ...request, target: { kind: "file", path: "../secret" } },
+      { ...request, target: { ...request.target, hunkIds: [] } }, { ...request, target: { ...request.target, hunkIds: Array(1001).fill("c".repeat(64)) } }]) expect(() => parseGitMutationRequest(bad)).toThrow();
   });
 });

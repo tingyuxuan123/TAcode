@@ -1,4 +1,4 @@
-import type { GitFileDiff } from "../../shared/git";
+import type { GitDiffHunk, GitFileDiff } from "../../shared/git";
 
 export type WorkbenchChange = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflict";
 
@@ -24,6 +24,7 @@ export interface WorkbenchDiffFile {
   version: number | string;
   /** Non-text state stays separate from displayed source; never placeholder code. */
   metadata?: Pick<GitFileDiff, "old" | "new" | "conflictStages">;
+  hunks?: readonly GitDiffHunk[];
 }
 
 export interface SourceLocation {

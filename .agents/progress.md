@@ -1128,3 +1128,9 @@
 - 真实 Git 审查、主进程订阅/授权、项目与旧响应隔离、隐藏释放和元数据呈现完成；计划确认与 Agent /undo 入口保留。
 - 全量 125 文件 / 1075 用例（4 个测试进程）、typecheck、build、组件及生产 Git Electron smoke 通过。外部变化刷新 385 / 390 ms，0 网络和 renderer 错误；详见 `.agents/file-review/progress.md`、`docs/file-review-fr-03.md`。
 - 下一项 FR-04：真实暂存、取消暂存和可恢复还原。全部复刻目标继续 active，本阶段没有改动原工作区或既有 UX 清单。
+
+## 2026-09-14：文件与审查专项 FR-04
+
+- 真实 Git 暂存、取消暂存和可恢复还原完成，覆盖整批/文件/hunk、快照和 index 锁保护、补丁预检、原始文件事务与持久恢复点；Git 还原与 Agent `/undo` 保持独立。
+- 全量 **126 文件 / 1098 测试**、typecheck、build 通过；生产 Git Electron 烟测 13 阶段通过，外部刷新 342/307 ms，0 网络、0 renderer 错误，关闭后资源计数 0。详细证据见 `docs/file-review-fr-04.md`、`docs/file-review-reference/fr-04-result.json`。
+- 下一项：FR-05 提交与推送闭环。完整复刻目标继续 active；FR-04 在独立分支 `codex/file-review-workbench` 提交，未切换或重置原工作区。

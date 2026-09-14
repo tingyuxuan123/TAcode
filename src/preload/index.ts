@@ -77,6 +77,11 @@ const api: DesktopApi = {
     unsubscribe: (subscriptionId) => ipcRenderer.invoke("git:unsubscribe", subscriptionId),
     refresh: (subscriptionId) => ipcRenderer.invoke("git:refresh", subscriptionId),
     onUpdate: (listener) => subscribe("git:update", listener),
+    prepareMutation: (request) => ipcRenderer.invoke("git:prepare-mutation", request),
+    applyMutation: (token) => ipcRenderer.invoke("git:apply-mutation", token),
+    cancelMutation: (token) => ipcRenderer.invoke("git:cancel-mutation", token),
+    listRecoveries: (projectRoot) => ipcRenderer.invoke("git:list-recoveries", projectRoot),
+    restoreRecovery: (projectRoot, id) => ipcRenderer.invoke("git:restore-recovery", projectRoot, id),
   },
   vision: {
     config: () => ipcRenderer.invoke("vision:config"),

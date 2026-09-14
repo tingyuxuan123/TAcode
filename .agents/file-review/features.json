@@ -17,7 +17,7 @@
   {
     "id": "FR-04",
     "description": "Git 暂存、取消暂存与还原：整批/文件/hunk 三种粒度均操作真实 Git；校验快照版本和补丁，保护同文件另一状态的修改；还原有确认和本地恢复点，冲突/锁失败不丢修改，和 Agent /undo 保持独立语义。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "FR-05",

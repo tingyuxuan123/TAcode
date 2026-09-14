@@ -1,9 +1,10 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { CodeView, WorkerPoolContextProvider, useWorkerPool, type CodeViewHandle, type CodeViewItem, type WorkerInitializationRenderOptions, type WorkerPoolOptions } from "@pierre/diffs/react";
-import { registerCustomTheme, type CodeViewLineSelection } from "@pierre/diffs";
+import { registerCustomTheme, type CodeViewLineSelection, type DiffLineAnnotation } from "@pierre/diffs";
 import type { WorkerStats } from "@pierre/diffs/worker";
 import BundledDiffWorker from "@pierre/diffs/worker/worker.js?worker";
-import { ChevronRight, ExternalLink } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, ExternalLink, RotateCcw } from "lucide-react";
+import type { GitMutationAction, GitMutationTarget } from "../../shared/git";
 import { useI18n } from "../i18n";
 import { WorkbenchButton, WorkbenchStats } from "./controls";
 import { WorkbenchFileSymbol } from "./file-symbol";
@@ -38,8 +39,12 @@ export interface DiffViewerProps {
   onWorkerStateChange?(state: WorkerStats): void;
   initialScrollPosition?: number;
   onScrollPositionChange?(position: number): void;
+  mutationScope?: "unstaged" | "staged";
+  onMutation?(action: GitMutationAction, target: GitMutationTarget): void;
+  busy?: boolean;
   ref?: Ref<DiffViewerHandle>;
 }
+type ReviewAnnotation = { kind: "summary" } | { kind: "hunk"; id: string; number: number };
 
 function WorkerObserver({ onChange }: { onChange?: (state: WorkerStats) => void }) {
   const pool = useWorkerPool();
@@ -51,9 +56,9 @@ function WorkerObserver({ onChange }: { onChange?: (state: WorkerStats) => void 
   return null;
 }
 
-function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false, onOpenFile, onActiveFileChange, onSelectionChange, initialScrollPosition = 0, onScrollPositionChange, ref }: DiffViewerProps) {
+function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false, onOpenFile, onActiveFileChange, onSelectionChange, initialScrollPosition = 0, onScrollPositionChange, mutationScope, onMutation, busy = false, ref }: DiffViewerProps) {
   const { t } = useI18n();
-  const viewer = useRef<CodeViewHandle<undefined, undefined>>(null);
+  const viewer = useRef<CodeViewHandle<ReviewAnnotation, undefined>>(null);
   const container = useRef<HTMLDivElement>(null);
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const pendingTarget = useRef<{ path: string; line?: number; side?: "additions" | "deletions" } | null>(null);
@@ -72,23 +77,32 @@ function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false,
     diffCache.current = next;
     return result;
   }, [files]);
-  const itemCache = useRef(new Map<string, CodeViewItem<undefined>>());
+  const itemCache = useRef(new Map<string, { policy: string; item: CodeViewItem<ReviewAnnotation> }>());
   const viewVersion = useRef(0);
-  const items = useMemo<CodeViewItem<undefined>[]>(() => {
-    const next = new Map<string, CodeViewItem<undefined>>();
+  const mutationPolicy = `${onMutation ? mutationScope ?? "" : ""}:${busy}`;
+  const items = useMemo<CodeViewItem<ReviewAnnotation>[]>(() => {
+    const next = new Map<string, { policy: string; item: CodeViewItem<ReviewAnnotation> }>();
     for (const source of parsed) {
-      const previous = itemCache.current.get(source.id);
+      const cached = itemCache.current.get(source.id);
+      const previous = cached?.item;
       const isCollapsed = folded.has(source.id);
+      const file = byId.get(source.id)!;
+      const annotations: DiffLineAnnotation<ReviewAnnotation>[] = [];
+      if (hasWorkbenchDiffSummary(file)) annotations.push({ side: "additions", lineNumber: 0, metadata: { kind: "summary" } });
+      if (onMutation && mutationScope) for (const [index, hunk] of (file.hunks ?? []).entries()) annotations.push({
+        side: hunk.newLines ? "additions" : "deletions", lineNumber: Math.max(1, hunk.newLines ? hunk.newStart : hunk.oldStart),
+        metadata: { kind: "hunk", id: hunk.id, number: index + 1 },
+      });
       // CodeView treats equal versions as immutable, including presentation
       // state. Keep content cache keys separate from the view's revision.
-      const item = previous?.type === "diff" && previous.fileDiff === source.fileDiff && previous.collapsed === isCollapsed
+      const item = previous?.type === "diff" && previous.fileDiff === source.fileDiff && previous.collapsed === isCollapsed && cached?.policy === mutationPolicy
         ? previous : { ...source, collapsed: isCollapsed, version: ++viewVersion.current,
-          annotations: hasWorkbenchDiffSummary(byId.get(source.id)!) ? [{ side: "additions" as const, lineNumber: 0 }] : undefined };
-      next.set(source.id, item);
+          annotations: annotations.length ? annotations : undefined };
+      next.set(source.id, { item, policy: mutationPolicy });
     }
     itemCache.current = next;
-    return [...next.values()];
-  }, [parsed, folded, byId]);
+    return [...next.values()].map((entry) => entry.item);
+  }, [parsed, folded, byId, mutationPolicy]);
   useEffect(() => { setFolded(collapsed ? new Set(files.map((file) => file.id)) : new Set()); }, [collapsed]);
   const revealTarget = () => {
     const target = pendingTarget.current;
@@ -142,7 +156,21 @@ function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false,
       const file = visible && byId.get(visible.id);
       if (file) onActiveFileChange?.(file.path);
     }}
-    renderAnnotation={(_annotation, item) => { const file = byId.get(item.id); return file ? <DiffSummary file={file} /> : null; }}
+    renderAnnotation={(annotation, item) => {
+      const file = byId.get(item.id);
+      if (!file) return null;
+      const data = annotation.metadata;
+      if (data.kind === "summary") return <DiffSummary file={file} />;
+      const hunk = file.hunks?.find((hunk) => hunk.id === data.id);
+      if (!hunk || !mutationScope || !onMutation) return null;
+      const target: GitMutationTarget = { kind: "hunks", fileId: file.id, hunkIds: [hunk.id] };
+      return <div className="workbench-hunk-actions" data-hunk-id={hunk.id} data-hunk-path={file.path}>
+        <span title={hunk.heading}>{t("workbench.hunk", { number: data.number })} <code>−{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines}</code></span>
+        <button type="button" data-git-action={mutationScope === "unstaged" ? "stage-hunk" : "unstage-hunk"} disabled={busy}
+          onClick={() => onMutation(mutationScope === "unstaged" ? "stage" : "unstage", target)}>{t(mutationScope === "unstaged" ? "workbench.stageHunk" : "workbench.unstageHunk")}</button>
+        <button type="button" data-git-action="discard-hunk" disabled={busy} onClick={() => onMutation("discard", target)}>{t("workbench.discardHunk")}</button>
+      </div>;
+    }}
     renderCustomHeader={(item) => {
       const file = byId.get(item.id);
       if (!file) return null;
@@ -158,6 +186,16 @@ function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false,
         </span>
         <WorkbenchStats additions={file.additions} deletions={file.deletions} />
         <span className="workbench-toolbar-spacer" />
+        {onMutation && mutationScope && <>
+          <WorkbenchButton label={t(mutationScope === "unstaged" ? "workbench.stageFile" : "workbench.unstageFile")}
+            data-git-action={mutationScope === "unstaged" ? "stage-file" : "unstage-file"} disabled={busy || file.change === "conflict"}
+            onClick={() => onMutation(mutationScope === "unstaged" ? "stage" : "unstage", { kind: "file", fileId: file.id })}>
+            {mutationScope === "unstaged" ? <ArrowDownToLine size={14} /> : <ArrowUpFromLine size={14} />}
+          </WorkbenchButton>
+          <WorkbenchButton label={t("workbench.discardFile")} data-git-action="discard-file"
+            disabled={busy || file.change === "conflict" || file.metadata?.old.state === "submodule" || file.metadata?.new.state === "submodule"}
+            onClick={() => onMutation("discard", { kind: "file", fileId: file.id })}><RotateCcw size={14} /></WorkbenchButton>
+        </>}
         {onOpenFile && <WorkbenchButton label={t("workbench.open")} onClick={() => onOpenFile(file.path)}><ExternalLink size={14} /></WorkbenchButton>}
       </div>;
     }} />;

@@ -1,4 +1,4 @@
-import { gitReviewQueryKey, type GitApi, type GitReviewQuery, type GitReviewResult, type GitSubscribeRequest, type GitWatchMode } from "../../shared/git";
+import { gitReviewQueryKey, type GitApi, type GitMutationAction, type GitMutationTarget, type GitReviewQuery, type GitReviewResult, type GitSubscribeRequest, type GitWatchMode } from "../../shared/git";
 
 export interface GitReviewState {
   key: string;
@@ -51,5 +51,11 @@ export class GitReviewStore {
     void this.api.refresh(active.request.subscriptionId).catch((error) => {
       if (this.active === active) this.publish({ ...this.state, loading: false, result: { kind: "error", error: { code: "failed", message: String(error) } } });
     });
+  };
+  prepareMutation = (action: GitMutationAction, target: GitMutationTarget): ReturnType<GitApi["prepareMutation"]> => {
+    const active = this.active;
+    const result = this.state.result;
+    if (!active || this.state.loading || result?.kind !== "ready") return Promise.resolve({ kind: "error", error: { code: "staleSnapshot", message: "No current Git snapshot" } });
+    return this.api.prepareMutation({ subscriptionId: active.request.subscriptionId, snapshotId: result.snapshot.id, action, target });
   };
 }

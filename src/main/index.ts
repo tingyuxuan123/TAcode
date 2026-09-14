@@ -632,6 +632,7 @@ function registerIpc(): void {
   gitIpc = registerGitIpc({
     host: () => mainWindow?.webContents,
     resolveProject: (cwd) => resolveInWorkspace(".", cwd),
+    recoveryRoot: path.join(userDataPath, "git-recovery"),
   });
   registerCapabilitiesIpc({
     resolveWorkspace: (cwd) => resolveInWorkspace(".", cwd),
@@ -2429,6 +2430,7 @@ app.on("before-quit", (event) => {
   closeAllDetachedBrowserWindows();
   Promise.all([
     historyMaintenance.cancel(),
+    gitIpc?.idle() ?? Promise.resolve(),
     agentManager.stopAll(),
     delegationCoordinator?.close() ?? Promise.resolve(),
   ])

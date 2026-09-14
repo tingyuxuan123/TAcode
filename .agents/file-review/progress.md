@@ -32,3 +32,11 @@
 - 文件：src/main/git/{git-service,git-watch,git-ipc}、shared/git、preload、App、renderer/workbench 组件/状态及本地化；真实 Electron scripts/git-review-smoke.ts、夹具、22 项定向回归与依赖补丁。
 - 验证：全量 125 文件 / 1075 用例（maxWorkers=4）、typecheck、build、diff check 通过；组件及生产 Git Electron smoke 通过，外部刷新 385 / 390 ms，0 网络请求、0 renderer 错误、关闭后 0 订阅/读取。默认并发旧 state.test 刷新超时，单独及限制并发全量均通过，未改其断言。详情 docs/file-review-fr-03.md。
 - 下一项 FR-04：批量/文件/hunk 暂存、取消暂存、还原，快照校验、补丁预检与本地恢复点。另一任务仍在原工作区运行；本分支继续隔离，FR-06 前再整合其已提交变化。总目标保持 active。
+
+## 2026-09-14 FR-04 完成
+
+- 新增真实 Git 暂存、取消暂存和还原服务，支持整批/文件/hunk 粒度；私有 index/临时工作树预检，确认时复核 snapshot、HEAD、index、项目授权和原始文件指纹；common-dir 写队列与 `index.lock` 保护避免并发覆盖。
+- 已暂存还原同步逆向 index 与工作树，保留非重叠未暂存编辑；重叠补丁、同 hunk 空格变化、锁竞争和后来文件变化明确拒绝。文件事务保留原始字节、BOM/CRLF、权限、符号链接，失败回滚；本地恢复点可跨 renderer reload/服务实例恢复，和 Agent `/undo` 独立。
+- 文件：`src/main/git/git-mutations.ts`、`git-recovery.ts`、`git-worktree-files.ts`、`src/renderer/workbench/git-mutation-actions.tsx`，以及 Git IPC/preload/shared、审查面板、diff viewer、i18n、样式、生产烟测和第三方 diff 补丁。
+- 验证：定向 22 项；全量 **126 文件 / 1098 用例通过**（`--maxWorkers=4`）；`pnpm typecheck`、`pnpm build` 通过。生产 Electron Git 烟测 13 阶段通过，外部刷新 **342 / 307 ms**，0 网络请求、0 renderer 错误，关闭后项目/订阅/读取均为 0。结果见 `docs/file-review-fr-04.md` 与 `docs/file-review-reference/fr-04-result.json`；Windows 尚未实机验证。
+- 下一项 FR-05：提交与推送闭环。总目标保持 active，原工作区及其运行任务未修改。

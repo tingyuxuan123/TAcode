@@ -1,0 +1,39 @@
+{
+  "ok": true,
+  "stages": [
+    "Production preload, main Git service, real index/worktree comparison",
+    "Continuous diff, file-tree navigation, split layout and full-context expansion",
+    "Binary, oversized, empty and permission metadata stay separate from source",
+    "Staged, commit, root commit, branch choice, merge base and reference-error recovery",
+    "External file and index changes refresh the active snapshot",
+    "Delayed project A response cannot overwrite project B",
+    "Hidden tab/drawer and simulated page frame suspension release reads and workers",
+    "Non-repository initialization and explicit opened-project authorization",
+    "Native hunk and file actions change the real index and preserve the working copy",
+    "Discard confirms before writing, preserves extra unstaged edits, and offers durable recovery",
+    "Overlapping patches, foreign index locks and edits made during confirmation preserve all changes",
+    "Batch stage, unstage and discard work with binary additions; recovery history survives reload",
+    "Renderer reload/window close cleanup and offline dark/English rendering"
+  ],
+  "refreshMs": [
+    342,
+    307
+  ],
+  "networkRequests": [],
+  "rendererErrors": [],
+  "gitHead": "f5552c1370484d14712f4f4aee153f60919a4ca5",
+  "rootCommit": "fb6a6eb361031b5db71799a14e072dbb9d929ff1",
+  "serviceAfterClose": {
+    "projects": 0,
+    "subscriptions": 0,
+    "reads": 0
+  },
+  "environment": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "cpu": "Apple M5",
+    "electron": "37.10.3",
+    "node": "22.21.1",
+    "chromium": "138.0.7204.251"
+  }
+}

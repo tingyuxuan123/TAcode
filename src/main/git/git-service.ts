@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { gitReviewQueryKey, type GitReviewQuery, type GitReviewResult, type GitReviewUpdate, type GitSubscribeRequest } from "../../shared/git";
+import { gitReviewQueryKey, type GitReviewQuery, type GitReviewResult, type GitReviewUpdate, type GitSubscribeRequest, type GitSnapshot } from "../../shared/git";
 import { GitReader } from "./git-reader";
 import { GitReadError } from "./git-process";
 import { GitProjectWatch, type GitWatchChange, type GitWatchFactory } from "./git-watch";
@@ -148,6 +148,17 @@ export class GitReviewService {
     const sub = this.subscribers.get(this.key(owner, id));
     if (sub?.group) this.invalidate(sub.group);
     else if (sub) void this.bind(sub);
+  }
+  mutationContext(owner: number, subscriptionId: string, snapshotId: string): { snapshot: GitSnapshot; projectRoot: string } {
+    const sub = this.subscribers.get(this.key(owner, subscriptionId));
+    const result = sub?.group?.result;
+    if (!sub || result?.kind !== "ready" || result.snapshot.id !== snapshotId) throw new GitReadError("staleSnapshot", "This Git comparison is no longer active");
+    return { snapshot: result.snapshot, projectRoot: sub.request.projectRoot };
+  }
+  refreshOwner(owner: number): void {
+    const groups = new Set<ComparisonGroup>();
+    for (const sub of this.subscribers.values()) if (sub.owner === owner && sub.group) groups.add(sub.group);
+    for (const group of groups) this.invalidate(group);
   }
   unsubscribe(owner: number, id: string): void {
     const key = this.key(owner, id);

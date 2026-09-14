@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDownToLine, ChevronsDownUp, Columns2, Folders, GitCommitHorizontal, RefreshCw, RotateCcw, Rows2, WrapText } from "lucide-react";
+import { ArrowDownToLine, ChevronsDownUp, Columns2, Folders, GitCommitHorizontal, History, RefreshCw, RotateCcw, Rows2, WrapText } from "lucide-react";
 import { useI18n } from "../i18n";
 import { WorkbenchButton, WorkbenchStats } from "./controls";
 import { WorkbenchFileTree } from "./file-tree";
@@ -11,7 +11,7 @@ import type { ReviewScope, WorkbenchColorScheme, WorkbenchDiffFile } from "./typ
 const DiffViewer = lazy(() => import("./diff-viewer").then((module) => ({ default: module.DiffViewer })));
 const scopes: ReviewScope[] = ["unstaged", "staged", "commit", "branch", "lastTurn"];
 
-export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRefresh, onStageAll, onUnstageAll, onDiscardAll, onCommit, busy = false, error, colorScheme = "light", onWorkerStateChange, onSelectionChange, initialTreeWidth = 374, scopeDetails, emptyState, paused = false, comparisonKey = scope, disabledScopes = [] }: {
+export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRefresh, onStageAll, onUnstageAll, onDiscardAll, onCommit, onMutation, onRecoveries, dialogs, busy = false, error, colorScheme = "light", onWorkerStateChange, onSelectionChange, initialTreeWidth = 374, scopeDetails, emptyState, paused = false, comparisonKey = scope, disabledScopes = [] }: {
   files: readonly WorkbenchDiffFile[];
   scope: ReviewScope;
   onScopeChange(scope: ReviewScope): void;
@@ -21,6 +21,9 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
   onUnstageAll?(): void;
   onDiscardAll?(): void;
   onCommit?(): void;
+  onMutation?: DiffViewerProps["onMutation"];
+  onRecoveries?(): void;
+  dialogs?: ReactNode;
   busy?: boolean;
   error?: string;
   scopeDetails?: ReactNode;
@@ -68,6 +71,7 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
         {layout === "unified" ? <Columns2 size={16} /> : <Rows2 size={16} />}
       </WorkbenchButton>
       {onRefresh && <WorkbenchButton label={t("workbench.refresh")} disabled={busy} onClick={onRefresh}><RefreshCw size={15} className={busy ? "is-spinning" : ""} /></WorkbenchButton>}
+      {canMutate && onRecoveries && <WorkbenchButton label={t("workbench.recoveries")} disabled={busy} onClick={onRecoveries}><History size={15} /></WorkbenchButton>}
       <WorkbenchButton label={t(treeOpen ? "workbench.hideTree" : "workbench.showTree")} aria-pressed={treeOpen} onClick={() => setTreeOpen(!treeOpen)}><Folders size={18} /></WorkbenchButton>
       {onCommit && <WorkbenchButton label={t("workbench.commitOrPush")} className="has-label is-outlined" disabled={busy} onClick={onCommit}><GitCommitHorizontal size={16} /><span>{t("workbench.commitOrPush")}</span></WorkbenchButton>}
     </>}
@@ -79,6 +83,7 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
     {error && <div role="alert" className="workbench-notice">{error}</div>}
     {!paused && filtered.length ? <Suspense fallback={<p className="workbench-empty" role="status">{t("workbench.diffLoading")}</p>}>
       <DiffViewer key={comparisonKey} ref={attachViewer} files={filtered} layout={layout} wrap={wrap} colorScheme={colorScheme} collapsed={collapsed}
+        mutationScope={canMutate ? scope : undefined} onMutation={onMutation} busy={busy}
         initialScrollPosition={scroll.current.position} onScrollPositionChange={(position) => { scroll.current.position = position; }}
         onOpenFile={onOpenFile} onActiveFileChange={setSelectedPath} onWorkerStateChange={onWorkerStateChange} onSelectionChange={onSelectionChange} />
     </Suspense> : <div className="workbench-empty" role="status">{emptyState ?? t(busy ? "workbench.loading" : files.length ? "workbench.emptyFiles" : "workbench.emptyDiff")}</div>}
@@ -87,5 +92,6 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
       {scope === "unstaged" && onStageAll && <WorkbenchButton className="has-label" label={t("workbench.stageAll")} disabled={busy} onClick={onStageAll}><ArrowDownToLine size={14} /><span>{t("workbench.stageAll")}</span></WorkbenchButton>}
       {scope === "staged" && onUnstageAll && <WorkbenchButton className="has-label" label={t("workbench.unstageAll")} disabled={busy} onClick={onUnstageAll}><ArrowDownToLine size={14} /><span>{t("workbench.unstageAll")}</span></WorkbenchButton>}
     </div>}
+    {dialogs}
   </WorkbenchSurface>;
 }
