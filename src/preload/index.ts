@@ -82,6 +82,10 @@ const api: DesktopApi = {
     cancelMutation: (token) => ipcRenderer.invoke("git:cancel-mutation", token),
     listRecoveries: (projectRoot) => ipcRenderer.invoke("git:list-recoveries", projectRoot),
     restoreRecovery: (projectRoot, id) => ipcRenderer.invoke("git:restore-recovery", projectRoot, id),
+    getCommitInfo: (request) => ipcRenderer.invoke("git:commit-info", request),
+    prepareCommit: (request) => ipcRenderer.invoke("git:prepare-commit", request),
+    applyCommit: (token) => ipcRenderer.invoke("git:apply-commit", token),
+    cancelCommit: (token) => ipcRenderer.invoke("git:cancel-commit", token),
   },
   vision: {
     config: () => ipcRenderer.invoke("vision:config"),

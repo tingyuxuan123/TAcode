@@ -93,7 +93,8 @@ export interface GitSnapshot {
 
 export type GitErrorCode = "missingGit" | "notRepository" | "invalidReference" | "noCommits" | "noMergeBase"
   | "outsideProject" | "invalidPath" | "invalidRequest" | "changedDuringRead" | "cancelled" | "timedOut" | "outputLimit" | "invalidOutput" | "failed"
-  | "staleSnapshot" | "indexLocked" | "patchRejected" | "unsupportedChange" | "recoveryConflict" | "recoveryFailed";
+  | "staleSnapshot" | "indexLocked" | "patchRejected" | "unsupportedChange" | "recoveryConflict" | "recoveryFailed"
+  | "noStagedChanges" | "outsideStagedChanges" | "noUpstream" | "identityMissing" | "hookFailed" | "commitFailed" | "authFailed" | "pushRejected" | "pushFailed";
 
 /** Repository-only queries let the user choose a branch before reading a diff. */
 export type GitReviewQuery = GitComparison | { kind: "repository" };
@@ -127,6 +128,10 @@ export interface GitApi {
   cancelMutation(token: string): Promise<void>;
   listRecoveries(projectRoot: string): Promise<GitRecoveryPoint[]>;
   restoreRecovery(projectRoot: string, recoveryId: string): Promise<GitMutationResult>;
+  getCommitInfo(request: GitCommitInfoRequest): Promise<GitCommitInfoResult>;
+  prepareCommit(request: GitPrepareCommitRequest): Promise<GitCommitPreview | GitCommitResult>;
+  applyCommit(token: string): Promise<GitCommitResult>;
+  cancelCommit(token: string): Promise<void>;
 }
 
 export type GitMutationAction = "stage" | "unstage" | "discard";
@@ -158,6 +163,66 @@ export interface GitRecoveryPoint {
 export type GitMutationResult =
   | { kind: "applied"; projectRoot: string; action: GitMutationAction | "recover"; recovery?: GitRecoveryPoint }
   | { kind: "error"; error: GitFailure; recovery?: GitRecoveryPoint };
+
+export type GitCommitAction = "commit" | "push" | "commitAndPush";
+export interface GitRemote {
+  name: string;
+  fetchUrl: string | null;
+  pushUrl: string | null;
+}
+export interface GitCommitTarget {
+  remote: string;
+  branch: string;
+}
+export interface GitCommitInfoRequest {
+  subscriptionId: string;
+  snapshotId: string;
+}
+export interface GitCommitInfo {
+  projectRoot: string;
+  branch: string | null;
+  head: string | null;
+  upstream: string | null;
+  upstreamTarget?: GitCommitTarget;
+  remotes: readonly GitRemote[];
+  hasStaged: boolean;
+  stagedPaths: readonly string[];
+  stagedAdditions: number;
+  stagedDeletions: number;
+  indexVersion: string;
+  identity: { name: string; email: string } | null;
+}
+export type GitCommitInfoResult = GitCommitInfo | { kind: "error"; error: GitFailure };
+export interface GitPrepareCommitRequest extends GitCommitInfoRequest {
+  action: GitCommitAction;
+  message?: string;
+  target?: GitCommitTarget;
+}
+export interface GitCommitPreview {
+  token: string;
+  projectRoot: string;
+  action: GitCommitAction;
+  message?: string;
+  target?: GitCommitTarget;
+  branch: string | null;
+  upstream: string | null;
+  stagedPaths: readonly string[];
+  stagedAdditions: number;
+  stagedDeletions: number;
+  expiresAt: number;
+}
+export interface GitCommitRecord {
+  oid: string;
+  message: string;
+}
+export interface GitPushRecord {
+  remote: string;
+  branch: string;
+  oid: string | null;
+}
+export type GitCommitResult =
+  | { kind: "applied"; projectRoot: string; action: GitCommitAction; commit?: GitCommitRecord; push?: GitPushRecord }
+  | { kind: "error"; error: GitFailure; projectRoot?: string; action?: GitCommitAction; commit?: GitCommitRecord; push?: GitPushRecord };
 
 export function gitReviewQueryKey(query: GitReviewQuery): string {
   return JSON.stringify(query.kind === "commit" ? [query.kind, query.commit] : query.kind === "branch" ? [query.kind, query.base] : [query.kind]);

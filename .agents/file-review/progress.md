@@ -40,3 +40,12 @@
 - 文件：`src/main/git/git-mutations.ts`、`git-recovery.ts`、`git-worktree-files.ts`、`src/renderer/workbench/git-mutation-actions.tsx`，以及 Git IPC/preload/shared、审查面板、diff viewer、i18n、样式、生产烟测和第三方 diff 补丁。
 - 验证：定向 22 项；全量 **126 文件 / 1098 用例通过**（`--maxWorkers=4`）；`pnpm typecheck`、`pnpm build` 通过。生产 Electron Git 烟测 13 阶段通过，外部刷新 **342 / 307 ms**，0 网络请求、0 renderer 错误，关闭后项目/订阅/读取均为 0。结果见 `docs/file-review-fr-04.md` 与 `docs/file-review-reference/fr-04-result.json`；Windows 尚未实机验证。
 - 下一项 FR-05：提交与推送闭环。总目标保持 active，原工作区及其运行任务未修改。
+
+## 2026-09-14 FR-05 完成
+
+- 新增 `GitCommitService`、提交 IPC/preload 契约、共享 Git 写队列和工作台提交/推送对话框。真实暂存路径、增删统计、提交信息、分支/远端目标在确认前展示；支持仅提交、仅推送、提交并推送，无上游时选择远端和分支。
+- 提交和推送复用 snapshot、项目授权、HEAD/分支/上游/index 版本校验以及 AbortSignal；实际推送 URL 以私有摘要复核。规范化目标分支后明确推送 `HEAD:refs/heads/<branch>`，保留旧同名本地分支。子目录提交拒绝项目外暂存内容。
+- 排队/执行期间均可取消，准备期间关闭会清理迟到 token；取消 post-commit hook 后仍展示已生成的本地提交。hook、身份、鉴权、拒绝推送和部分成功结构化展示；远端 URL 及错误详情去除凭据。
+- 定向提交/IPC/store **3 文件 / 30 回归**通过；生产 Electron Git 烟测 **23 个阶段**通过，包含本地裸仓库提交推送、不同名称目标分支、hook 拒绝、非快进拒绝、取消、子目录范围保护、reload/关闭清理；refresh **305 / 311 ms**，0 网络请求、0 renderer 错误，关闭后项目/订阅/读取为 0。另通过文件组件 5 阶段 Electron 烟测。详情及截图见 `docs/file-review-fr-05.md` 和 `docs/file-review-reference/fr-05-result.json`。
+- 最终全量 **127 文件 / 1121 用例**（`--maxWorkers=1`）、typecheck、build、diff check 均通过。构建与全量测试必须顺序执行，避免清理正在使用的 RPC 产物；此前 macOS 文件通知用例在并行负载下抖动，未放宽断言，最终单进程通过。Windows hook/凭据/权限和大规模性能仍由 FR-15 验收；总目标保持 active。
+- 下一项 FR-06：吸收生产文件索引和读取服务，原工作区及其运行任务未修改。

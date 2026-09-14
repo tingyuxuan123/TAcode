@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { handlers } = vi.hoisted(() => ({ handlers: new Map<string, (...args: any[]) => unknown>() }));
 vi.mock("electron", () => ({ ipcMain: { handle: (name: string, handler: (...args: any[]) => unknown) => handlers.set(name, handler), removeHandler: (name: string) => handlers.delete(name) } }));
-import { parseGitMutationRequest, parseGitSubscribeRequest, registerGitIpc } from "./git-ipc";
+import { parseGitCommitInfoRequest, parseGitCommitRequest, parseGitMutationRequest, parseGitSubscribeRequest, registerGitIpc } from "./git-ipc";
 let dispose: (() => void) | undefined;
 afterEach(() => { dispose?.(); dispose = undefined; handlers.clear(); });
 
@@ -45,5 +45,19 @@ describe("Git IPC boundary", () => {
     expect(parseGitMutationRequest(request)).toEqual(request);
     for (const bad of [{ ...request, action: "reset" }, { ...request, snapshotId: "HEAD" }, { ...request, target: { kind: "file", path: "../secret" } },
       { ...request, target: { ...request.target, hunkIds: [] } }, { ...request, target: { ...request.target, hunkIds: Array(1001).fill("c".repeat(64)) } }]) expect(() => parseGitMutationRequest(bad)).toThrow();
+  });
+
+  it("accepts bounded commit actions and rejects unsafe push targets", () => {
+    const valid = { subscriptionId: "sub", snapshotId: "a".repeat(64), action: "commitAndPush", message: "publish", target: { remote: "origin", branch: "main" } };
+    expect(parseGitCommitRequest(valid)).toEqual(valid);
+    expect(parseGitCommitInfoRequest({ subscriptionId: "sub", snapshotId: "a".repeat(64) })).toEqual({ subscriptionId: "sub", snapshotId: "a".repeat(64) });
+    for (const bad of [
+      { ...valid, action: "amend" },
+      { ...valid, message: "\0unsafe" },
+      { ...valid, target: { remote: "origin", branch: "" } },
+      { ...valid, target: { remote: "origin", branch: "../outside" } },
+      { ...valid, snapshotId: "HEAD" },
+      { ...valid, action: "push", message: "x".repeat(10_001) },
+    ]) expect(() => parseGitCommitRequest(bad)).toThrow();
   });
 });

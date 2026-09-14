@@ -8,6 +8,7 @@ import { GitReader } from "./git-reader";
 import { decodeGitText, GitProcess, GitReadError, gitOutputLine } from "./git-process";
 import { GitRecoveryStore, recoverySummary, type GitRecoveryManifest } from "./git-recovery";
 import { GitFileTransaction, gitWorktreePath, missingGitFile, readGitFileImage, writeGitFileImage, type GitFileReplacement } from "./git-worktree-files";
+import { GitWriteQueue } from "./git-write-queue";
 
 interface MutationPlan {
   owner: number;
@@ -25,6 +26,7 @@ export interface GitMutationOptions {
   resolveProject(projectRoot: string): Promise<string>;
   recoveryRoot: string;
   git?: GitProcess;
+  queue?: GitWriteQueue;
 }
 const nulPaths = (paths: readonly string[]) => paths.join("\0") + "\0";
 const indexFile = (repository: GitRepositoryInfo) => path.join(repository.gitDir, "index");
@@ -74,22 +76,16 @@ function selectedPatch(file: GitFileDiff, target: Extract<GitMutationTarget, { k
 export class GitMutationService {
   private readonly git: GitProcess;
   private readonly recovery: GitRecoveryStore;
-  private readonly queues = new Map<string, Promise<void>>();
+  private readonly queue: GitWriteQueue;
   private readonly plans = new Map<string, MutationPlan>();
   private readonly epochs = new Map<number, number>();
   private closing = false;
   constructor(private readonly options: GitMutationOptions) {
     this.git = options.git ?? new GitProcess();
     this.recovery = new GitRecoveryStore(options.recoveryRoot);
+    this.queue = options.queue ?? new GitWriteQueue();
   }
 
-  private enqueue<T>(key: string, job: () => Promise<T>): Promise<T> {
-    const task = (this.queues.get(key) ?? Promise.resolve()).then(job);
-    const settled = task.then(() => undefined, () => undefined);
-    this.queues.set(key, settled);
-    void settled.then(() => { if (this.queues.get(key) === settled) this.queues.delete(key); });
-    return task;
-  }
   private async allowed(root: string): Promise<string> {
     const resolved = await this.options.resolveProject(root).catch((error: unknown) => {
       throw new GitReadError("outsideProject", error instanceof Error ? error.message : String(error));
@@ -168,7 +164,7 @@ export class GitMutationService {
     if (this.closing) throw new GitReadError("cancelled", "Git service is closing");
     const epoch = this.epochs.get(owner) ?? 0;
     const selected = selectedFiles(snapshot, action, target);
-    return this.enqueue(snapshot.repository.commonDir, async () => {
+    return this.queue.enqueue(snapshot.repository.commonDir, async () => {
       if (this.closing || (this.epochs.get(owner) ?? 0) !== epoch) throw new GitReadError("cancelled", "The workbench was closed");
       await this.current(snapshot, authorizedRoot);
       const repository = snapshot.repository;
@@ -290,7 +286,7 @@ export class GitMutationService {
     const plan = this.plans.get(token);
     if (!plan || plan.owner !== owner || plan.preview.expiresAt < Date.now() || this.closing) return gitMutationFailure(new GitReadError("staleSnapshot", "This Git operation has expired"));
     this.cancel(owner, token);
-    return this.enqueue(plan.snapshot.repository.commonDir, async () => {
+    return this.queue.enqueue(plan.snapshot.repository.commonDir, async () => {
       let recovery: GitRecoveryManifest | undefined;
       try {
         await this.current(plan.snapshot, plan.authorizedRoot);
@@ -313,7 +309,7 @@ export class GitMutationService {
     for (const [token, plan] of this.plans) if (plan.owner === owner) this.cancel(owner, token);
   }
   close(): void { this.closing = true; for (const [token, plan] of this.plans) this.cancel(plan.owner, token); }
-  async idle(): Promise<void> { await Promise.all([...this.queues.values()]); }
+  async idle(): Promise<void> { await this.queue.idle(); }
   async listRecoveries(projectRoot: string) { return this.recovery.list(await this.allowed(projectRoot)); }
 
   async restore(projectRoot: string, id: string): Promise<GitMutationResult> {
@@ -322,7 +318,7 @@ export class GitMutationService {
       const root = await this.allowed(projectRoot);
       const state = await new GitReader(root, { git: this.git }).inspect();
       if (state.kind !== "repository") throw new GitReadError(state.kind, "The project is not an available Git repository");
-      return await this.enqueue(state.repository.commonDir, async () => {
+      return await this.queue.enqueue(state.repository.commonDir, async () => {
         const repository = state.repository;
         const record = await this.recovery.read(root, id);
         if (record.repositoryId !== repository.id || record.head !== repository.head || record.status === "restored" || record.status === "rolledBack") throw new GitReadError("recoveryConflict", "The recovery point no longer matches this repository or HEAD");

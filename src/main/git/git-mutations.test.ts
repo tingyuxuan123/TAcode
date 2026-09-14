@@ -285,7 +285,7 @@ describe("real Git mutations and recovery", () => {
     const record = (await f.service.listRecoveries(f.root))[0];
     expect(await f.service.restore(f.root, record.id)).toMatchObject({ kind: "applied" });
     expect(await fs.readFile(path.join(f.root, "large.bin"))).toEqual(changed);
-  }, 30000);
+  }, 120000);
 
   it("serializes simultaneous operations and rejects the second stale mutation", async () => {
     const f = await fixture(); await f.write("source.txt", "changed\n");

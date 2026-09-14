@@ -20,12 +20,16 @@ async function smoke() {
   const artifacts = process.env.TACODE_GIT_REVIEW_ARTIFACTS ?? await fs.mkdtemp(path.join(tmpdir(), "tacode-git-review-artifacts-"));
   await fs.mkdir(artifacts, { recursive: true });
   const a = path.join(directory, "project-a"); const b = path.join(directory, "project-b"); const fresh = path.join(directory, "fresh");
-  for (const root of [a, b, fresh]) await fs.mkdir(root);
+  const commitProject = path.join(directory, "commit-project"); const commitRemote = path.join(directory, "commit-remote.git");
+  for (const root of [a, b, fresh, commitProject]) await fs.mkdir(root);
   const git = async (cwd: string, args: string[]) => (await exec("git", ["-c", "commit.gpgsign=false", ...args], { cwd, env: {
     ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_DEFAULT_HASH: "sha1",
   } })).stdout.trimEnd();
   const write = async (root: string, file: string, text: string | Buffer) => { await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true }); await fs.writeFile(path.join(root, file), text); };
   for (const root of [a, b]) { await git(root, ["init", "-qb", "main"]); await git(root, ["config", "user.name", "TACode fixture"]); await git(root, ["config", "user.email", "fixture@example.invalid"]); }
+  await git(commitProject, ["init", "-qb", "main"]); await git(commitProject, ["config", "user.name", "TACode fixture"]); await git(commitProject, ["config", "user.email", "fixture@example.invalid"]);
+  await write(commitProject, "source.txt", "base\n"); await git(commitProject, ["add", "source.txt"]); await git(commitProject, ["commit", "-qm", "base"]);
+  await git(directory, ["init", "--bare", "-q", commitRemote]); await git(commitProject, ["remote", "add", "origin", commitRemote]);
   const lines = Array.from({ length: 90 }, (_, index) => `export const value${index + 1} = ${index + 1};`);
   const source = (values: string[]) => values.join("\n") + "\n";
   await write(a, "src/alpha.ts", source(lines)); await write(a, "permissions.sh", "#!/bin/sh\necho ready\n");
@@ -41,7 +45,7 @@ async function smoke() {
   await write(a, "large.txt", "large content\n".repeat(Math.ceil(8 * 1024 * 1024 / 14)));
   if (process.platform !== "win32") await fs.chmod(path.join(a, "permissions.sh"), 0o755);
   await write(b, "src/alpha.ts", "PROJECT_B_ONLY\n");
-  const allowed = new Set([a, b, fresh]);
+  const allowed = new Set([a, b, fresh, commitProject]);
   await app.whenReady();
   const window = new BrowserWindow({ width: 836, height: 740, useContentSize: true, show: false,
     webPreferences: { preload: path.join(path.dirname(fileURLToPath(import.meta.url)), "git-review-preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
@@ -59,6 +63,19 @@ async function smoke() {
       } };
     },
   });
+  let delayCommitPreview = false; let heldCommitToken: string | undefined; let releaseCommitPreview: (() => void) | undefined;
+  const cancelledCommitTokens = new Set<string>();
+  const prepareCommit = registration.commits.prepare.bind(registration.commits);
+  registration.commits.prepare = async (...args) => {
+    const preview = await prepareCommit(...args);
+    if (delayCommitPreview) {
+      delayCommitPreview = false; heldCommitToken = preview.token;
+      await new Promise<void>((resolve) => { releaseCommitPreview = resolve; });
+    }
+    return preview;
+  };
+  const cancelCommit = registration.commits.cancel.bind(registration.commits);
+  registration.commits.cancel = (owner, token) => { cancelledCommitTokens.add(token); cancelCommit(owner, token); };
   ipcMain.handle("app:get-locale", () => "zh"); ipcMain.handle("app:set-locale", () => {});
   const network: string[] = []; const errors: string[] = []; const stages: string[] = []; const refreshMs: number[] = [];
   window.webContents.session.webRequest.onBeforeRequest({ urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] }, (details, callback) => { network.push(details.url); callback({ cancel: true }); });
@@ -66,9 +83,9 @@ async function smoke() {
   window.webContents.on("render-process-gone", (_event, details) => { errors.push(`renderer gone: ${details.reason}`); });
   const watchdog = setTimeout(() => { console.error("Git review smoke timed out"); app.exit(1); }, 120_000);
   const evaluate = <T = unknown>(text: string): Promise<T> => window.webContents.executeJavaScript(text);
-  const wait = async (test: string | (() => boolean), label: string, timeout = 10_000) => {
+  const wait = async (test: string | (() => boolean | Promise<boolean>), label: string, timeout = 10_000) => {
     const start = Date.now();
-    while (!(typeof test === "string" ? await evaluate(test) : test())) { if (Date.now() - start > timeout) throw new Error(`Timed out: ${label}`); await delay(40); }
+    while (!(typeof test === "string" ? await evaluate(test) : await test())) { if (Date.now() - start > timeout) throw new Error(`Timed out: ${label}`); await delay(40); }
   };
   const key = async (keyCode: string, modifiers: string[] = []) => {
     window.webContents.sendInputEvent({ type: "keyDown", keyCode, modifiers } as InputEvent);
@@ -76,6 +93,7 @@ async function smoke() {
     window.webContents.sendInputEvent({ type: "keyUp", keyCode, modifiers } as InputEvent); await delay(60);
   };
   const click = async (selector: string, shadow = false) => {
+    await wait(`(() => { const e = ${shadow ? "[...document.querySelectorAll('diffs-container')].map(e => e.shadowRoot?.querySelector(" + JSON.stringify(selector) + ")).find(Boolean)" : "document.querySelector(" + JSON.stringify(selector) + ")"}; return Boolean(e && !e.disabled); })()`, `enabled control: ${selector}`);
     const location = await evaluate<{ x: number; y: number }>(`(() => { const e = ${shadow ? "[...document.querySelectorAll('diffs-container')].map(e => e.shadowRoot?.querySelector(" + JSON.stringify(selector) + ")).find(Boolean)" : "document.querySelector(" + JSON.stringify(selector) + ")"}; if (!e) throw new Error('Missing element'); const r = e.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)}; })()`);
     window.webContents.sendInputEvent({ type: "mouseDown", ...location, button: "left", clickCount: 1 });
     window.webContents.sendInputEvent({ type: "mouseUp", ...location, button: "left", clickCount: 1 }); await delay(80);
@@ -272,8 +290,141 @@ async function smoke() {
     await capture("git-recovery-after-reload"); await click('dialog .workbench-dialog-actions button:last-child');
     stage("Batch stage, unstage and discard work with binary additions; recovery history survives reload");
 
+    await evaluate("window.gitReviewFixture.setColorScheme('light'); window.gitReviewFixture.setLocale('zh')");
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(commitProject)})`); await ready();
+    await write(commitProject, "source.txt", "commit-only\n"); await git(commitProject, ["add", "source.txt"]); await click("[aria-label=\"刷新\"]"); await ready();
+    await click("[aria-label=\"提交或推送\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog[open]'))", "commit dialog opens with staged content");
+    const commitDialogText = () => evaluate<string>("document.querySelector('dialog.workbench-commit-dialog')?.textContent ?? ''");
+    await wait(async () => (await commitDialogText()).includes("暂存 1 个文件") && (await commitDialogText()).includes("source.txt"), "staged summary and path are visible in commit dialog");
+    await capture("git-commit-dialog-form-zh");
+    await replaceInput("dialog.workbench-commit-dialog textarea", "commit-only"); await click("dialog.workbench-commit-dialog form button[type=\"submit\"]");
+    await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-commit-message')?.textContent === 'commit-only'", "commit message preview");
+    await capture("git-commit-dialog-preview-zh");
+    await click("dialog.workbench-commit-dialog .is-destructive"); await wait("document.querySelector('[data-commit-result=\"applied\"]')", "commit-only result");
+    assert.equal(await git(commitProject, ["log", "-1", "--format=%s"]), "commit-only");
+    stage("Commit dialog shows real staged paths and message; commit-only preserves the local Git result");
+
+    await write(commitProject, "source.txt", "commit-and-push\n"); await git(commitProject, ["add", "source.txt"]); await click("[aria-label=\"刷新\"]"); await ready();
+    await click("[aria-label=\"提交或推送\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog[open]'))", "commit-and-push dialog opens without upstream");
+    await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog form select'))", "commit-and-push form loads");
+    await select("dialog.workbench-commit-dialog select", "commitAndPush"); await replaceInput("dialog.workbench-commit-dialog textarea", "publish locally");
+    await click("dialog.workbench-commit-dialog form button[type=\"submit\"]"); await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-commit-message')?.textContent === 'publish locally'", "commit-and-push preview");
+    await wait(async () => (await commitDialogText()).includes("目标：origin / main"), "remote and branch target are visible");
+    await click("dialog.workbench-commit-dialog .is-destructive"); await wait("document.querySelector('[data-commit-result=\"applied\"]')", "commit-and-push result"); await ready();
+    assert.equal(await git(commitProject, ["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/main");
+    assert.equal(await git(commitRemote, ["rev-parse", "refs/heads/main"]), await git(commitProject, ["rev-parse", "HEAD"]));
+    stage("Without an upstream, the dialog accepts an explicit remote and branch and completes commit plus push");
+
+    await click("[aria-label=\"提交或推送\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog[open]'))", "push-only dialog opens");
+    await wait(async () => (await commitDialogText()).includes("仅推送"), "push-only action is available with no staged changes");
+    await click("dialog.workbench-commit-dialog form button[type=\"submit\"]"); await wait("document.querySelector('dialog.workbench-commit-dialog')?.textContent.includes('确认推送当前分支？')", "push preview");
+    await evaluate("document.querySelector('dialog.workbench-commit-dialog .is-destructive')?.click()");
+    await wait("Boolean(document.querySelector('[data-commit-result=\"applied\"]') || document.querySelector('dialog.workbench-commit-dialog .workbench-operation-error'))", "push-only result");
+    if (await evaluate<boolean>("Boolean(document.querySelector('dialog.workbench-commit-dialog .workbench-operation-error'))")) throw new Error(`Push-only failed: ${await commitDialogText()}`);
+    stage("Push-only handles an already configured upstream without requiring a commit message");
+
+    await git(commitProject, ["branch", "release", "HEAD~1"]);
+    const oldRelease = await git(commitProject, ["rev-parse", "release"]); await git(commitProject, ["push", "-q", "origin", "release"]);
+    await click("[aria-label=\"提交或推送\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog form input'))", "alternate push target form");
+    await replaceInput("dialog.workbench-commit-dialog form input", " release ");
+    await click("dialog.workbench-commit-dialog form button[type=\"submit\"]");
+    await wait(async () => (await commitDialogText()).includes("目标：origin / release"), "normalized alternate branch is previewed");
+    await click("dialog.workbench-commit-dialog .is-destructive"); await wait("document.querySelector('[data-commit-result=\"applied\"]')", "alternate target push result");
+    assert.equal(await git(commitRemote, ["rev-parse", "refs/heads/release"]), await git(commitProject, ["rev-parse", "HEAD"]));
+    assert.equal(await git(commitProject, ["rev-parse", "release"]), oldRelease);
+    await git(commitProject, ["branch", "--set-upstream-to=origin/main"]); await click("[aria-label=\"刷新\"]"); await ready();
+    stage("An alternate remote branch receives current HEAD even when a stale local branch has the same name");
+
+    const commitHook = path.join(commitProject, ".git", "hooks", "pre-commit");
+    await fs.writeFile(commitHook, "#!/bin/sh\necho smoke hook blocked >&2\nexit 1\n", { mode: 0o755 });
+    await write(commitProject, "source.txt", "hook-rejected\n"); await git(commitProject, ["add", "source.txt"]); await click("[aria-label=\"刷新\"]"); await ready();
+    await click("[aria-label=\"提交或推送\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog[open]'))", "hook failure dialog opens");
+    await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog form select'))", "hook failure form loads");
+    await select("dialog.workbench-commit-dialog select", "commit"); await replaceInput("dialog.workbench-commit-dialog textarea", "hook rejection"); await click("dialog.workbench-commit-dialog form button[type=\"submit\"]");
+    await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-commit-message')?.textContent === 'hook rejection'", "hook rejection preview");
+    await click("dialog.workbench-commit-dialog .is-destructive"); await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-operation-error')?.textContent.includes('hook')", "hook rejection is visible");
+    assert.equal(await git(commitProject, ["log", "-1", "--format=%s"]), "publish locally");
+    await fs.rm(commitHook); await click("dialog.workbench-commit-dialog .workbench-dialog-actions button:first-child"); await wait("!document.querySelector('dialog.workbench-commit-dialog[open]')", "close hook error dialog");
+    stage("Commit hook rejection is classified in the dialog and does not create a commit");
+
+    const otherRemote = path.join(directory, "commit-remote-other"); await git(directory, ["clone", "-q", "--branch", "main", commitRemote, otherRemote]);
+    await git(otherRemote, ["config", "user.name", "Other fixture"]); await git(otherRemote, ["config", "user.email", "other@example.invalid"]);
+    await write(otherRemote, "remote.txt", "remote wins\n"); await git(otherRemote, ["add", "remote.txt"]); await git(otherRemote, ["commit", "-qm", "remote change"]); await git(otherRemote, ["push", "-q"]);
+    assert.notEqual(await git(commitRemote, ["rev-parse", "refs/heads/main"]), await git(commitProject, ["rev-parse", "HEAD"]), "remote fixture is ahead before rejection test");
+    await fs.rm(commitHook, { force: true });
+    await write(commitProject, "source.txt", "push-rejected\n"); await git(commitProject, ["add", "source.txt"]); await click("[aria-label=\"刷新\"]"); await ready();
+    await click("[aria-label=\"提交或推送\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog[open]'))", "push rejection dialog opens");
+    await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog form select'))", "push rejection form loads");
+    await select("dialog.workbench-commit-dialog select", "commitAndPush"); await replaceInput("dialog.workbench-commit-dialog textarea", "push rejection"); await click("dialog.workbench-commit-dialog form button[type=\"submit\"]");
+    await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-commit-message')?.textContent === 'push rejection'", "push rejection preview");
+    await click("dialog.workbench-commit-dialog .is-destructive"); await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-operation-error')?.textContent.includes('远端拒绝')", "non-fast-forward rejection is visible");
+    await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-operation-error')?.textContent.includes('提交已创建')", "partial local commit result is visible");
+    await capture("git-commit-dialog-partial-error-zh");
+    assert.equal(await git(commitProject, ["log", "-1", "--format=%s"]), "push rejection");
+    await click("dialog.workbench-commit-dialog .workbench-dialog-actions button:first-child"); await wait("!document.querySelector('dialog.workbench-commit-dialog[open]')", "close push rejection dialog");
+    stage("Non-fast-forward push rejection keeps the local commit and exposes the partial result");
+
+    await fs.writeFile(commitHook, "#!/bin/sh\nsleep 5\n", { mode: 0o755 });
+    await write(commitProject, "source.txt", "cancelled\n"); await git(commitProject, ["add", "source.txt"]); await click("[aria-label=\"刷新\"]"); await ready();
+    await click("[aria-label=\"提交或推送\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog[open]'))", "cancel dialog opens");
+    await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog form select'))", "cancel form loads");
+    await select("dialog.workbench-commit-dialog select", "commit"); await replaceInput("dialog.workbench-commit-dialog textarea", "cancelled commit"); await click("dialog.workbench-commit-dialog form button[type=\"submit\"]");
+    await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-commit-message')?.textContent === 'cancelled commit'", "cancel preview");
+    await click("dialog.workbench-commit-dialog .is-destructive"); await wait("document.querySelector('dialog.workbench-commit-dialog .is-destructive')?.textContent.includes('正在执行')", "in-flight commit is visible");
+    await click("dialog.workbench-commit-dialog .workbench-dialog-actions button:first-child"); await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-operation-error')?.textContent.includes('Git 操作已取消')", "cancelled commit result is visible");
+    assert.equal(await git(commitProject, ["log", "-1", "--format=%s"]), "push rejection");
+    await fs.rm(commitHook, { force: true }); await click("dialog.workbench-commit-dialog .workbench-dialog-actions button:first-child"); await wait("!document.querySelector('dialog.workbench-commit-dialog[open]')", "close cancelled commit dialog");
+    stage("An in-flight commit can be cancelled from the confirmation dialog and leaves the index unchanged");
+
+    await click("[aria-label=\"提交或推送\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog form select'))", "delayed preparation form");
+    await select("dialog.workbench-commit-dialog select", "commit"); await replaceInput("dialog.workbench-commit-dialog textarea", "cancel late preview");
+    delayCommitPreview = true;
+    await click("dialog.workbench-commit-dialog form button[type=\"submit\"]"); await wait(() => Boolean(heldCommitToken), "prepared token awaits renderer response");
+    await click("dialog.workbench-commit-dialog form .workbench-dialog-actions button:first-child");
+    await wait("!document.querySelector('dialog.workbench-commit-dialog[open]')", "close during preparation");
+    releaseCommitPreview?.(); await wait(() => cancelledCommitTokens.has(heldCommitToken!), "late preview token is cancelled");
+    assert.equal((await registration.commits.apply(window.webContents.id, heldCommitToken!)).kind, "error");
+    assert.equal(await git(commitProject, ["log", "-1", "--format=%s"]), "push rejection");
+    assert.equal(await evaluate("Boolean(document.querySelector('dialog.workbench-commit-dialog[open]'))"), false);
+    stage("Closing during preparation cancels a late confirmation token without reopening the dialog or writing Git");
+
+    const postCommitHook = path.join(commitProject, ".git", "hooks", "post-commit");
+    await fs.writeFile(postCommitHook, "#!/bin/sh\nsleep 5\n", { mode: 0o755 });
+    await click("[aria-label=\"提交或推送\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog form select'))", "post-commit cancellation form");
+    await select("dialog.workbench-commit-dialog select", "commit"); await replaceInput("dialog.workbench-commit-dialog textarea", "cancel after HEAD changed");
+    await click("dialog.workbench-commit-dialog form button[type=\"submit\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog .workbench-commit-message'))", "post-commit cancellation preview");
+    await click("dialog.workbench-commit-dialog .is-destructive");
+    await wait(async () => await git(commitProject, ["log", "-1", "--format=%s"]) === "cancel after HEAD changed", "HEAD changes while post-commit hook waits");
+    await click("dialog.workbench-commit-dialog .workbench-dialog-actions button:first-child");
+    await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-operation-error')?.textContent.includes('Git 操作已取消')", "post-commit cancellation result");
+    await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-operation-error')?.textContent.includes('提交已创建')", "completed local commit remains visible after cancellation");
+    assert.equal(await git(commitProject, ["diff", "--cached", "--name-only"]), "");
+    await fs.rm(postCommitHook); await click("dialog.workbench-commit-dialog form .workbench-dialog-actions button:first-child");
+    stage("Cancelling a post-commit hook retains HEAD and reports the completed local commit");
+
+    await evaluate("window.gitReviewFixture.setColorScheme('dark'); window.gitReviewFixture.setLocale('en')"); window.setContentSize(420, 740);
+    await click("[aria-label=\"Commit or push\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog form input'))", "narrow English commit form");
+    await select("dialog.workbench-commit-dialog select", "commitAndPush"); await replaceInput("dialog.workbench-commit-dialog textarea", "Update repository metadata");
+    await capture("git-commit-dialog-narrow-dark-en");
+    assert.equal(await evaluate("(() => { const d = document.querySelector('dialog.workbench-commit-dialog'); return d.scrollWidth <= d.clientWidth && [...d.querySelectorAll('input, textarea, select, button')].every(e => { const r = e.getBoundingClientRect(); const p = d.getBoundingClientRect(); return r.left >= p.left && r.right <= p.right; }); })()"), true, "commit controls fit a narrow window");
+    await click("dialog.workbench-commit-dialog form .workbench-dialog-actions button:first-child"); window.setContentSize(836, 740);
+
+    const scopedProject = path.join(commitProject, "scoped"); await fs.mkdir(scopedProject); allowed.add(scopedProject);
+    await write(scopedProject, "inside.txt", "inside project\n"); await write(commitProject, "source.txt", "outside project\n"); await git(commitProject, ["add", "--all"]);
+    const beforeScopedCommit = await git(commitProject, ["rev-parse", "HEAD"]);
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(scopedProject)})`); await ready();
+    await click("[aria-label=\"Commit or push\"]"); await wait("Boolean(document.querySelector('dialog.workbench-commit-dialog form select'))", "subproject commit form");
+    await select("dialog.workbench-commit-dialog select", "commit"); await replaceInput("dialog.workbench-commit-dialog textarea", "Only scoped content");
+    await click("dialog.workbench-commit-dialog form button[type=\"submit\"]");
+    await wait("document.querySelector('dialog.workbench-commit-dialog .workbench-operation-error')?.textContent.includes('repository root')", "staged changes outside subproject block commit");
+    assert.equal(await git(commitProject, ["rev-parse", "HEAD"]), beforeScopedCommit);
+    assert.equal(await git(commitProject, ["diff", "--cached", "--name-only"]), "scoped/inside.txt\nsource.txt");
+    await click("dialog.workbench-commit-dialog form .workbench-dialog-actions button:first-child");
+    stage("A subproject commit refuses staged changes outside its preview and retains the complete index");
+
     // Keep actual text changes visible for the narrow dark-theme artifact.
-    await write(c, "source.ts", twoEdits); await click('[aria-label="刷新"]'); await ready();
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(c)})`); await ready();
+    await write(c, "source.ts", twoEdits); await click('[aria-label="Refresh"]'); await ready(); await wait(hasCode("item63 = 6300"), "final dark view has real source changes");
     assert.equal(network.length, 0, "all Git, code and worker resources are local");
     assert.deepEqual(errors, [], "renderer stays error free");
     await evaluate("window.gitReviewFixture.setColorScheme('dark'); window.gitReviewFixture.setLocale('en')"); await delay(200);
@@ -289,7 +440,7 @@ async function smoke() {
     if (!window.isDestroyed()) { await capture("failure").catch(() => {}); await fs.writeFile(path.join(artifacts, "failure.html"), await evaluate<string>("document.body.outerHTML")).catch(() => {}); }
     await fs.writeFile(path.join(artifacts, "failure.json"), JSON.stringify({ error: String(error), stages, errors, network, service: registration.service.stats(), renderer: window.isDestroyed() ? undefined : await evaluate("window.gitReviewFixture?.state()") }, null, 2));
   } finally {
-    clearTimeout(watchdog); releaseRead?.(); registration.dispose(); await registration.idle(); if (!window.isDestroyed()) window.destroy();
+    clearTimeout(watchdog); releaseRead?.(); releaseCommitPreview?.(); registration.dispose(); await registration.idle(); if (!window.isDestroyed()) window.destroy();
     session.flushStorageData();
     await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); app.exit(failed ? 1 : 0);
   }

@@ -1134,3 +1134,10 @@
 - 真实 Git 暂存、取消暂存和可恢复还原完成，覆盖整批/文件/hunk、快照和 index 锁保护、补丁预检、原始文件事务与持久恢复点；Git 还原与 Agent `/undo` 保持独立。
 - 全量 **126 文件 / 1098 测试**、typecheck、build 通过；生产 Git Electron 烟测 13 阶段通过，外部刷新 342/307 ms，0 网络、0 renderer 错误，关闭后资源计数 0。详细证据见 `docs/file-review-fr-04.md`、`docs/file-review-reference/fr-04-result.json`。
 - 下一项：FR-05 提交与推送闭环。完整复刻目标继续 active；FR-04 在独立分支 `codex/file-review-workbench` 提交，未切换或重置原工作区。
+## 2026-09-14：文件审查 FR-05——提交与推送闭环
+
+- 在独立工作树 `codex/file-review-workbench` 完成 FR-05。新增真实 `GitCommitService` 和共享 `GitWriteQueue`，提交、推送、提交并推送均绑定不可变 snapshot，确认时复核项目授权、HEAD/分支/上游/index 版本和实际推送目标；子目录提交保护项目外暂存内容，不接收 renderer 路径或补丁。
+- 工作台加入提交/推送对话框：显示真实暂存文件与增删统计，填写并预览提交信息，选择远端和分支；支持无暂存直接推送、无上游目标选择。hook、身份、鉴权、推送拒绝、部分成功、过期和取消有具体结果，成功自动关闭并刷新。
+- 收尾修复不同名称目标分支的 HEAD 推送、目标规范化、排队取消、准备期间关闭、迟到 token 清理、post-commit hook 取消后的本地提交结果、URL/错误详情脱敏，以及 420px 英文工具栏溢出。
+- 验证：`pnpm test --reporter=dot --maxWorkers=1`（**127 文件 / 1121 用例**）、`pnpm typecheck`、`pnpm build`、`git diff --check`、生产 Electron `pnpm test:git-review` 及 `pnpm test:file-review` 通过。Git 烟测 **23 阶段**，refresh **305/311ms**，网络 0、renderer 错误 0、关闭后资源计数为 0。构建和全量测试顺序运行，文件监听抖动用例最终单进程通过。详情及截图 `docs/file-review-fr-05.md`。
+- 下一项 FR-06：生产文件索引和读取服务；总复刻目标仍为 active。

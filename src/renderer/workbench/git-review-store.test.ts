@@ -7,6 +7,7 @@ function fixture() {
   const listeners = new Set<(update: GitReviewUpdate) => void>();
   const api: GitApi = { subscribe: vi.fn(async () => {}), unsubscribe: vi.fn(async () => {}), refresh: vi.fn(async () => {}),
     prepareMutation: vi.fn(), applyMutation: vi.fn(), cancelMutation: vi.fn(), listRecoveries: vi.fn(), restoreRecovery: vi.fn(),
+    getCommitInfo: vi.fn(), prepareCommit: vi.fn(), applyCommit: vi.fn(), cancelCommit: vi.fn(),
     onUpdate: (listener) => { listeners.add(listener); return () => listeners.delete(listener); } };
   const store = new GitReviewStore(api, () => `subscription-${++serial}`);
   const emit = (id: number, project: string, sequence: number, extra: Partial<GitReviewUpdate> = {}) => {

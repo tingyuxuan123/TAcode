@@ -1,4 +1,4 @@
-import { gitReviewQueryKey, type GitApi, type GitMutationAction, type GitMutationTarget, type GitReviewQuery, type GitReviewResult, type GitSubscribeRequest, type GitWatchMode } from "../../shared/git";
+import { gitReviewQueryKey, type GitApi, type GitCommitAction, type GitCommitInfoResult, type GitCommitTarget, type GitMutationAction, type GitMutationTarget, type GitReviewQuery, type GitReviewResult, type GitSubscribeRequest, type GitWatchMode } from "../../shared/git";
 
 export interface GitReviewState {
   key: string;
@@ -57,5 +57,17 @@ export class GitReviewStore {
     const result = this.state.result;
     if (!active || this.state.loading || result?.kind !== "ready") return Promise.resolve({ kind: "error", error: { code: "staleSnapshot", message: "No current Git snapshot" } });
     return this.api.prepareMutation({ subscriptionId: active.request.subscriptionId, snapshotId: result.snapshot.id, action, target });
+  };
+  getCommitInfo = (): ReturnType<GitApi["getCommitInfo"]> => {
+    const active = this.active;
+    const result = this.state.result;
+    if (!active || result?.kind !== "ready") return Promise.resolve({ kind: "error", error: { code: "staleSnapshot", message: "No current Git snapshot" } } as GitCommitInfoResult);
+    return this.api.getCommitInfo({ subscriptionId: active.request.subscriptionId, snapshotId: result.snapshot.id });
+  };
+  prepareCommit = (action: GitCommitAction, message?: string, target?: GitCommitTarget): ReturnType<GitApi["prepareCommit"]> => {
+    const active = this.active;
+    const result = this.state.result;
+    if (!active || result?.kind !== "ready") return Promise.resolve({ kind: "error", error: { code: "staleSnapshot", message: "No current Git snapshot" } });
+    return this.api.prepareCommit({ subscriptionId: active.request.subscriptionId, snapshotId: result.snapshot.id, action, message, target });
   };
 }

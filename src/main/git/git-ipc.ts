@@ -1,10 +1,12 @@
 import path from "node:path";
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
-import type { GitMutationAction, GitMutationTarget, GitPrepareMutationRequest, GitReviewQuery, GitSubscribeRequest } from "../../shared/git";
+import type { GitCommitAction, GitCommitTarget, GitMutationAction, GitMutationTarget, GitPrepareCommitRequest, GitPrepareMutationRequest, GitReviewQuery, GitSubscribeRequest } from "../../shared/git";
 import { GitReadError } from "./git-process";
 import { GitReviewService, type GitReviewServiceOptions } from "./git-service";
 import { GitMutationService, gitMutationFailure } from "./git-mutations";
 import { gitRecoveryId } from "./git-recovery";
+import { GitCommitService, gitCommitFailure } from "./git-commit";
+import { GitWriteQueue } from "./git-write-queue";
 
 function text(raw: unknown, max: number): string {
   if (typeof raw !== "string" || !raw.length || raw.length > max || raw.includes("\0")) throw new GitReadError("invalidRequest", "Invalid Git request");
@@ -55,15 +57,41 @@ export function parseGitMutationRequest(raw: unknown): GitPrepareMutationRequest
   return { subscriptionId: gitSubscriptionId(value.subscriptionId), snapshotId: digest(value.snapshotId), action: value.action as GitMutationAction, target: parsed };
 }
 
-export function registerGitIpc(options: GitReviewServiceOptions & { host(): WebContents | undefined; recoveryRoot: string }): { service: GitReviewService; mutations: GitMutationService; dispose(): void; idle(): Promise<void> } {
+export function parseGitCommitInfoRequest(raw: unknown): { subscriptionId: string; snapshotId: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new GitReadError("invalidRequest", "Invalid Git commit request");
+  const value = raw as Record<string, unknown>;
+  return { subscriptionId: gitSubscriptionId(value.subscriptionId), snapshotId: digest(value.snapshotId) };
+}
+
+export function parseGitCommitRequest(raw: unknown): GitPrepareCommitRequest {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new GitReadError("invalidRequest", "Invalid Git commit request");
+  const value = raw as Record<string, unknown>;
+  const info = parseGitCommitInfoRequest(value);
+  if (value.action !== "commit" && value.action !== "push" && value.action !== "commitAndPush") throw new GitReadError("invalidRequest", "Invalid Git commit action");
+  let target: GitCommitTarget | undefined;
+  if (value.target !== undefined) {
+    const rawTarget = value.target as Record<string, unknown>;
+    if (!rawTarget || typeof rawTarget !== "object" || Array.isArray(rawTarget)) throw new GitReadError("invalidRequest", "Invalid push target");
+    const remote = text(rawTarget.remote, 256);
+    const branch = text(rawTarget.branch, 1024);
+    if (branch.includes("..") || branch.includes("@{") || branch.startsWith("/") || branch.endsWith("/") || branch.startsWith("-")) throw new GitReadError("invalidRequest", "Invalid push target");
+    target = { remote, branch };
+  }
+  const message = value.message === undefined ? undefined : text(value.message, 10_000);
+  return { ...info, action: value.action as GitCommitAction, message, target };
+}
+
+export function registerGitIpc(options: GitReviewServiceOptions & { host(): WebContents | undefined; recoveryRoot: string }): { service: GitReviewService; mutations: GitMutationService; commits: GitCommitService; dispose(): void; idle(): Promise<void> } {
   const service = new GitReviewService(options);
-  const mutations = new GitMutationService(options);
+  const queue = new GitWriteQueue();
+  const mutations = new GitMutationService({ ...options, queue });
+  const commits = new GitCommitService({ ...options, queue });
   const owners = new Map<number, () => void>();
   const authorize = (event: IpcMainInvokeEvent) => {
     const contents = event.sender;
     if (options.host() !== contents || event.senderFrame !== contents.mainFrame) throw new GitReadError("outsideProject", "Git is available only to the workbench main frame");
     if (!owners.has(contents.id)) {
-      const release = () => { service.releaseOwner(contents.id); mutations.releaseOwner(contents.id); };
+      const release = () => { service.releaseOwner(contents.id); mutations.releaseOwner(contents.id); commits.releaseOwner(contents.id); };
       const navigation = (_event: Electron.Event, _url: string, isInPlace: boolean, isMainFrame: boolean) => { if (isMainFrame && !isInPlace) release(); };
       const destroyed = () => { release(); cleanup(); };
       const cleanup = () => {
@@ -113,10 +141,32 @@ export function registerGitIpc(options: GitReviewServiceOptions & { host(): WebC
       return result;
     } catch (error) { return gitMutationFailure(error); }
   });
-  return { service, mutations, idle: () => mutations.idle(), dispose: () => {
+  ipcMain.handle("git:commit-info", async (event, raw: unknown) => {
+    try {
+      const owner = authorize(event).id;
+      const request = parseGitCommitInfoRequest(raw);
+      const context = service.mutationContext(owner, request.subscriptionId, request.snapshotId);
+      return await commits.info(context.projectRoot, context.snapshot);
+    } catch (error) { return { kind: "error", error: gitCommitFailure(error).error }; }
+  });
+  ipcMain.handle("git:prepare-commit", async (event, raw: unknown) => {
+    try {
+      const owner = authorize(event).id;
+      const request = parseGitCommitRequest(raw);
+      const context = service.mutationContext(owner, request.subscriptionId, request.snapshotId);
+      return await commits.prepare(owner, context.snapshot, request.action, request.message, request.target, context.projectRoot);
+    } catch (error) { return gitCommitFailure(error); }
+  });
+  ipcMain.handle("git:apply-commit", async (event, raw: unknown) => {
+    try { const owner = authorize(event).id; const result = await commits.apply(owner, gitRecoveryId(raw)); service.refreshOwner(owner); return result; }
+    catch (error) { return gitCommitFailure(error); }
+  });
+  ipcMain.handle("git:cancel-commit", (event, raw: unknown) => commits.cancel(authorize(event).id, gitRecoveryId(raw)));
+  return { service, mutations, commits, idle: () => Promise.all([mutations.idle(), commits.idle()]).then(() => undefined), dispose: () => {
     service.close();
     mutations.close();
+    commits.close();
     for (const cleanup of owners.values()) cleanup();
-    for (const channel of ["git:subscribe", "git:unsubscribe", "git:refresh", "git:prepare-mutation", "git:apply-mutation", "git:cancel-mutation", "git:list-recoveries", "git:restore-recovery"]) ipcMain.removeHandler(channel);
+    for (const channel of ["git:subscribe", "git:unsubscribe", "git:refresh", "git:prepare-mutation", "git:apply-mutation", "git:cancel-mutation", "git:list-recoveries", "git:restore-recovery", "git:commit-info", "git:prepare-commit", "git:apply-commit", "git:cancel-commit"]) ipcMain.removeHandler(channel);
   } };
 }
