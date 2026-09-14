@@ -32,12 +32,17 @@ function Fixture() {
   const [hidden, setHidden] = useState(false);
   const [colorScheme, setColorScheme] = useState<WorkbenchColorScheme>("light");
   const [opened, setOpened] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [sessionKey, setSessionKey] = useState("/sessions/smoke.jsonl");
   const workerState = useRef<unknown>(null);
   const onWorkerStateChange = useCallback((state: unknown) => { workerState.current = state; }, []);
+  const onUsePrompt = useCallback((text: string) => setPrompt(text), []);
   const { setLocale } = useI18n();
-  useEffect(() => { (window as any).gitReviewFixture = { setProject, setActive, setHidden, setPageHidden, setColorScheme, setLocale, state: () => ({ project, active, hidden, opened, workers: { ...workers }, workerState: workerState.current }) }; });
+  useEffect(() => { (window as any).gitReviewFixture = { setProject, setActive, setHidden, setPageHidden, setColorScheme, setLocale, setSessionKey, clearPrompt: () => setPrompt(""),
+    state: () => ({ project, active, hidden, opened, prompt, workers: { ...workers }, workerState: workerState.current }) }; });
   return <div style={{ height: "100%", display: hidden ? "none" : "block" }}>
-    <GitReviewPanel projectRoot={project} active={active} colorScheme={colorScheme} onOpenFile={setOpened} onOpenTerminal={() => setOpened("terminal")} onWorkerStateChange={onWorkerStateChange} />
+    <GitReviewPanel projectRoot={project} sessionKey={sessionKey} active={active} colorScheme={colorScheme} onOpenFile={setOpened}
+      onOpenTerminal={() => setOpened("terminal")} onUsePrompt={onUsePrompt} onWorkerStateChange={onWorkerStateChange} />
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<StrictMode><LocaleProvider><Fixture /></LocaleProvider></StrictMode>);

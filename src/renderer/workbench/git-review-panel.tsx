@@ -10,6 +10,7 @@ import type { ReviewScope, WorkbenchColorScheme } from "./types";
 import { useWorkbenchVisible } from "./use-workbench-visible";
 import { GitMutationDialogs, GitMutationNotice, useGitMutationActions } from "./git-mutation-actions";
 import { GitCommitDialogs, GitCommitNotice, useGitCommitActions } from "./git-commit-actions";
+import { comparisonRangeKey, comparisonSnapshotId } from "./review-comments";
 
 const branchKey = (root: string) => `tacode:review-base:${root}`;
 function readBase(root: string): string {
@@ -19,17 +20,20 @@ function readBase(root: string): string {
 /** A project-keyed instance never inherits another project's reference or result. */
 export function GitReviewPanel(props: {
   projectRoot?: string;
+  /** Conversation the comments belong to; project + session keeps them apart. */
+  sessionKey?: string;
   active: boolean;
   onOpenFile?(path: string): void;
   onChooseProject?(): void;
   onOpenTerminal?(): void;
+  onUsePrompt?(text: string): void;
   colorScheme?: WorkbenchColorScheme;
   onWorkerStateChange?: Parameters<typeof ReviewWorkbench>[0]["onWorkerStateChange"];
 }) {
   return <ProjectGitReview key={props.projectRoot ?? "no-project"} {...props} />;
 }
 
-function ProjectGitReview({ projectRoot, active, onOpenFile, onChooseProject, onOpenTerminal, colorScheme, onWorkerStateChange }: Parameters<typeof GitReviewPanel>[0]) {
+function ProjectGitReview({ projectRoot, sessionKey, active, onOpenFile, onChooseProject, onOpenTerminal, onUsePrompt, colorScheme, onWorkerStateChange }: Parameters<typeof GitReviewPanel>[0]) {
   const { t, locale } = useI18n();
   const { ref, visible } = useWorkbenchVisible(active);
   const [scope, setScope] = useState<ReviewScope>("unstaged");
@@ -153,6 +157,9 @@ function ProjectGitReview({ projectRoot, active, onOpenFile, onChooseProject, on
       colorScheme={colorScheme}
       dialogs={<><GitMutationDialogs actions={actions} /><GitCommitDialogs actions={commitActions} /></>}
       scopeDetails={scopeDetails || actions.phase || actions.result || commitActions.result ? <><>{scopeDetails}</><GitMutationNotice actions={actions} onRefresh={store.refresh} /><GitCommitNotice actions={commitActions} /></> : undefined}
+      commentScope={projectRoot && sessionKey ? { projectRoot, sessionKey } : undefined}
+      commentContext={{ rangeKey: comparisonRangeKey(query), snapshotId: comparisonSnapshotId(query) }}
+      onUsePrompt={onUsePrompt}
       emptyState={emptyState} />
   </div>;
 }

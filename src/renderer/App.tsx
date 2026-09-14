@@ -2351,7 +2351,7 @@ export function App() {
               effortLevels: thinkingLevels,
               permission,
             }}
-            review={<GitReviewPanel projectRoot={workspace} active={browserPanels.active === "review"}
+            review={<GitReviewPanel projectRoot={workspace} sessionKey={activeSession ?? ""} onUsePrompt={fillPrompt} active={browserPanels.active === "review"}
               onOpenFile={(path) => openFileFromClick(path, { literal: true })} onChooseProject={() => void openFolder()} onOpenTerminal={() => browserPanels.openPanel("terminal")} />}
             files={<FilesPanel workspace={workspace} scope={browserPanels.filesScope} active={browserPanels.active === "files"} files={workingFiles} onOpen={openFileFromClick} />}
           />

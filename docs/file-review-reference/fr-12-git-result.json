@@ -1,0 +1,65 @@
+{
+  "ok": true,
+  "stages": [
+    "Production preload, main Git service, real index/worktree comparison",
+    "Continuous diff, file-tree navigation, split layout and full-context expansion",
+    "Binary, oversized, empty and permission metadata stay separate from source",
+    "Staged, commit, root commit, branch choice, merge base and reference-error recovery",
+    "External file and index changes refresh the active snapshot",
+    "Delayed project A response cannot overwrite project B",
+    "Hidden tab/drawer and simulated page frame suspension release reads and workers",
+    "Non-repository initialization and explicit opened-project authorization",
+    "Native hunk and file actions change the real index and preserve the working copy",
+    "Discard confirms before writing, preserves extra unstaged edits, and offers durable recovery",
+    "Overlapping patches, foreign index locks and edits made during confirmation preserve all changes",
+    "Batch stage, unstage and discard work with binary additions; recovery history survives reload",
+    "Commit dialog shows real staged paths and message; commit-only preserves the local Git result",
+    "Without an upstream, the dialog accepts an explicit remote and branch and completes commit plus push",
+    "Push-only handles an already configured upstream without requiring a commit message",
+    "An alternate remote branch receives current HEAD even when a stale local branch has the same name",
+    "Commit hook rejection is classified in the dialog and does not create a commit",
+    "Non-fast-forward push rejection keeps the local commit and exposes the partial result",
+    "An in-flight commit can be cancelled from the confirmation dialog and leaves the index unchanged",
+    "Closing during preparation cancels a late confirmation token without reopening the dialog or writing Git",
+    "Cancelling a post-commit hook retains HEAD and reports the completed local commit",
+    "A subproject commit refuses staged changes outside its preview and retains the complete index",
+    "A settled turn records only its own immutable file changes and marks unfinished commands",
+    "Later disk changes enter live Git without rewriting the recorded turn",
+    "A project without a recorded turn says so instead of showing current content",
+    "Collected snapshot objects are reported as expired, never as current content",
+    "A line selection creates a comment bound to its snapshot, side, lines and exact snippet",
+    "A multi-line selection enters the conversation draft with its exact location and snippet",
+    "Comments resolve, reopen and stay out of the list until asked for",
+    "A file version change marks its comments outdated instead of moving them silently",
+    "Line comments stay scoped to their project and conversation and survive a reload",
+    "Renderer reload/window close cleanup and offline dark/English rendering"
+  ],
+  "refreshMs": [
+    328,
+    333
+  ],
+  "turnTimings": {
+    "files": 3,
+    "additions": 2,
+    "deletions": 2,
+    "baselineMs": 15,
+    "targetMs": 10
+  },
+  "networkRequests": [],
+  "rendererErrors": [],
+  "gitHead": "409fffc6cd23ad99ae7615f0c65ed1d9fe46ca19",
+  "rootCommit": "02ac4218b4ba2517ca3be56990024294ae11486f",
+  "serviceAfterClose": {
+    "projects": 0,
+    "subscriptions": 0,
+    "reads": 0
+  },
+  "environment": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "cpu": "Apple M5",
+    "electron": "37.10.3",
+    "node": "22.21.1",
+    "chromium": "138.0.7204.251"
+  }
+}

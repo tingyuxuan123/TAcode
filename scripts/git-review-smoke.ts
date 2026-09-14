@@ -505,6 +505,129 @@ async function smoke() {
 
     await evaluate("window.gitReviewFixture.setLocale('en')");
 
+    // FR-12：行级意见。原生指针选择行 → 表单 → 列表 → 过期 → 加入对话草稿 → 重载持久化。
+    await evaluate("window.gitReviewFixture.setLocale('zh')");
+    /** Line selection starts on the number column of the row, not on the code text. */
+    const linePoint = (text: string, which: "first" | "last" = "first") => evaluate<{ x: number; y: number }>(`(() => {
+      for (const host of document.querySelectorAll('diffs-container')) {
+        const lines = [...host.shadowRoot.querySelectorAll('[data-line]')].filter((line) => line.textContent.includes(${JSON.stringify(text)}));
+        const line = lines[${JSON.stringify(which)} === 'first' ? 0 : lines.length - 1];
+        if (!line) continue;
+        const box = line.getBoundingClientRect();
+        const numbers = [...host.shadowRoot.querySelectorAll('[data-column-number]')]
+          .filter((node) => Math.abs(node.getBoundingClientRect().top + node.getBoundingClientRect().height / 2 - (box.top + box.height / 2)) < 3);
+        // Only the side that exists on this row carries a number.
+        const target = numbers.find((node) => node.textContent.trim() !== '') ?? numbers[0] ?? line;
+        const rect = target.getBoundingClientRect();
+        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+      }
+      throw new Error('Missing diff line: ' + ${JSON.stringify(text)});
+    })()`);
+    /** Native drag on the number column: press the first row, move over the last, release. */
+    const selectLines = async (from: string, to: string, expected?: string) => {
+      const start = await linePoint(from, "first"); const end = await linePoint(to, "last");
+      if (from !== to) assert.ok(Math.abs(end.y - start.y) > 10, "the range endpoints are distinct rows");
+      window.webContents.sendInputEvent({ type: "mouseDown", ...start, button: "left", clickCount: 1 });
+      for (let step = 1; step <= 8; step++) {
+        window.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(start.x + (end.x - start.x) * step / 8),
+          y: Math.round(start.y + (end.y - start.y) * step / 8), button: "left", modifiers: ["leftButtonDown"] });
+        await delay(25);
+      }
+      window.webContents.sendInputEvent({ type: "mouseUp", ...end, button: "left", clickCount: 1 });
+      await wait("Boolean(document.querySelector('.review-comment-composer'))", "line comment composer");
+      if (expected) await wait(`document.querySelector('.review-comment-composer')?.dataset.reviewComposer === ${JSON.stringify(expected)}`, "comment range");
+    };
+    const writeComment = async (text: string) => {
+      await evaluate(`(() => { const form = document.querySelector('.review-comment-composer'); form.scrollIntoView({ block: 'center' }); form.querySelector('textarea').focus(); form.querySelector('textarea').select(); })()`);
+      await window.webContents.insertText(text);
+      await wait(`document.querySelector('.review-comment-composer textarea')?.value === ${JSON.stringify(text)}`, "comment text typed");
+      const before = Number(await evaluate<string>("document.querySelector('[data-review-comments]')?.dataset.reviewComments ?? '0'"));
+      assert.equal(await evaluate("document.querySelector('.review-comment-composer button[type=\"submit\"]')?.disabled"), false, "the add control is enabled");
+      // Modifier+Enter submits without depending on buttons below the sticky action bar.
+      await key("Enter", process.platform === "darwin" ? ["meta"] : ["control"]);
+      await wait(`Number(document.querySelector('[data-review-comments]')?.dataset.reviewComments ?? 0) === ${before + 1}`, "comment added to the list");
+    };
+
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(turnRoot)})`); await ready();
+    await wait("Boolean(document.querySelector('.workbench-scope option[value=\"lastTurn\"]:not([disabled])'))", "last turn scope option");
+    await select('.workbench-scope', "lastTurn");
+    await wait("document.querySelector('.workbench-scope')?.value === 'lastTurn' && document.querySelector('.git-review-panel')?.dataset.turnScope === 'true'", "last turn scope active");
+    await wait(`${state} === 'ready' && ${hasCode("version = 2")}`, "turn range before commenting");
+    await selectLines("export const version = 2;", "export const version = 2;");
+    await writeComment("这里需要补充单测。");
+    const commentId = await evaluate<string>("document.querySelector('[data-review-comment]')?.dataset.reviewComment");
+    assert.ok(commentId, "the created comment has an identity");
+    assert.equal(await evaluate("document.querySelector('[data-comment-snippet]')?.textContent"), "export const version = 2;");
+    assert.equal(await evaluate("document.querySelector('[data-comment-text]')?.textContent"), "这里需要补充单测。");
+    assert.equal(await evaluate("document.querySelector('[data-review-comments]')?.dataset.reviewComments"), "1");
+    assert.equal(await evaluate("document.querySelectorAll('[data-review-comment-row]').length"), 1);
+    assert.equal(await evaluate("document.querySelector('[data-review-comment-row]')?.dataset.commentOutdated"), "false");
+    assert.equal(await evaluate("document.querySelector('[data-review-comment-row] [data-comment-text]')?.textContent"), "这里需要补充单测。");
+    await capture("git-comment-zh");
+    stage("A line selection creates a comment bound to its snapshot, side, lines and exact snippet");
+
+    // 多行选择，并把选中的意见连同准确位置与片段放进当前对话草稿。
+    await write(turnRoot, "aaa.md", "第一行\n第二行\n第三行\n");
+    await select('.workbench-scope', "unstaged"); await wait(`${state} === 'ready' && ${hasCode("第三行")}`, "multi-line target in live Git");
+    await selectLines("第一行", "第三行", "additions:1-3");
+    await writeComment("这三行可以合并成一段。");
+    await wait("document.querySelectorAll('[data-review-comment-row]').length === 2", "second comment listed");
+    assert.equal(await evaluate("document.querySelector('[data-review-comment-row] [data-comment-text]')?.textContent"), "这三行可以合并成一段。");
+    await click('[data-review-comment-row] input[type="checkbox"]');
+    await wait("document.querySelector('[data-review-action=\"use-comments\"]')?.disabled === false", "comment selected for the draft");
+    await click('[data-review-action="use-comments"]');
+    await wait("window.gitReviewFixture.state().prompt.length > 0", "prompt draft filled from comments");
+    const draft = await evaluate<string>("window.gitReviewFixture.state().prompt");
+    assert.match(draft, /请根据以下审查意见修改代码/);
+    assert.match(draft, /aaa\.md · 新增侧 1–3/);
+    assert.match(draft, /第一行\n第二行\n第三行/);
+    assert.match(draft, /这三行可以合并成一段。/);
+    stage("A multi-line selection enters the conversation draft with its exact location and snippet");
+
+    // 解决/重新打开/删除：已解决的意见默认不占列表，但数量仍保留。
+    await click('[data-review-comment-row] [data-review-action="resolve-row"]');
+    await wait("document.querySelectorAll('[data-review-comment-row]').length === 1", "resolved comment leaves the list");
+    assert.equal(await evaluate("document.querySelector('[data-review-comments]')?.dataset.reviewComments"), "2");
+    await click('.review-comments header button');
+    await wait("document.querySelectorAll('[data-review-comment-row]').length === 2 && document.querySelector('[data-review-comment-row]')?.dataset.commentResolved === 'true'", "resolved comments shown on demand");
+    await click('[data-review-comment-row] [data-review-action="resolve-row"]');
+    await wait("document.querySelectorAll('[data-review-comment-row]').length === 2 && document.querySelector('[data-review-comment-row]')?.dataset.commentResolved === 'false'", "comment reopened");
+    await click('.review-comments header button');
+    await wait("document.querySelectorAll('[data-review-comment-row]').length === 2", "open comments listed again");
+    stage("Comments resolve, reopen and stay out of the list until asked for");
+
+    // 版本变化后标为过期：不再当作当前代码上的意见。
+    const aaaRow = "[...document.querySelectorAll('[data-review-comment-row]')].find((row) => row.querySelector('.review-comment-row-path')?.textContent === 'aaa.md')";
+    assert.equal(await evaluate(`(${aaaRow})?.dataset.commentOutdated`), "false", "a comment on unchanged live content is current");
+    await write(turnRoot, "aaa.md", "第一行\n第二行改过了\n第三行\n");
+    await wait("document.querySelector('[data-review-scope]') !== undefined || true", "live refresh for the edited file");
+    await wait(`(${aaaRow})?.dataset.commentOutdated === 'true'`, "comment marked outdated by the new version");
+    assert.match(await evaluate<string>(`(${aaaRow})?.querySelector('[data-comment-text]')?.textContent ?? ''`), /这三行可以合并成一段/);
+    assert.equal(await evaluate("document.querySelectorAll('[data-review-comment-row][data-comment-outdated=\"true\"]').length"), 2);
+    await capture("git-comment-outdated-zh");
+    stage("A file version change marks its comments outdated instead of moving them silently");
+
+    // 项目与会话隔离，以及渲染层重载后的持久化。
+    await evaluate("window.gitReviewFixture.setSessionKey('/sessions/other.jsonl')");
+    await wait("document.querySelector('[data-review-comments]')?.dataset.reviewComments === '0'", "comments are per conversation");
+    await evaluate("window.gitReviewFixture.setSessionKey('/sessions/smoke.jsonl')");
+    await wait("document.querySelector('[data-review-comments]')?.dataset.reviewComments === '2'", "comments return for their conversation");
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(b)})`); await ready();
+    await wait("document.querySelector('[data-review-comments]')?.dataset.reviewComments === '0'", "comments are per project");
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(turnRoot)})`); await ready();
+    await wait("document.querySelector('[data-review-comments]')?.dataset.reviewComments === '2'", "comments return for their project");
+    const reloadedComments = new Promise<void>((resolve) => window.webContents.once("did-finish-load", () => resolve()));
+    window.webContents.reload(); await reloadedComments;
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(turnRoot)})`); await ready();
+    await wait("document.querySelector('[data-review-comments]')?.dataset.reviewComments === '2'", "comments survive a renderer reload");
+    assert.equal(await evaluate("document.querySelectorAll('[data-review-comment-row]').length"), 2);
+    stage("Line comments stay scoped to their project and conversation and survive a reload");
+
+    await evaluate("window.gitReviewFixture.setLocale('en')");
+    await click('[data-review-comment-row] [data-review-action="delete-row"]');
+    await wait("document.querySelector('[data-review-comments]')?.dataset.reviewComments === '1'", "comment deleted");
+    await evaluate("window.gitReviewFixture.clearPrompt()");
+
     // Keep actual text changes visible for the narrow dark-theme artifact.
     await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(c)})`); await ready();
     await write(c, "source.ts", twoEdits); await click('[aria-label="Refresh"]'); await ready(); await wait(hasCode("item63 = 6300"), "final dark view has real source changes");

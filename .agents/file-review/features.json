@@ -57,7 +57,7 @@
   {
     "id": "FR-12",
     "description": "行级反馈与持久化：diff 单行/多行评论、列表、解决/删除、项目与会话隔离；意见绑定 snapshotId/path/side/lineRange，版本变化标明过期；选定意见与准确位置/片段加入当前对话草稿，用户发送后进入修复流程。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "FR-13",

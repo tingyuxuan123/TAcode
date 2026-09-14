@@ -70,7 +70,35 @@
 .workbench-body { position: relative; flex: 1 1 0; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; overflow: hidden; }
 .code-workbench.is-tree-open .workbench-body { grid-template-columns: minmax(180px, 1fr) 1px minmax(160px, min(var(--workbench-tree-width), 54%)); }
 .workbench-content { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.workbench-navigation { min-width: 0; min-height: 0; overflow: hidden; }
+.workbench-navigation { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.review-comments { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 46%; border-top: 1px solid var(--workbench-border); font-size: 12px; }
+.review-comments > header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--workbench-secondary); border-bottom: 1px solid var(--workbench-border); }
+.review-comments > header button { border: 1px solid var(--workbench-border); border-radius: 5px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 2px 6px; cursor: pointer; }
+.review-comments > ul { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; }
+.review-comments > ul > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; padding: 7px 10px; border-bottom: 1px solid var(--workbench-border); }
+.review-comment-select { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.review-comment-row-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--workbench-mono); }
+.review-comment-row-range { justify-self: start; border: 0; background: none; color: var(--workbench-accent, var(--workbench-secondary)); cursor: pointer; padding: 0; font: inherit; font-variant-numeric: tabular-nums; }
+.review-comment-row-actions { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 4px; }
+.review-comment-row-actions span { color: var(--workbench-secondary); font-size: 11px; }
+.review-comments p[data-comment-text] { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.review-comments-empty { margin: 0; padding: 12px 10px; color: var(--workbench-secondary); }
+.review-comments > footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; }
+.review-comments > footer button { border: 1px solid var(--workbench-border); border-radius: 6px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 3px 9px; cursor: pointer; }
+.review-comments > footer button:disabled { opacity: .5; cursor: default; }
+.review-comments > footer span { color: var(--workbench-secondary); }
+.review-comment, .review-comment-composer { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; padding: 8px 10px; border: 1px solid var(--workbench-border); border-radius: 6px; background: var(--workbench-bg); font: 12px/1.6 var(--workbench-sans); }
+.review-comment[data-comment-outdated="true"] { border-style: dashed; }
+.review-comment[data-comment-resolved="true"] { opacity: .65; }
+.review-comment > header { display: flex; align-items: center; gap: 8px; color: var(--workbench-secondary); font-size: 11px; }
+.review-comment > header label { display: inline-flex; align-items: center; gap: 4px; }
+.review-comment-range, .review-comment-outdated, .review-comment-resolved { font-variant-numeric: tabular-nums; }
+.review-comment > header button { border: 1px solid var(--workbench-border); border-radius: 5px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 1px 7px; cursor: pointer; }
+.review-comment pre[data-comment-snippet], .review-comment-composer pre[data-comment-snippet] { margin: 0; padding: 6px 8px; max-height: 132px; overflow: auto; border-radius: 5px; background: var(--workbench-hover); font-family: var(--workbench-mono); white-space: pre; }
+.review-comment p[data-comment-text] { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.review-comment-composer textarea { width: 100%; min-height: 56px; resize: vertical; border: 1px solid var(--workbench-border); border-radius: 5px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 6px 8px; font: inherit; }
+.review-comment-composer > div { display: flex; justify-content: flex-end; gap: 6px; }
+.review-comment-composer > span { color: var(--workbench-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
 .workbench-divider { position: relative; z-index: 4; width: 1px; background: var(--workbench-border); cursor: col-resize; touch-action: none; }
 .workbench-divider::after { content: ""; position: absolute; inset: 0 -3px; }
 .workbench-divider:hover, .workbench-divider:focus-visible { background: var(--workbench-muted); }
