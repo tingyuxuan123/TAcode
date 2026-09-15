@@ -10,6 +10,7 @@ import { initBrowserPopupHandler } from "../src/main/browser/popups";
 import { verifyAdaptivePanelWidth } from "./panel-resize-smoke";
 import { verifySidebar } from "./sidebar-smoke";
 import { verifyWorkbenchHeader } from "./workbench-header-smoke";
+import { ensureInspectDrawerOpen } from "./inspect-drawer";
 import { verifyComposerToolbar } from "./composer-toolbar-smoke";
 import type { BrowserParams, BrowserRegistration, BrowserToolResult } from "../src/shared/browser-tools";
 import type { BrowserRestorePayload, BrowserTabSnapshot } from "../src/shared/types";
@@ -193,6 +194,10 @@ async function smoke() {
       title: "请使用 Three.js 制作一个完整的博丽神社微缩三维场景。场景必须建立在一个完整的正方形底座上，底座拥有清晰的石砌侧面。",
     } });
     await wait(async () => (await labels()).includes("审查"));
+    // 这一页走的是带 Chat 的完整布局：右侧抽屉默认关闭，先断言初始状态，再按用户路径点开，
+    // 后续的头部对齐与宽度自适应断言都跑在「用户已打开面板」的工作台上。
+    assert.equal(await host("document.querySelector('.inspect-shell').getBoundingClientRect().width"), 0, "右侧抽屉初始必须关闭");
+    await ensureInspectDrawerOpen(main);
     await run("browser_new_tab", { url });
     stage = "tabs occupy the window header and release vertical content space";
     await verifyWorkbenchHeader(main, inlineTabHeight, { titleOnly: Boolean(process.env.TACODE_TITLE_ONLY) });

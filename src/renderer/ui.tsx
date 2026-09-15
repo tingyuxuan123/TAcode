@@ -302,7 +302,8 @@ export function Chat({
   drawerSignal?: number;
 }) {
   const { t } = useI18n();
-  const [drawer, setDrawer] = useState(true);
+  // 右侧抽屉初始关闭：只有用户自己打开、或程序性打开标签（文件 / 子会话 / Skills）时才展开。
+  const [drawer, setDrawer] = useState(false);
   useEffect(() => { if (inspectFocusToken) setDrawer(true); }, [inspectFocusToken]);
   useEffect(() => { if (drawerSignal) setDrawer(true); }, [drawerSignal]);
   const [panelHeaderHost, setPanelHeaderHost] = useState<HTMLDivElement | null>(null);

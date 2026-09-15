@@ -612,6 +612,11 @@ export function App() {
   // 这正是「点了子会话没效果」的根因。自动开标签（useDelegationTabs 的后台刷新）
   // 直接走 browserPanels 原入口、不经过这里，不抢抽屉。
   const [drawerSignal, setDrawerSignal] = useState(0);
+  // 侧边聊天从主会话区发起（选中文字 / `/side`）：标签必须真的露出来，否则等于没反应。
+  const openSideChatFromMain = useCallback((draft?: string) => {
+    browserPanels.openSideChat(activeSession, draft);
+    setDrawerSignal((value) => value + 1);
+  }, [browserPanels.openSideChat, activeSession]);
   const openFileFromClick = useCallback((path: string, options?: { preview?: boolean; literal?: boolean }) => {
     try { browserPanels.openFile(path, options); setDrawerSignal((value) => value + 1); }
     catch { setToast(t("fileView.outsideProject")); }
@@ -2271,7 +2276,7 @@ export function App() {
         if (command === "/undo") void undoLastTurn();
         if (command === "/compact") void compactContext();
         if (command === "/login") setLoginOpen(true);
-        if (command === "/side") browserPanels.openSideChat(activeSession);
+        if (command === "/side") openSideChatFromMain();
       }}
       builtinCommands={[{ id: "/side", description: t("slash.side") }]}
       skillCommands={agentSkills}
@@ -2561,7 +2566,7 @@ export function App() {
       </PanelActionsProvider>
 
       {/* 选中主聊天文字 → 浮出「在侧边聊天中询问」（Codex 模式入口之一）。 */}
-      {workspace && <SelectionAskBar onAsk={(text) => browserPanels.openSideChat(activeSession, text)} />}
+      {workspace && <SelectionAskBar onAsk={openSideChatFromMain} />}
 
       {sandboxAsk && (
         <div

@@ -1,6 +1,7 @@
 import type { BrowserWindow } from "electron";
 import assert from "node:assert/strict";
 import { startPanelResize } from "../src/renderer/panel-resize";
+import { ensureInspectDrawerOpen } from "./inspect-drawer";
 
 /** Verify the shared resize gesture with native host input crossing a real webview. */
 export async function verifyPanelResize(win: BrowserWindow) {
@@ -68,6 +69,8 @@ export async function verifyPanelResize(win: BrowserWindow) {
 export async function verifyAdaptivePanelWidth(win: BrowserWindow): Promise<Buffer> {
   win.focus(); win.webContents.focus();
   await win.webContents.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+  // 抽屉默认关闭：宽度自适应与分隔线拖动都要求面板可见。
+  await ensureInspectDrawerOpen(win);
   const read = () => win.webContents.executeJavaScript(`(() => {
     const body = document.querySelector('.chat-body');
     const panel = document.querySelector('.inspect-shell');
@@ -169,6 +172,8 @@ export async function verifyAdaptivePanelWidth(win: BrowserWindow): Promise<Buff
   assert.equal(settled.panel, released.panel, "after release only chat may grow with the remaining sidebar animation");
   assert.equal(settled.guest, initial.guest);
   await new Promise<void>((resolve) => { win.webContents.once("did-finish-load", resolve); win.webContents.reload(); });
+  // 重新加载后抽屉回到默认的关闭状态：先打开，才能验证宽度偏好被记住。
+  await ensureInspectDrawerOpen(win);
   await wait((state) => state.sidebar === 252 && state.stored === released.panel && state.panel === Math.min(released.panel, state.available - 320));
   console.log(`Adaptive panel width passed: automatic sidebar collapse at 420px, linear animation, no oscillation, ${expanded.panel}px browser, release during animation, preserved guest and manual preference.`);
   return screenshot;

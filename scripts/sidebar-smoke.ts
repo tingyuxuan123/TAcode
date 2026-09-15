@@ -1,5 +1,6 @@
 import type { BrowserWindow } from "electron";
 import assert from "node:assert/strict";
+import { ensureInspectDrawerOpen } from "./inspect-drawer";
 
 /** Test the production SidebarNav, AccountMenu and Chat together, using native input. */
 export async function verifySidebar(win: BrowserWindow): Promise<Buffer> {
@@ -35,6 +36,8 @@ export async function verifySidebar(win: BrowserWindow): Promise<Buffer> {
     win.webContents.sendInputEvent({ type: "mouseDown", button, clickCount: 1, ...point });
     win.webContents.sendInputEvent({ type: "mouseUp", button, clickCount: 1, ...point });
   };
+  // 抽屉默认关闭：下面的分隔线拖动和宽度断言都需要面板已经打开。
+  await ensureInspectDrawerOpen(win);
   const initial = await wait((state) => state.width === 252 && !!state.guest);
   await evaluate("window.__sidebarSession = document.querySelector('[data-fixture-session]')");
   await click(".sidebar-toggle");
@@ -107,7 +110,10 @@ export async function verifySidebar(win: BrowserWindow): Promise<Buffer> {
   await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
   const screenshot = (await win.webContents.capturePage()).toPNG();
   await new Promise<void>((resolve) => { win.webContents.once("did-finish-load", resolve); win.webContents.reload(); });
-  await wait((state) => state.width === 56 && state.stored === "true" && state.panel === widened.panel);
+  await wait((state) => state.width === 56 && state.stored === "true");
+  // 重新加载后抽屉回到初始的关闭状态，要重新打开才能验证宽度偏好被记住。
+  await ensureInspectDrawerOpen(win);
+  await wait((state) => state.panel === widened.panel);
   console.log(`Sidebar smoke passed: compact project/session switching, labels and scrolling, context rename, icon actions, preserved nodes/guest, ${widened.panel}px browser and persisted collapse.`);
   return screenshot;
 }

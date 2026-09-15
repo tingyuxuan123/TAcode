@@ -1,5 +1,6 @@
 import { webContents, type BrowserWindow } from "electron";
 import assert from "node:assert/strict";
+import { ensureInspectDrawerOpen } from "./inspect-drawer";
 
 /** Verify the production Chat header using native clicks in the frameless title-bar area. */
 export async function verifyWorkbenchHeader(win: BrowserWindow, formerTabHeight: number, options: { titleOnly?: boolean } = {}): Promise<void> {
@@ -25,6 +26,8 @@ export async function verifyWorkbenchHeader(win: BrowserWindow, formerTabHeight:
     await click(`.panel-add-item:nth-child(${index + 1})`);
   };
   await wait(async () => await evaluate("!!document.querySelector('.inspect-header-tabs .inspect-tab') && !!document.querySelector('webview')?.getWebContentsId()"));
+  // 抽屉默认关闭：头部布局断言跑在用户已打开面板的状态上。
+  await ensureInspectDrawerOpen(win);
   const initial = await evaluate(`(() => {
     const rect = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
     return { header:rect('.chat-bar'), heading:rect('.inspect-heading'), shell:rect('.inspect-shell'), tabs:rect('.inspect-tabs'), toolbar:rect('.browser-toolbar'), guest:rect('webview'), guestId:document.querySelector('webview').getWebContentsId(), height:innerHeight };
