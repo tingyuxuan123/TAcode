@@ -166,3 +166,11 @@
 - 验证：`pnpm test:ui-review` 18 项、全量 **145 文件 / 1227 用例**、typecheck、build 通过；文件工作台 **7 阶段**（含宽度/选中/滚动持久化）与其后各烟测通过，renderer 错误与外部网络为 0。
 - 边界：不做像素级叠图，参考图的图标级差异（工具栏溢出菜单等）未逐一复刻；窄窗工具栏两行是既有响应式约定。性能、Windows 与分支整合属 FR-15。
 - 专项 **14/15**；下一条 **FR-15：性能、Windows 与最终整合**（Windows 实机证据需具备 Windows 的环境），本轮未开始。提交仍在本工作树隔离分支、未合并。
+
+## 2026-09-15 FR-15 整合最新主线（部分完成）
+
+- 在 `integrate/fr-workbench`（以 main b1f3d97 为第一父）上把 FR-01～FR-14 合入 main：**18 个冲突文件**逐个解决——工作台文件树、统一文档面板、标签系统、行级意见与 AI 审查取代 main 早期的文件预览/抽屉实现；保留 main 的会话搜索、设置草稿保护、停止反馈、大内容预算与面板性能工作。合并提交 `84197c1`，随后 `35a89b2` 修正 main 自带验收在原统一界面下的口径。
+- 整合验证：`pnpm typecheck`、**155 文件 / 1257 用例**、`pnpm build` 通过；`pnpm test:ui-review`（18 项）、file-workbench（7 阶段）、git-review（37 阶段）、file-review（5 阶段）、file-management（10 阶段）、`node scripts/test-browser.mjs`（含侧栏/标签/浏览器全链）全部通过；main 侧 `TACODE_PREVIEW/SEARCH/STOP/PANELS/SETTINGS/LARGE_SMOKE` 通过（capabilities 在纯 main 上同样失败，属环境既有问题）。
+- 三处测试口径修正（仅测试侧）：侧栏重命名在 IME 保护 30ms 窗口内不按回车；大内容验收改为驱动统一文档面板（滚到尾部验证 4 MiB 全文、原生全选复制），实测文件打开 **527.8 ms**；去掉合并时重复的 `previewSmoke` 声明。main 的 UX-13「大文件纯文本模式」在统一编辑器下不再适用，若仍需要应作为产品项重新实现。
+- 已推送 `origin/main`（快进 `b1f3d97..35a89b2`）；**未触碰** `/Users/yfdl/project/TAcode`（另一会话）与其 main 工作树，它只需 `git pull` 快进。
+- FR-15 剩余：固定设备测量 2 万文件、4 MiB 文本、100 文件/5 万 diff 行，验证约 1 秒刷新、热缓存 P95＜100ms、隐藏暂停与资源释放；Windows 实机证据；整合后的全量验收记录。`passes` 保持 false。
