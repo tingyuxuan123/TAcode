@@ -1,5 +1,5 @@
 {
-  "date": "2026-09-14T10:49:43.677Z",
+  "date": "2026-09-15T03:10:26.406Z",
   "stages": [
     "Native create folder/file with Chinese, spaces and literal colons; empty editor, pin and real save",
     "Existing creation target is rejected without overwriting disk; Escape cancels",
@@ -15,10 +15,10 @@
   "errors": [],
   "network": [],
   "systemOpened": [
-    "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-management-BhVWmj/project-a/目录 空格/a:2 $(literal).txt"
+    "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-management-JOiBNP/project-a/目录 空格/a:2 $(literal).txt"
   ],
   "revealed": [
-    "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-management-BhVWmj/project-a/目录 空格/a:2 $(literal).txt"
+    "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-management-JOiBNP/project-a/目录 空格/a:2 $(literal).txt"
   ],
   "nativeTrashRestored": true,
   "resources": {
@@ -31,6 +31,6 @@
     "subscriptions": 0,
     "reads": 0
   },
-  "artifacts": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-management-artifacts-3XNjY3",
+  "artifacts": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-management-artifacts-bqmx3J",
   "boundary": "Production preload, files/Git IPC and WorkbenchPanels with native Chromium input. Real APFS mutations and external CLI; reversible Trash/system/reveal adapters for failure cases, plus the same native menu/IPC/mutation service with actual Electron system Trash. Installed user editors were not launched."
 }

@@ -73,7 +73,6 @@ async function smoke() {
   const panelsSmoke = process.env.TACODE_PANELS_SMOKE === "1";
   const stopSmoke = process.env.TACODE_STOP_SMOKE === "1";
   const stopControls: StopSmokeControls = { settle: false, requests: [] };
-  const previewSmoke = process.env.TACODE_PREVIEW_SMOKE === "1";
   const previewControls: PreviewSmokeControls = { reads: 0, fail: false, hold: false };
   const fileIndex = new WorkspaceFileIndex();
   const workspaceWatchers = new WorkspaceWatchers((root, paths) => {

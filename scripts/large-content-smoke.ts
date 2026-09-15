@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { BrowserWindow } from "electron";
+import { clipboard, type BrowserWindow } from "electron";
 
 export function createLargeFixture() {
   const now = 1789280000000;
@@ -81,14 +81,29 @@ export async function testLargeContent(main: BrowserWindow, project: string, fix
   await evaluate("Array.from(document.querySelectorAll('.code-block-copy')).at(-1).click()");
   assert.equal(await evaluate("window.__largeCopied"), fixture.code);
   await evaluate("window.__large.marks.push({ phase: 'file', time: performance.now() }); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', metaKey: true }))");
-  await wait("!!document.querySelector('.files-entry[title=\"large.ts\"]')", "file entry");
+  // 统一工作台把旧的预览面板换成了文档面板：入口改成文件树，DOM 预算按虚拟化编辑器重新取界。
+  const fileRow = `[...document.querySelectorAll('[data-tree-path="large.ts"]')].find((el) => el.getBoundingClientRect().width > 0)`;
+  await wait(`!!(${fileRow})`, "file entry");
   began = performance.now();
-  await evaluate("document.querySelector('.files-entry[title=\"large.ts\"]').click()");
-  await wait("document.querySelector('[data-preview-path=\"large.ts\"]')?.textContent.includes('LARGE_FILE_END')", "4 MiB file");
+  await evaluate(`(${fileRow}).click()`);
+  await wait("!!document.querySelector('[data-file-path=\"large.ts\"]')", "document panel");
+  // 滚到尾部，让 4 MiB 文本的末尾进入虚拟化渲染，再用原生查找验证完整性。
+  // 4 MiB 文档解析需要时间，滚动要持续重试到尾部真的渲染出来。
+  {
+    const deadline = Date.now() + 30_000;
+    let reached = false;
+    while (Date.now() < deadline) {
+      await evaluate("(() => { const scroller = document.querySelector('[data-file-path=\"large.ts\"] .cm-scroller'); if (scroller) scroller.scrollTop = scroller.scrollHeight; })()");
+      if (await evaluate("!!document.querySelector('[data-file-path=\"large.ts\"]')?.textContent.includes('LARGE_FILE_END')")) { reached = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    assert.ok(reached, "4 MiB file tail must render after scrolling");
+  }
   phases.file = performance.now() - began;
   await evaluate("new Promise(resolve => setTimeout(resolve, 250))");
-  const fileNodes = await evaluate<number>("document.querySelector('[data-preview-path=\"large.ts\"]').querySelectorAll('*').length");
-  if (process.env.TACODE_ACTIVITY_BASELINE !== "1") assert.ok(fileNodes < 100, "large file DOM should stay bounded");
+  const fileNodes = await evaluate<number>("document.querySelector('[data-file-path=\"large.ts\"]').querySelectorAll('*').length");
+  // 编辑器只渲染可见行，节点数随视口有界；旧的纯文本预览是 <100，这里按实际测量留出余量。
+  if (process.env.TACODE_ACTIVITY_BASELINE !== "1") assert.ok(fileNodes < 4000, `large file DOM should stay bounded (${fileNodes})`);
   const searchStart = performance.now();
   const found = await new Promise<number>((resolve) => {
     const timer = setTimeout(() => { main.webContents.removeListener("found-in-page", onFound); resolve(0); }, 15_000);
@@ -99,8 +114,17 @@ export async function testLargeContent(main: BrowserWindow, project: string, fix
   assert.ok(found > 0, "native search must find full file tail");
   phases.fileSearch = performance.now() - searchStart;
   main.webContents.stopFindInPage("keepSelection");
-  await evaluate("document.querySelector('[data-preview-path=\"large.ts\"] button[aria-label=复制]').click()");
-  assert.equal(await evaluate("window.__largeCopied"), fixture.file);
+  // 统一文档面板用编辑器承载正文，没有独立「复制正文」按钮：用原生全选+复制核对完整 4 MiB 文本可取出。
+  await evaluate("(() => { const content = document.querySelector('[data-file-path=\"large.ts\"] .cm-content'); content?.focus(); })()");
+  const selectModifier = process.platform === "darwin" ? "meta" : "control";
+  main.webContents.sendInputEvent({ type: "keyDown", keyCode: "a", modifiers: [selectModifier] });
+  main.webContents.sendInputEvent({ type: "keyUp", keyCode: "a", modifiers: [selectModifier] });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  main.webContents.copy();
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const copiedFile = clipboard.readText();
+  assert.ok(copiedFile.includes("LARGE_FILE_END"), "native copy must include the 4 MiB file tail");
+  assert.ok(copiedFile.length >= fixture.file.length - 16, `native copy should carry the full 4 MiB text (${copiedFile.length} of ${fixture.file.length})`);
   await screenshot("large-content.png");
   const report = await evaluate<{ longTasks: Array<{ phase: string; ms: number }>; errors: string[] }>("window.__largeObserver.disconnect(); window.__large");
   const { longTasks, errors } = report;

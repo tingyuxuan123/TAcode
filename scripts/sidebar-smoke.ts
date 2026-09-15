@@ -71,6 +71,8 @@ export async function verifySidebar(win: BrowserWindow): Promise<Buffer> {
   await wait(async () => await evaluate("(() => {const input=document.querySelector('.session-rename');return input.selectionStart===0 && input.selectionEnd===input.value.length})()"));
   await win.webContents.insertText("文档更新");
   await wait(async () => await evaluate("document.querySelector('.session-rename')?.value==='文档更新'"));
+  // IME 保护会忽略「组合结束后 30ms 内」的回车；等窗口过去再提交，避免把产品保护当失败。
+  await new Promise((resolve) => setTimeout(resolve, 60));
   win.webContents.sendInputEvent({ type: "keyDown", keyCode: "Return" });
   win.webContents.sendInputEvent({ type: "keyUp", keyCode: "Return" });
   await wait(async () => (await evaluate("document.querySelector('[role=status]').textContent")) === "已重命名：文档更新");

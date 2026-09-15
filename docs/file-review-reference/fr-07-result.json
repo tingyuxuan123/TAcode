@@ -1,7 +1,7 @@
 {
-  "date": "2026-09-14T09:22:44.569Z",
+  "date": "2026-09-15T03:07:53.837Z",
   "platform": "darwin",
-  "os": "25.6.0",
+  "os": "27.0.0",
   "stages": [
     "Complete production index: file 201/8001, preview replacement and native double-click pin",
     "Hidden/ignored directory expansion, literal colon filename and native tree keyboard open",
@@ -11,7 +11,7 @@
     "Two same-name projects/sessions stay isolated; reload restores tab order, active file, width and reading positions",
     "Close other files preserves tool panels; English/narrow layout, hidden pause/reactivation and owner cleanup"
   ],
-  "refreshMs": 43.04974999999831,
+  "refreshMs": 108.34804199999962,
   "errors": [],
   "network": [],
   "resources": {
@@ -24,6 +24,6 @@
     "subscriptions": 0,
     "reads": 0
   },
-  "artifacts": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-workbench-artifacts-PWnAEG",
-  "boundary": "Production preload/files+Git IPC and WorkbenchPanels with native Chromium mouse/keyboard; temporary APFS projects. Text remains read-only pending FR-08."
+  "artifacts": "/var/folders/qp/05fwrn6x61n2qt8cr8bh3m9w0000gn/T/tacode-file-workbench-artifacts-0jIClK",
+  "boundary": "Production preload/files+Git IPC and WorkbenchPanels with native Chromium mouse/keyboard; temporary APFS projects."
 }
