@@ -244,11 +244,11 @@ async function smoke() {
     assert((await labels()).includes("跑一遍聚焦测试"), "in-process card must open a tab");
     const visibleHost = "Array.from(document.querySelectorAll('.child-session-host')).filter(el => getComputedStyle(el).display !== 'none')[0]";
     assert(await host(`${visibleHost}.textContent.includes('WorkbenchPanelTab')`), "report fallback");
-    assert(await host(`${visibleHost}.textContent.includes('pnpm test')`), "activity fallback");
+    assert(await host(`${visibleHost}.querySelector('.child-session-note')?.textContent.includes('没有独立会话文件')`), "in-process report identifies unavailable transcript");
     // 卡片与侧栏是同一个委派（delegation-1）→ 标签栏只应出现一次，且内容仍是子会话转录。
     assert.equal(await host("Array.from(document.querySelectorAll('.child-session-host')).length"), 2, "两个委派各一个标签（含进程内那张卡片）");
     assert.equal(await host("Array.from(document.querySelectorAll('.inspect-tab-label')).filter(el => el.textContent === '分析委派链路').length"), 1, "同一个委派只出现一次");
-    // 焦点在刚打开的进程内标签上（它的报告/活动断言在上面），这里要钉的是「卡片复用的那个委派标签
+    // 焦点在刚打开的进程内标签上（报告与转录状态已在上面检查），这里要钉的是「卡片复用的那个委派标签
     // 内容仍是子会话转录」，所以按内容找它，而不是取当前聚焦的那个 host。
     assert(await host("Array.from(document.querySelectorAll('.child-session-host')).some(el => el.textContent.includes('子代理转录内容'))"), "同一标签内容保持一致");
 

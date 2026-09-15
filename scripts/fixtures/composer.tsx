@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PromptBar } from "../../src/renderer/ui";
 
 /** Real composer with local state only; callbacks do not start an Agent or access a model. */
@@ -8,11 +8,14 @@ export function ComposerFixture() {
   const [permission, setPermission] = useState("auto");
   const [running, setRunning] = useState(false);
   const [action, setAction] = useState("");
+  const [fillToken, setFillToken] = useState(0);
+  useEffect(() => { setFillToken(1); }, []);
   const models = ["glm-5.3-flash", "这是用于验证布局收缩与完整提示的超长模型名称"].map((name) => ({ value: name, label: name, modelId: name, providerName: "本地测试" }));
   return <>
     <output data-composer-action style={{ position: "absolute", top: 60, left: 24 }}>{action}</output>
     <PromptBar
       fillText="缩放后保留这条输入"
+      fillToken={fillToken}
       workspace="/test/xc-app" onPickWorkspace={() => setAction("选择项目")}
       model={model} modelKey={model} models={models} onModel={(next) => { setModel(next); setAction(`模型：${next}`); }}
       effort={effort} effortLevels={["off", "low", "medium", "high", "xhigh"]} onEffort={(next) => { setEffort(next); setAction(`思考：${next}`); }}

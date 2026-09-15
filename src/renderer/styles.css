@@ -4562,7 +4562,7 @@ textarea::selection,
   color: var(--ink);
 }
 .prompt-toolbar-controls[data-mode="menu"] {
-  position: fixed;
+  position: absolute;
   z-index: 95;
   flex-direction: column;
   align-items: stretch;

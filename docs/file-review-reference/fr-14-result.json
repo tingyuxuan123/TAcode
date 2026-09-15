@@ -1,0 +1,54 @@
+{
+  "date": "2026-09-15T02:24:18.829Z",
+  "stages": [
+    "审查：默认状态在参考视口下布局成立（工具栏/内容区/上下文列尺寸与无溢出）",
+    "审查：展开状态可用",
+    "审查：筛选状态只显示匹配条目",
+    "审查：选中状态（树行唯一选中，内容区保持可用）",
+    "审查：菜单状态（原生菜单打开、含文件操作、Escape 关闭）",
+    "审查：浅色基准与深色映射成立",
+    "审查：输入法提交文字可筛选，组合期间的回车不误触发",
+    "审查：键盘导航（Tab 进入树、方向键移动、Escape 关闭菜单）可用",
+    "审查：无障碍（按钮名称、aria-pressed、树 role/层级/选中）通过",
+    "文件：默认状态在参考视口下布局成立（工具栏/内容区/上下文列尺寸与无溢出）",
+    "文件：展开状态可用",
+    "文件：筛选状态只显示匹配条目",
+    "文件：选中状态（树行唯一选中，内容区保持可用）",
+    "文件：菜单状态（原生菜单打开、含文件操作、Escape 关闭）",
+    "文件：浅色基准与深色映射成立",
+    "文件：输入法提交文字可筛选，组合期间的回车不误触发",
+    "文件：键盘导航（Tab 进入树、方向键移动、Escape 关闭菜单）可用",
+    "文件：无障碍（按钮名称、aria-pressed、树 role/层级/选中）通过"
+  ],
+  "screenshots": [
+    "fr-14-review-default-zh.png",
+    "fr-14-review-expanded-zh.png",
+    "fr-14-review-filtered-zh.png",
+    "fr-14-review-selected-zh.png",
+    "fr-14-review-menu-zh.png",
+    "fr-14-review-narrow-en.png",
+    "fr-14-review-dark-zh.png",
+    "fr-14-review-findings-zh.png",
+    "fr-14-review-comments-zh.png",
+    "fr-14-files-default-zh.png",
+    "fr-14-files-expanded-zh.png",
+    "fr-14-files-filtered-zh.png",
+    "fr-14-files-selected-zh.png",
+    "fr-14-files-menu-zh.png",
+    "fr-14-files-narrow-en.png",
+    "fr-14-files-dark-zh.png"
+  ],
+  "reference": {
+    "files": {
+      "width": 820,
+      "height": 785
+    },
+    "review": {
+      "width": 836,
+      "height": 740
+    },
+    "dpr": 2
+  },
+  "errors": [],
+  "boundary": "真实 Electron 视口 DPR2、生产 preload/文件与 Git IPC/WorkbenchPanels；结构与尺寸断言，不做像素级叠图。"
+}

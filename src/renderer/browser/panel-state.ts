@@ -1,4 +1,5 @@
 import type { BrowserTabSnapshot } from "../../shared/types";
+import { mutatedPath, type FileMutation } from "../../shared/files";
 
 export type BrowserPanelTab = {
   id: string;
@@ -38,6 +39,10 @@ export interface FilePanelTab {
   type: "file";
   path: string;
   workspace?: string;
+  scope?: string;
+  preview?: boolean;
+  location?: import("../workbench/types").SourceLocation;
+  reveal?: number;
 }
 
 /**
@@ -103,7 +108,7 @@ export function delegationPanelKey(id?: string, sessionPath?: string): string {
   return "";
 }
 
-export const filePanelId = (path: string, workspace?: string): string => workspace ? `file-${JSON.stringify([workspace, path])}` : `file-${path}`;
+export const filePanelId = (path: string, workspace?: string, scope?: string): string => scope ? `file-${JSON.stringify([workspace, path, scope])}` : workspace ? `file-${JSON.stringify([workspace, path])}` : `file-${path}`;
 export const filePanelLabel = (path: string): string => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? path;
 export const childSessionPanelId = (key: string): string => `child-session-${key}`;
 export const createChildSessionPanel = (key: string, info: ChildSessionPanelInfo): ChildSessionPanelTab => ({
@@ -119,6 +124,7 @@ export type PanelState = {
   session?: string;
   /** 每个会话上次激活的标签 id（key 为会话路径，首页用空串）：切走时记录，切回时恢复。 */
   sessionActive: Record<string, string>;
+  filesScope?: string;
 };
 export type PanelAction =
   | { type: "open-review" }
@@ -130,7 +136,12 @@ export type PanelAction =
   | { type: "focus-side-chat" }
   | { type: "session-changed"; sourceSession?: string }
   | { type: "open-child-session"; panel: ChildSessionPanelTab; activate?: boolean }
-  | { type: "open-file"; path: string; workspace?: string; activate?: boolean }
+  | { type: "open-file"; path: string; workspace?: string; activate?: boolean; preview?: boolean; location?: import("../workbench/types").SourceLocation }
+  | { type: "file-scope-changed"; scope: string; restored: FilePanelTab[]; activePath?: string }
+  | { type: "pin-file"; id: string }
+  | { type: "file-mutation"; mutation: FileMutation }
+  | { type: "close-other-files"; id: string }
+  | { type: "reorder"; id: string; before: string; after?: boolean }
   | { type: "open-browser"; tab: BrowserPanelTab; activate: boolean }
   | { type: "select"; id: string }
   | { type: "close"; id: string }
@@ -149,15 +160,16 @@ const sessionActiveKey = (session: string | undefined): string => session ?? "";
  * （info.parentSession 未记录的旧标签保持可见），其余类型全可见。不可见的标签保持
  * 挂载，切回对应会话原样恢复。
  */
-export const isPanelVisible = (tab: WorkbenchPanelTab, session: string | undefined): boolean => {
+export const isPanelVisible = (tab: WorkbenchPanelTab, session: string | undefined, filesScope?: string): boolean => {
   if (tab.type === "side-chat") return tab.sourceSession === session;
   if (tab.type === "child-session") return !tab.info.parentSession || tab.info.parentSession === session;
+  if (tab.type === "file" && tab.scope) return tab.scope === filesScope;
   return true;
 };
 
 /** 标签栏与面板主体应展示的标签（侧边聊天与子会话标签按当前主会话过滤，其余类型全可见）。 */
 export function visiblePanelTabs(state: PanelState): WorkbenchPanelTab[] {
-  return state.tabs.filter((tab) => isPanelVisible(tab, state.session));
+  return state.tabs.filter((tab) => isPanelVisible(tab, state.session, state.filesScope));
 }
 export const createBrowserPanelId = (): string => `browser-${crypto.randomUUID()}`;
 export const createBrowserPanel = (id: string, page?: BrowserTabSnapshot): BrowserPanelTab => ({
@@ -196,14 +208,51 @@ export function childSessionPanelLabel(info: ChildSessionPanelInfo, fallback: st
 
 export function panelReducer(state: PanelState, action: PanelAction): PanelState {
   const next = applyPanelAction(state, action);
+  if (next === state) return state;
   // session / sessionActive 只由 session-changed 维护；其余动作原样保留，避免每个分支都要记得带上。
-  if (action.type === "session-changed") return next;
+  if (action.type === "file-scope-changed" || action.type === "file-mutation") return next;
+  if (action.type === "session-changed") return state.filesScope === undefined ? next : { ...next, filesScope: state.filesScope };
   const preserved = next.session === state.session && next.sessionActive === state.sessionActive;
-  return preserved ? next : { ...next, session: state.session, sessionActive: state.sessionActive };
+  return preserved && next.filesScope === state.filesScope ? next : { ...next, session: state.session, sessionActive: state.sessionActive, filesScope: state.filesScope };
 }
 
 function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
   switch (action.type) {
+    case "file-mutation": {
+      const mutation = action.mutation; const ids = new Map<string, string>(); const seen = new Set<string>();
+      const tabs = state.tabs.flatMap((tab): WorkbenchPanelTab[] => {
+        if (tab.type !== "file" || tab.workspace !== mutation.projectRoot) return [tab];
+        const path = mutatedPath(tab.path, mutation); if (path === undefined) return [];
+        const id = filePanelId(path, tab.workspace, tab.scope); ids.set(tab.id, id);
+        if (seen.has(id)) return []; seen.add(id); return [{ ...tab, id, path }];
+      });
+      const requested = ids.get(state.active) ?? state.active;
+      const active = tabs.some((tab) => tab.id === requested && isPanelVisible(tab, state.session, state.filesScope)) ? requested : tabs.find((tab) => isPanelVisible(tab, state.session, state.filesScope))?.id ?? "";
+      return { ...state, tabs, active, sessionActive: Object.fromEntries(Object.entries(state.sessionActive).map(([key, id]) => [key, ids.get(id) ?? id])) };
+    }
+    case "file-scope-changed": {
+      if (state.filesScope === action.scope) return state;
+      const existing = state.tabs.filter((tab) => tab.type === "file" && tab.scope === action.scope);
+      const tabs = existing.length ? state.tabs : [...state.tabs, ...action.restored];
+      const visible = (tab: WorkbenchPanelTab) => isPanelVisible(tab, state.session, action.scope);
+      const restoredActive = tabs.find((tab) => tab.type === "file" && tab.scope === action.scope && tab.path === action.activePath);
+      const active = restoredActive?.id ?? (tabs.some((tab) => tab.id === state.active && visible(tab)) ? state.active : tabs.find(visible)?.id ?? "");
+      return { ...state, tabs, active, filesScope: action.scope };
+    }
+    case "pin-file":
+      return { ...state, tabs: state.tabs.map((tab) => tab.type === "file" && tab.id === action.id ? { ...tab, preview: false } : tab) };
+    case "close-other-files": {
+      const keep = state.tabs.find((tab) => tab.type === "file" && tab.id === action.id && isPanelVisible(tab, state.session, state.filesScope));
+      if (!keep) return state;
+      return { ...state, tabs: state.tabs.filter((tab) => tab.type !== "file" || tab.id === action.id || !isPanelVisible(tab, state.session, state.filesScope)), active: action.id };
+    }
+    case "reorder": {
+      if (action.id === action.before) return state;
+      const moving = state.tabs.find((tab) => tab.id === action.id);
+      const before = state.tabs.find((tab) => tab.id === action.before);
+      if (!moving || !before || !isPanelVisible(moving, state.session, state.filesScope) || !isPanelVisible(before, state.session, state.filesScope)) return state;
+      const tabs = state.tabs.filter((tab) => tab.id !== action.id); tabs.splice(tabs.findIndex((tab) => tab.id === action.before) + (action.after ? 1 : 0), 0, moving); return { ...state, tabs };
+    }
     case "open-review":
       return { tabs: state.tabs.some((tab) => tab.type === "review") ? state.tabs : [...state.tabs, { id: "review", type: "review" }], active: "review", session: state.session, sessionActive: state.sessionActive };
     case "open-files": {
@@ -244,7 +293,7 @@ function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
       if (state.session === action.sourceSession) return state;
       // 只切换「当前主会话」上下文：别的会话的侧边聊天与子会话标签从标签栏隐藏但保持
       // 挂载，切回来原样恢复；只有手动关闭（带确认）或退出应用才真正销毁。
-      const isVisible = (tab: WorkbenchPanelTab) => isPanelVisible(tab, action.sourceSession);
+      const isVisible = (tab: WorkbenchPanelTab) => isPanelVisible(tab, action.sourceSession, state.filesScope);
       // 每个会话记住自己上次的激活标签：离开时记录当前激活，回来时优先恢复记忆；
       // 记忆的标签已被关闭时，回落到新上下文里离它最近的可见标签。
       const sessionActive = { ...state.sessionActive, [sessionActiveKey(state.session)]: state.active };
@@ -302,10 +351,13 @@ function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
       };
     }
     case "open-file": {
-      const id = filePanelId(action.path, action.workspace);
-      const exists = state.tabs.some((tab) => tab.id === id);
-      if (exists) return { ...state, active: action.activate === false ? state.active : id };
-      return { tabs: [...state.tabs, { id, type: "file", path: action.path, ...(action.workspace ? { workspace: action.workspace } : {}) }], active: action.activate === false ? state.active : id, session: state.session, sessionActive: state.sessionActive };
+      const id = filePanelId(action.path, action.workspace, state.filesScope);
+      const existing = state.tabs.find((tab): tab is FilePanelTab => tab.type === "file" && tab.id === id);
+      if (existing) return { ...state, tabs: state.tabs.map((tab) => tab.id === id ? { ...tab, ...(action.preview === false ? { preview: false } : {}), ...(action.location ? { location: action.location, reveal: (existing.reveal ?? 0) + 1 } : {}) } : tab), active: action.activate === false ? state.active : id };
+      const tab: FilePanelTab = { id, type: "file", path: action.path, workspace: action.workspace, scope: state.filesScope, preview: Boolean(action.preview), location: action.location };
+      const previewIndex = action.preview ? state.tabs.findIndex((tab) => tab.type === "file" && tab.preview && tab.scope === state.filesScope) : -1;
+      const tabs = [...state.tabs]; if (previewIndex < 0) tabs.push(tab); else tabs.splice(previewIndex, 1, tab);
+      return { ...state, tabs, active: action.activate === false ? state.active : id };
     }
     case "open-browser":
       return {
@@ -315,14 +367,14 @@ function applyPanelAction(state: PanelState, action: PanelAction): PanelState {
         sessionActive: state.sessionActive,
       };
     case "select":
-      return state.tabs.some((tab) => tab.id === action.id) ? { ...state, active: action.id } : state;
+      return state.tabs.some((tab) => tab.id === action.id && isPanelVisible(tab, state.session, state.filesScope)) ? { ...state, active: action.id } : state;
     case "close": {
       const index = state.tabs.findIndex((tab) => tab.id === action.id);
       if (index < 0) return state;
       const tabs = state.tabs.filter((tab) => tab.id !== action.id);
       return {
         tabs,
-        active: state.active === action.id ? (tabs[index - 1] ?? tabs[index])?.id ?? "" : state.active,
+        active: state.active === action.id ? ([...tabs.slice(0, index)].reverse().find((tab) => isPanelVisible(tab, state.session, state.filesScope)) ?? tabs.find((tab) => isPanelVisible(tab, state.session, state.filesScope)))?.id ?? "" : state.active,
         session: state.session,
         sessionActive: state.sessionActive,
       };

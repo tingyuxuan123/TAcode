@@ -42,7 +42,7 @@ import {
 import { AgentHost } from "./agent-host";
 import { DelegationCoordinator } from "./delegation-coordinator";
 import { delegationRunOptions, delegationProviderTarget } from "./delegation-run-options";
-import { AgentManager, sessionFileOf } from "./agent-manager";
+import { AgentManager, sessionFileOf, type AgentHostStartOptions } from "./agent-manager";
 import { AgentActivityStore } from "./agent-activity";
 import { closeAllBrowserPopups } from "./browser/popups";
 import { closeAllDetachedBrowserWindows } from "./browser/windows";
@@ -67,6 +67,12 @@ import { readWorkspacePreview } from "./workspace-preview";
 import { appBuildStatus } from "./build-status";
 import { listLocalSkills, revealSkillPath } from "./skills-fs";
 import { registerCapabilitiesIpc } from "./capabilities-ipc";
+import { registerGitIpc } from "./git/git-ipc";
+import { registerFileIpc } from "./files/file-ipc";
+import { WindowCloseGuard } from "./window-close-guard";
+import { ProjectPreviewRegistry } from "./files/preview-registry";
+import { ProjectFilePaths } from "./files/file-path";
+import { serveProjectPreview } from "./files/preview-server";
 import { TerminalManager } from "./terminal-manager";
 import { apiBaseUrl, listModels } from "../shared/openai-models";
 import { fallbackSessionTitle as firstMessageTitle } from "../shared/session-title";
@@ -183,7 +189,7 @@ process.env.TACODE_CREDENTIALS_STORE = "file";
 
 let mainWindow: BrowserWindow | undefined;
 // 第二个参数把当前工作区交给浏览器自动化：browser_navigate 传 path 时直接预览工作区文件。
-const browserAutomation = new BrowserAutomation(() => mainWindow, () => activeAgentCwd);
+const browserAutomation = new BrowserAutomation(() => mainWindow, () => activeAgentCwd, (root, relative) => previewRoots.url(root, relative));
 
 /** 本地诊断日志（只写本机、限大小、可轮转，不上传；写入前脱敏已知凭据）。 */
 const diagnostics = new LocalLogger({
@@ -228,6 +234,8 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
         }
         return;
       }
+      // 审查 worker 是主进程自己发起的只读运行：事件既不进主会话视图，也不进活动存储。
+      if (channel === "review") return;
       if (!sideChat) agentActivities.observe(event);
       if (event.type === "desktop_capabilities_changed" || (event.type === "extension_ui_request" && event.method === "setStatus" && event.statusKey === "tacode")) {
         mainWindow?.webContents.send("capabilities:runtime-changed", runtimeId);
@@ -235,6 +243,7 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
       if (["agent_settled", "desktop_ui_request_resolved", "desktop_capabilities_idle"].includes(event.type)) {
         (sideChat ? sideChatManager : agentManager).flushScheduledCapabilities(runtimeId);
       }
+      if (!sideChat) turnSnapshots.observe(event, agentManager.findRuntime(runtimeId)?.cwd);
       if (!sideChat && event.type === "agent_start" && event.__sessionId) {
         delegationCoordinator?.resumeParent(event.__sessionId);
       }
@@ -430,10 +439,12 @@ async function loadLoadedSessions(): Promise<void> {
   if (pruned) persistLoadedSessions();
 }
 const workspaceFiles = new WorkspaceFileIndex();
-const previewRoots = new Map<string, string>();
+const previewRoots = new ProjectPreviewRegistry();
+const previewPaths = new ProjectFilePaths((root) => resolveInWorkspace(".", root));
 const workspaceWatchers = new WorkspaceWatchers((root, paths) => {
   if (paths) for (const file of paths) workspaceFiles.changed(root, file);
   else workspaceFiles.changed(root);
+  fileIpc?.service.changed(root);
   mainWindow?.webContents.send("workspace:changed", { root, paths });
 }, () => sendAppCommand("workspace-watch-failed"));
 let updateCheckStarted = false;
@@ -531,6 +542,7 @@ async function checkForUpdates(manual = false): Promise<void> {
   }
 }
 
+let windowCloseGuard: WindowCloseGuard | undefined;
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -568,6 +580,7 @@ function createWindow(): void {
     void historyMaintenance.run();
     void checkForUpdates();
   });
+  windowCloseGuard = new WindowCloseGuard(mainWindow);
   // Fullscreen hides the macOS traffic lights, so the renderer must stop reserving room for them.
   const reportFullscreen = () =>
     sendAppCommand(
@@ -577,10 +590,12 @@ function createWindow(): void {
   mainWindow.on("leave-full-screen", reportFullscreen);
   mainWindow.webContents.on("did-finish-load", reportFullscreen);
   mainWindow.on("closed", () => {
+    windowCloseGuard = undefined;
     mainWindow = undefined;
     workspaceWatchers.close();
     workspaceFiles.clear();
     previewRoots.clear();
+    fileIpc?.service.clear();
     // Close browser popups and detached browser windows so they don't outlive the shell
     // (macOS keeps the app alive after the window closes).
     closeAllBrowserPopups();
@@ -642,8 +657,98 @@ function installMenu(): void {
 }
 
 import { registerProviderIpcHandlers, desktopProviderStatus, resolveDesktopProvider, resolveDesktopServiceId } from "./providers";
+import { TurnSnapshotService } from "./git/turn-snapshot";
+import { GitReader } from "./git/git-reader";
+import type { GitComparison } from "../shared/git";
+import { REVIEW_TOOLS } from "../shared/review";
+import { extractAssistantReport } from "../shared/delegation";
+import { describeReviewRange } from "./review/review-range";
+import { ReviewCoordinator } from "./review/review-coordinator";
+import { registerReviewIpc } from "./review/review-ipc";
 
+let gitIpc: ReturnType<typeof registerGitIpc> | undefined;
+let fileIpc: ReturnType<typeof registerFileIpc> | undefined;
+let reviewIpc: ReturnType<typeof registerReviewIpc> | undefined;
+/** AI 审查沿用当前会话的供应商/模型配置，但只读运行，从不启动主会话的 Agent。 */
+let lastAgentStartOptions: AgentHostStartOptions | undefined;
+const reviewHosts = new Map<string, AgentHost>();
+/** 审查 worker 的轮数预算：只读审查收敛到有限轮次，超限即收口并保留已产出的报告。 */
+const REVIEW_MAX_TURNS = 24;
+/** 独立只读审查 worker：固定只读工具集与命令白名单，跑完即停。 */
+async function runReviewWorker(projectRoot: string, prompt: string, runId: string, signal: AbortSignal): Promise<string> {
+  const base = lastAgentStartOptions;
+  if (!base) throw new Error("还没有可用的模型配置：请先在这个项目里打开一个会话。");
+  const host = createAgentHost(`review-${runId}`, "review");
+  reviewHosts.set(runId, host);
+  const onAbort = () => { void host.stop().catch(() => undefined); };
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await host.start({
+      provider: base.provider,
+      ...(base.serviceId ? { serviceId: base.serviceId } : {}),
+      ...(base.model ? { model: base.model } : {}),
+      ...(base.baseUrl ? { baseUrl: base.baseUrl } : {}),
+      ...(base.maxTokens ? { maxTokens: base.maxTokens } : {}),
+      ...(base.desktopProvider ? { desktopProvider: base.desktopProvider } : {}),
+      ...(base.providerExtension ? { providerExtension: base.providerExtension } : {}),
+      visionExtension: visionExtensionPath(),
+      browserExtension: path.join(currentDirectory, "../extensions/browser.js"),
+      visionConfig: visionConfigPath(),
+      visionUploads: visionUploadsDir(),
+      cwd: projectRoot,
+      permission: "plan",
+      sandbox: "read-only",
+      activeTools: [...REVIEW_TOOLS],
+      execPolicy: "readonly",
+      maxTurns: REVIEW_MAX_TURNS,
+      autoTitle: false,
+    });
+    if (signal.aborted) return "";
+    await host.request("prompt", { message: prompt });
+    if (signal.aborted) return "";
+    await host.waitForIdle();
+    if (signal.aborted) return "";
+    const result = await host.request<{ messages?: unknown[] }>("get_messages");
+    return extractAssistantReport(Array.isArray(result?.messages) ? result.messages : []);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    reviewHosts.delete(runId);
+    void host.stop().catch(() => undefined);
+  }
+}
+const reviewCoordinator = new ReviewCoordinator({
+  root: path.join(userDataPath, "review-runs"),
+  publish: (run) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("review:update", run); },
+  run: async ({ projectRoot, prompt, runId, signal }) => runReviewWorker(projectRoot, prompt, runId, signal),
+  describeRange: (projectRoot, comparison) => describeReviewRange(new GitReader(projectRoot, gitIpc?.turns ? { turns: gitIpc.turns } : {}), comparison),
+});
+/** Recent-turn snapshots are recorded per project; the review panel reads them through Git IPC. */
+const turnSnapshots = new TurnSnapshotService({
+  root: path.join(userDataPath, "review-turns"),
+  resolveProject: (cwd) => resolveInWorkspace(".", cwd),
+  publish: (update) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("git:turn", update); },
+});
 function registerIpc(): void {
+  fileIpc = registerFileIpc({
+    draftRoot: path.join(userDataPath, "file-drafts"),
+    host: () => mainWindow?.webContents,
+    resolveProject: (root) => resolveInWorkspace(".", root),
+    index: workspaceFiles,
+    previews: previewRoots,
+    watchProject: watchWorkspace,
+    changed: (root, paths) => {
+      if (paths) for (const file of paths) workspaceFiles.changed(root, file); else workspaceFiles.changed(root);
+      mainWindow?.webContents.send("workspace:changed", { root, paths });
+    },
+  });
+  reviewIpc?.dispose();
+  reviewIpc = registerReviewIpc({ host: () => mainWindow?.webContents, coordinator: reviewCoordinator });
+  gitIpc = registerGitIpc({
+    host: () => mainWindow?.webContents,
+    resolveProject: (cwd) => resolveInWorkspace(".", cwd),
+    recoveryRoot: path.join(userDataPath, "git-recovery"),
+    turns: turnSnapshots,
+  });
   registerCapabilitiesIpc({
     resolveWorkspace: (cwd) => resolveInWorkspace(".", cwd),
     resolveProjectFile: (file, cwd) => resolveInWorkspace(file, cwd),
@@ -801,12 +906,8 @@ function registerIpc(): void {
         );
         const root = path.resolve(cwd!);
         watchWorkspace(root);
-        const host = `workspace-${createHash("sha256").update(root).digest("hex").slice(0, 32)}`;
-        previewRoots.delete(host);
-        previewRoots.set(host, root);
-        while (previewRoots.size > 12) previewRoots.delete(previewRoots.keys().next().value!);
-        const previewPath = path.relative(root, resolved).split(path.sep).map(encodeURIComponent).join("/");
-        return { ...await readWorkspacePreview(resolved, relativePath), previewUrl: `${PREVIEW_SCHEME}://${host}/${previewPath}` };
+        const previewPath = path.relative(root, resolved).split(path.sep).join("/");
+        return { ...await readWorkspacePreview(resolved, relativePath), previewUrl: previewRoots.url(root, previewPath) };
       } catch (error) {
         if (
           error &&
@@ -1386,7 +1487,7 @@ function registerIpc(): void {
       ? await resolveDesktopProvider(startOptions.serviceId, startOptions.model) : undefined;
     ensureCurrentView();
     // 每个会话独立 host：已有实例（同会话重启）则复用，否则新建，绝不停止其它会话。
-    const started = await agentManager.start({
+    const composedOptions: AgentHostStartOptions = {
       ...startOptions,
       serviceKey: desktopProvider?.serviceKey ?? ":",
       autoTitle: !delegatedSession,
@@ -1408,7 +1509,9 @@ function registerIpc(): void {
         providerExtension: path.join(currentDirectory, "../extensions/provider.js"),
         desktopProvider,
       } : {}),
-    });
+    };
+    lastAgentStartOptions = composedOptions;
+    const started = await agentManager.start(composedOptions);
     const snapshot: AgentSnapshot = started;
     const host = agentManager.findRuntime(started.runtimeId);
     const file = host?.sessionKey ?? sessionPath;
@@ -1723,23 +1826,12 @@ const recentWorkspaces = {
 
 async function servePreview(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const name = decodeURIComponent(url.pathname).replace(/^\/+/, "");
-  let target: string;
-  if (url.host === UPLOADS_HOST) {
-    // basename only: this host serves staged uploads, never an arbitrary path on disk.
-    target = path.join(visionUploadsDir(), path.basename(name));
-  } else {
-    try {
-      const root = url.host.startsWith("workspace-") ? previewRoots.get(url.host) : undefined;
-      if (url.host.startsWith("workspace-") && !root) throw new Error("预览项目已关闭，请刷新预览。");
-      target = await resolveInWorkspace(name, root);
-    } catch (error) {
-      return new Response(
-        error instanceof Error ? error.message : "Forbidden",
-        { status: 403 },
-      );
-    }
-  }
+  if (url.host !== UPLOADS_HOST) return serveProjectPreview(request, previewPaths, previewRoots);
+  let name: string;
+  try { name = decodeURIComponent(url.pathname).replace(/^\/+/, ""); }
+  catch { return new Response("Invalid path", { status: 400 }); }
+  // basename only: this host serves staged uploads, never an arbitrary path on disk.
+  const target = path.join(visionUploadsDir(), path.basename(name));
   try {
     return await net.fetch(pathToFileURL(target).toString());
   } catch {
@@ -2252,23 +2344,23 @@ app.on("window-all-closed", () => {
 });
 
 let quitting = false;
+let checkingQuit = false;
 app.on("before-quit", (event) => {
   if (quitting) return;
   // Always wait for stop on quit (Cmd+Q / Dock → Quit). macOS Seatbelt shells
   // are detached; skipping this leaves orphan `sh -lc` / find / rg processes.
   event.preventDefault();
-  quitting = true;
-  workspaceWatchers.close();
-  closeAllBrowserPopups();
-  closeAllDetachedBrowserWindows();
-  Promise.all([
-    historyMaintenance.cancel(),
-    agentManager.stopAll(),
-    sideChatManager.stopAll(),
-    terminalManager.stopAll(),
-    delegationCoordinator?.close() ?? Promise.resolve(),
-  ])
-    .catch(() => undefined)
-    .then(() => sessionIndex.close())
-    .finally(() => app.exit(0));
+  if (checkingQuit) return;
+  checkingQuit = true;
+  void (windowCloseGuard?.request("quit") ?? Promise.resolve(true)).then((allow) => {
+    checkingQuit = false;
+    if (!allow) return;
+    quitting = true;
+    workspaceWatchers.close(); gitIpc?.dispose(); fileIpc?.dispose(); reviewIpc?.dispose(); for (const host of reviewHosts.values()) void host.stop().catch(() => undefined);
+    closeAllBrowserPopups(); closeAllDetachedBrowserWindows();
+    return Promise.all([
+      historyMaintenance.cancel(), gitIpc?.idle() ?? Promise.resolve(), fileIpc?.idle() ?? Promise.resolve(),
+      agentManager.stopAll(), sideChatManager.stopAll(), terminalManager.stopAll(), delegationCoordinator?.close() ?? Promise.resolve(),
+    ]).catch(() => undefined).then(() => sessionIndex.close()).finally(() => app.exit(0));
+  });
 });

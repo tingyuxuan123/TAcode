@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { workspacePreviewUrl } from "../../shared/preview";
+import { projectPreviewUrl } from "../files/preview-registry";
 
 /**
  * 内置浏览器的本地文件预览解析（对齐 PI-Desktop 的 work-panel browser：支持直接打开
@@ -43,7 +43,7 @@ function rootOf(root: string | undefined): { lexical: string; real: string } | u
 export function resolveWorkspacePreview(
   input: unknown,
   root: string | undefined,
-  options: { explicit?: boolean } = {},
+  options: { explicit?: boolean; previewUrl?: (root: string, relative: string) => string } = {},
 ): WorkspacePreviewTarget | undefined {
   const raw = typeof input === "string" ? input.trim() : "";
   if (!raw) return undefined;
@@ -75,7 +75,7 @@ export function resolveWorkspacePreview(
     return undefined;
   }
   if (!inside(rootPaths.real, real)) return undefined;
-  const relative = path.relative(rootPaths.real, real).split(path.sep).join("/");
+  const relative = path.relative(rootPaths.lexical, path.resolve(candidate)).split(path.sep).join("/");
   if (!relative) return undefined;
-  return { file: real, url: workspacePreviewUrl(relative) };
+  return { file: real, url: (options.previewUrl ?? projectPreviewUrl)(rootPaths.lexical, relative) };
 }

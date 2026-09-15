@@ -1111,6 +1111,36 @@
 - 同本仓库 331 文件副本、交替六轮，后五轮检查中位数 **68.14 → 12.07 ms**，总耗时 **88.69 → 32.82 ms**，重复全文读取 **662 → 0 次**；首轮检查 **77.13 → 24.26 ms**。条件/原始数据见 `docs/ux-08-checkpoint-performance.md` 和 JSON，不将本地 APFS 样本外推到所有文件系统。
 - 下一项：UX-09 完整工作区文件检索与共享索引，处理深层文件和目录数量截断。整份目标继续 active。
 
+## 2026-09-13：文件与审查完整复刻专项入口
+
+- 专项在独立工作树 `.worktrees/file-review-workbench` / `codex/file-review-workbench` 实施，不覆盖原工作区正在运行的优化任务。
+- 完整范围见 `docs/file-review-workbench.md`；15 项验收见 `.agents/file-review/features.json`；详细进度见 `.agents/file-review/progress.md`。
+- FR-01 基础组件与离线 Electron 验收完成，120 文件 / 1027 测试、typecheck 通过。下一项 FR-02 Git 读取；总目标未完成，原 UX 清单不在本阶段改动。
+
+## 2026-09-13：文件与审查专项 FR-02
+
+- 独立 Git 读取服务及 26 个真实仓库用例完成；四种范围、worktree、特殊路径、二进制/冲突状态和读取竞态均有验证。
+- 全量 121 文件 / 1053 测试、typecheck 通过。详细进度与边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-02.md`。
+- 下一项 FR-03：将真实 Git 快照、项目隔离和订阅接到审查组件。仍在独立分支实施，原工作区不切换/重置。
+
+## 2026-09-14：文件与审查专项 FR-03
+
+- 真实 Git 审查、主进程订阅/授权、项目与旧响应隔离、隐藏释放和元数据呈现完成；计划确认与 Agent /undo 入口保留。
+- 全量 125 文件 / 1075 用例（4 个测试进程）、typecheck、build、组件及生产 Git Electron smoke 通过。外部变化刷新 385 / 390 ms，0 网络和 renderer 错误；详见 `.agents/file-review/progress.md`、`docs/file-review-fr-03.md`。
+- 下一项 FR-04：真实暂存、取消暂存和可恢复还原。全部复刻目标继续 active，本阶段没有改动原工作区或既有 UX 清单。
+
+## 2026-09-14：文件与审查专项 FR-04
+
+- 真实 Git 暂存、取消暂存和可恢复还原完成，覆盖整批/文件/hunk、快照和 index 锁保护、补丁预检、原始文件事务与持久恢复点；Git 还原与 Agent `/undo` 保持独立。
+- 全量 **126 文件 / 1098 测试**、typecheck、build 通过；生产 Git Electron 烟测 13 阶段通过，外部刷新 342/307 ms，0 网络、0 renderer 错误，关闭后资源计数 0。详细证据见 `docs/file-review-fr-04.md`、`docs/file-review-reference/fr-04-result.json`。
+- 下一项：FR-05 提交与推送闭环。完整复刻目标继续 active；FR-04 在独立分支 `codex/file-review-workbench` 提交，未切换或重置原工作区。
+## 2026-09-14：文件审查 FR-05——提交与推送闭环
+
+- 在独立工作树 `codex/file-review-workbench` 完成 FR-05。新增真实 `GitCommitService` 和共享 `GitWriteQueue`，提交、推送、提交并推送均绑定不可变 snapshot，确认时复核项目授权、HEAD/分支/上游/index 版本和实际推送目标；子目录提交保护项目外暂存内容，不接收 renderer 路径或补丁。
+- 工作台加入提交/推送对话框：显示真实暂存文件与增删统计，填写并预览提交信息，选择远端和分支；支持无暂存直接推送、无上游目标选择。hook、身份、鉴权、推送拒绝、部分成功、过期和取消有具体结果，成功自动关闭并刷新。
+- 收尾修复不同名称目标分支的 HEAD 推送、目标规范化、排队取消、准备期间关闭、迟到 token 清理、post-commit hook 取消后的本地提交结果、URL/错误详情脱敏，以及 420px 英文工具栏溢出。
+- 验证：`pnpm test --reporter=dot --maxWorkers=1`（**127 文件 / 1121 用例**）、`pnpm typecheck`、`pnpm build`、`git diff --check`、生产 Electron `pnpm test:git-review` 及 `pnpm test:file-review` 通过。Git 烟测 **23 阶段**，refresh **305/311ms**，网络 0、renderer 错误 0、关闭后资源计数为 0。构建和全量测试顺序运行，文件监听抖动用例最终单进程通过。详情及截图 `docs/file-review-fr-05.md`。
+- 下一项 FR-06：生产文件索引和读取服务；总复刻目标仍为 active。
 ## 2026-09-13：UX-09 完整文件检索与共享索引
 
 - [x] 主进程建立完整路径索引，移除 8000 总文件/每目录 200 的静默截断；同根目录的并发请求共用扫描，已知文件增删只核对对应路径，目录改名只更新子树。保留最多 3 个工作区缓存，切回未监听的项目重新核对，刷新按钮可强制重建。索引与监听共用忽略规则，Skills 路径包含 `.agents` 与 `.pi`。
@@ -1250,3 +1280,73 @@
 - 验证：`pnpm typecheck` 通过；`npx vitest run src/renderer` **34 文件 / 298 测试通过**（新增 8 个纯策略断言）；`TACODE_SMOKE_ONLY=message-list node scripts/test-browser.mjs` 通过；**A/B 反向验证**：把 hook 临时换回 HEAD 版，同一条探针断言直接失败（`往上滚 24px 后 400ms 内被打回底部：距底 0px`），换回修复版即通过；块内跟随用 `stream-live-text` 夹具 A/B：旧 `codeblock.tsx` 在小幅上滚后增长把代码块拉回底部（4px→0），修复版保持（4px→154）且无手势时仍自动贴底；`pnpm test` 全量 **132 文件 / 1062-1063 测试通过**（`src/main/session-index.test.ts` 在并行跑时偶发 5s 超时，单跑 2.78s 通过，属磁盘争用，与本次改动无关）。
 - 文件：renderer/use-follow-scroll.ts（`scrollIntent` / `shouldReleaseFollow` / `shouldReacquireFollow` / `useScrollPin` + 手势与方向判据）、use-follow-scroll.test.ts、codeblock.tsx、execution-flow.tsx、scripts/message-list-smoke.ts。
 - 遗留：块内跟随（代码块/思考块）目前只有一次性探针验证，尚未固化成 `test-browser.mjs` 里的常驻冒烟；若要长期守护，可按同样方式加一个 `stream-live-text` 夹具入口（注意该夹具在围栏长度跨分段边界时会重建代码块，断言需先推两次让分段稳定）。
+## 2026-09-14：文件与审查专项 FR-06
+
+- 独立工作树吸收 UX-09/10，完成生产文件 API、稳定目录分页与共享完整路径搜索、UTF-8 文档版本/原子保存、路径订阅及旧 HTML/浏览器项目预览绑定。4 MiB 上限、BOM/CRLF/mode、失效游标、保存冲突、越界链接、原生监听失败与退出在途读取均有回归。
+- 最终全量 **134 文件 / 1145 用例**、typecheck、build、diff check 通过；新文件服务、文件组件、23 阶段 Git、BrowserPanel 以及既有 UX 文件索引/预览 Electron smoke 通过。文件服务外部更新 **133.5 ms**，关闭后订阅/watcher/在途读取为 0，网络与 renderer 错误为 0。详见 `.agents/file-review/progress.md`、`docs/file-review-fr-06.md`。
+- 下一项 FR-07 生产文件树与统一标签，当前专项 **6/15**。新编辑与统一文件界面尚待后续阶段，完整目标继续 active；本轮仅 FR-06，在隔离分支提交，原工作区及既有 UX passes 未修改。
+
+## 2026-09-14：文件与审查专项 FR-07 完成
+
+- 在独立工作树 `codex/file-review-workbench` 接入生产文件树、共享项目/路径文档和按项目/会话保存的统一标签。聊天 Markdown、工具过程/变更摘要、Git 与树打开同一文件入口；支持预览替换、双击固定、菜单/拖动/键盘排序、关闭其他文件、树搜索定位、宽度及精确滚动/选区恢复，App 移除旧 FileDrawer 挂载。
+- 修复整段磁盘更新和隐藏会话共享更新后的阅读位置；完善原生夹具准备条件并修复极窄 Composer 弹层坐标，未放宽断言。最终全量 **137 文件 / 1157 用例**、typecheck、build、diff check，通过 7 阶段生产文件工作台、5 阶段文件组件、23 阶段 Git、完整工作台/消息列表、真实 App 文件索引/文档及 BrowserPanel/live reload/resize 回归。
+- 工作台刷新 **43.0 ms**、真实 App 文档刷新 **175.6 ms**；工作台网络与 renderer 错误为 0，关闭后文件/Git 订阅与读取资源为 0。详细进度、截图和边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-07.md`。
+- 专项 **7/15**；下一条 FR-08 为生产编辑/保存、版本冲突及未保存内容保护，当前文件仍只读。完整目标保持 active，原工作区及既有 UX 清单未修改。
+
+## 2026-09-14：文件与审查专项 FR-08 完成
+
+- 在隔离工作树 `codex/file-review-workbench` 完成真实文本编辑、版本保存、外部冲突比较及未保存内容保护。新增恢复存储、原生关窗/退出握手与编辑确认组件，接入生产 IPC/preload/App、共享文档和统一标签；保存期间的新输入/撤销保留，BOM/CRLF/权限不丢，正常离开等待备份，独立进程重启恢复准确文字。
+- 最终全量 **139 文件 / 1170 用例**、typecheck、build、最终 renderer 构建与 diff check 通过；定向 **18 回归**、两个独立 Electron 进程 **12 阶段**、完整生产 App **3 阶段**通过，均自然退出码 0。文件工作台 **7 阶段**、文件组件 **5 阶段**、生产 Git **23 阶段**、BrowserPanel/live reload/resize、完整工作台/消息列表及 App 文件检索/预览回归通过；专项网络、renderer 错误及关闭后文件/Git 资源为 0。
+- 证据及边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-08.md`；正常离开等待恢复写入，强制结束/断电可能丢失 200 ms 内最后输入，无自动三方合并。专项 **8/15**，下一条 FR-09 文件管理与外部打开，本轮不启动；完整目标保持 active。
+- 分支仍隔离且未合并；原工作区及另一运行任务未修改、切换、重置或停止，既有 UX 清单与 FR-07 证据保持原样。
+
+## 2026-09-14：文件与审查专项 FR-09 完成
+
+- 在隔离工作树 `codex/file-review-workbench` 完成生产文件/目录新建、重命名/移动、系统废纸篓、相对/绝对路径复制、文件管理器定位和 VS Code/Cursor 外部打开及行定位。新增管理/外部服务、IPC/preload 与原生菜单，结构操作和保存串行，复核项目/路径/owner/版本/权限，拒绝覆盖已有目标。
+- 未保存确认与跨会话子树锁联动，成功迁移标签、活动文件及精确阅读/展开状态，删除移除标签且隔离其他项目；关闭/重载等待在途操作，损坏存储不阻断迁移。最终全量 **141 文件 / 1190 用例**、typecheck、build、diff check 通过；原生文件管理 **10 阶段**覆盖真实 APFS 大小写重命名及菜单/IPC/生产服务的系统 Trash，临时文件恢复并清理。
+- 完整生产 App **3 阶段**、独立编辑/恢复 **12 阶段**、文件工作台 **7 阶段**、组件 **5 阶段**、生产 Git **23 阶段**，BrowserPanel/live reload/resize、完整工作台/消息列表及 App 文件索引/预览回归通过。刷新工作台 **170.5ms**、App 文档 **168.8ms**、Git **327/333ms**；专项网络、renderer 错误和关闭后资源为 0，中英文最终截图已检查。
+- 证据及边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-09.md`。Windows 实际执行与分支整合待 FR-15，不实现跨卷复制移动；专项 **9/15**，下一条仅 **FR-10：多格式预览与大文件**，本轮不启动，完整目标保持 active。
+- 分支仍隔离且未合并；原工作区及另一运行任务未修改、切换、重置或停止，既有 UX 清单与 FR-07/08 证据保持原样。
+
+## 2026-09-14：文件与审查专项 FR-10 完成
+
+- 在隔离工作树 `codex/file-review-workbench` 完成多格式预览与大文件：Markdown/HTML 源码与预览、相对图片与链接、图片/SVG 签名识别与缩放、二进制类型大小和显式项目打开、空/缺失/失败/重试/加载/截断状态，以及超限文件的 256 KiB 分块只读与阅读位置持久化。
+- HTML 预览改为按项目绑定的内存快照（owner 绑定、单份 4 MiB+8 KiB、16 份/64 MiB 上限、导航与崩溃释放），脚本、相对资源、fetch 和存储都按项目隔离且无 Node/工作台桥；4 MiB 边界完整可编辑并真实保存，超限禁止任何部分写回。
+- 修复本轮发现的真实缺陷：HTML 预览重新激活偶发 15 秒不刷新（修复前 22 次运行失败 4 次）。原因是预览 effect 依赖整个 document 对象并在旧文档仍加载时改写活动 iframe 的 `src`，Chromium 丢弃了这次导航。改为只依赖文档版本、每份快照独立 iframe 元素、替换后才释放旧快照；修复后同一烟测连续 **12 次全部通过**。
+- 最终全量 **142 文件 / 1197 用例**、typecheck、build、diff check 通过；原生格式烟测 **10 阶段**遍历 **32 个分块**并准确保存 4 MiB，结束后资源与快照为 0；编辑/重启恢复 **12 阶段**、完整生产 App 退出 **3 阶段**、文件工作台 **7 阶段**（162.8 ms）、文件组件 **5 阶段**、生产 Git **23 阶段**（324/340 ms）、BrowserPanel/live reload/resize、真实 App 文档（127.2 ms）与文件检索回归全部通过。
+- 夹具 CSP 已与生产 `index.html` 对齐，App 文档烟测的截断文案断言按新文案更新（仍断言截断状态），未放宽行为断言。证据及边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-10.md`。
+- 分块只读为设计约束，Windows、性能与分支整合待 FR-15；专项 **10/15**，下一条仅 **FR-11：最近一轮审查**，本轮不启动，完整目标保持 active。分支仍隔离且未合并，原工作区及既有 UX 清单未修改。
+
+## 2026-09-14：文件与审查专项 FR-11 完成
+
+- 在隔离工作树 `codex/file-review-workbench` 完成最近一轮审查：按真实运行时事件流取 `agent_start` 至 `agent_settled`/停止为轮次边界，开始与结束各用项目私有 index 抓一份工作区树写入仓库对象库，审查范围 `baseTree..targetTree` 复用既有 Git 读管线，只读且不触碰用户 index/HEAD/refs。
+- 覆盖本轮同步命令、已完成异步命令与未跟踪文件的实际落盘差异；结束时仍在运行的命令在快照上标记命令与 processId。快照生成后其后变化只进实时范围；没有记录、对象被回收、抓取失败、正在抓取四种状态分别提示且都不显示 diff，绝不用当前内容冒充历史。新增 `TurnSnapshotService`（按项目隔离、抓取串行、在途可等、保留最近 8 份）。
+- 验证：`pnpm test:git-review` **27 阶段**通过（含 4 个新阶段），外部刷新 **325/335 ms**，样例仓库抓取基线 **16 ms** / 目标 **10 ms**，网络与 renderer 错误 0、关窗后资源 0；新增 `turn-snapshot.test.ts` **8 用例**；最终全量 **143 文件 / 1206 用例**、typecheck、build 通过，格式/文件工作台/组件/编辑重启/生产 App 退出/BrowserPanel/真实 App 文档回归全部通过。
+- 证据及边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-11.md`。快照对象为无 ref 的悬空对象，主动回收后报失效；基线与首个写入并发时给出覆盖告警；同项目两会话并发时区间会包含窗口内对方写入；Windows 与 2 万文件性能待 FR-15。专项 **11/15**，下一条仅 **FR-12：行级意见与持久化**，本轮不启动，完整目标保持 active。
+
+## 2026-09-14：文件与审查专项 FR-12 完成
+
+- 在隔离工作树 `codex/file-review-workbench` 完成 diff 行级意见：行号列拖动或 shift 点击选中单行/多行，输入框带 IME 保护并用 `Mod-Enter`/按钮提交；每条意见绑定比较范围、快照、文件版本、路径、侧与行区间并保留原始片段，代码变化后在行内与列表标注「已过期」。
+- 新增右侧「审查意见」列表（定位、标记解决/重新打开、删除、显示已解决）和「加入对话草稿」：把勾选意见连同准确位置与片段写入当前输入框，用户发送后进入修复流程；意见按项目 + 会话隔离并跨重载保留，损坏/越界/超长数据丢弃。
+- 验证：`pnpm test:git-review` **32 阶段**通过（含 5 个新阶段），外部刷新 **328/333 ms**，网络与 renderer 错误 0、关窗后资源 0；新增 `review-comments.test.ts` **6 用例**；最终全量 **144 文件 / 1212 用例**、typecheck、build 通过，文件工作台/组件/格式/BrowserPanel/真实 App 文档回归全部通过。
+- 证据及边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-12.md`。意见不进仓库与会话文件、不随分支移动；过期判定不自动挪行号；行内按钮可能被底部动作条覆盖需滚动。专项 **12/15**，下一条仅 **FR-13：AI 审查**，本轮不启动，完整目标保持 active。
+
+## 2026-09-14：文件与审查专项 FR-13 摸底（未开始实现）
+
+- 本轮连续完成 FR-10（多格式预览与大文件，`1a2cf2a`）、FR-11（最近一轮不可变快照，`b3125cf`）、FR-12（行级意见与持久化，`98c9366`），三项均带原生证据与文档；专项 **12/15**。
+- FR-13 只做摸底、未落代码：已确认可复用运行时 `code-reviewer` 角色定义（只读工具 + readonly 命令白名单）、`DelegationCoordinator` 子会话链路与完成契约、`AgentHost` 每会话 worker、`TurnSnapshotService.resolve` 的冻结范围、以及本轮建立的行级 annotation 渲染路径。`passes` 保持 false。
+- 剩余：**FR-13 AI 审查**、**FR-14 视觉与交互完整性**、**FR-15 性能与发布验收**（其中 Windows 实机证据无法在本次 macOS 环境取得，必须由具备 Windows 的会话补齐）。完整目标保持 active，分支仍隔离且未合并。
+
+## 2026-09-14：文件与审查专项 FR-13 完成
+
+- 在隔离工作树 `codex/file-review-workbench` 完成 AI 审查：主进程 `ReviewCoordinator` 按冻结范围只读运行独立 worker（复用 `AgentHost` 与当前会话模型配置，硬性只读工具集与只读命令白名单、plan 权限、read-only 沙箱、轮数上限），范围提示携带两侧真实行数并按预算裁剪，问题经过路径/侧/行号机械校验后才上屏，未通过的条目连同原因单列。
+- 界面新增「AI 审查」面板（状态、覆盖说明、严重程度、已核实/推断、证据、定位、过期标记），支持取消、失败重试、每项目 20 次历史与重载读取；窗口重载/销毁取消该窗口的审查。离线烟测用可注入 runner 固定模型输出，范围/提示词/校验/状态机/持久化/IPC/渲染走生产代码。
+- 验证：`pnpm test:git-review` **37 阶段**通过（含 5 个新阶段），外部刷新 **339/302 ms**，网络与 renderer 错误 0、关窗后资源 0；新增单测 **15 用例**；最终全量 **145 文件 / 1227 用例**、typecheck、build 通过，文件组件/文件工作台/格式烟测/真实 App 文档/BrowserPanel 回归通过。
+- 证据及边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-13.md`。真实模型输出质量不在自动化验收内；右侧上下文栏底部按钮被文件树挤出可视区的问题留给 FR-14。专项 **13/15**，下一条 **FR-14 视觉与交互完整性**，本轮未开始，完整目标保持 active。
+
+## 2026-09-15：文件与审查专项 FR-14 完成
+
+- 在隔离工作树 `codex/file-review-workbench` 完成视觉与交互完整性：新增 `pnpm test:ui-review` 状态核对脚本，在参考图实测视口与 DPR 下核对默认/展开/筛选/选中/菜单/窄面板六个状态，并覆盖深色映射、中英文、输入法、键盘与无障碍，**18 项通过、16 张截图**。
+- 修复两个真实布局缺陷：审查列里文件树占满整列把面板底部操作挤出可视区（改为文件树吸收剩余高度、面板不收缩、面板内容自滚动，并新增面板预算断言）；窄窗内容区被挤到 180px（窗口变窄只收缩显示宽度，宽度偏好与持久化不变，窗口变宽恢复）。旧抽屉确认未挂载，浏览器/终端/子会话标签、计划卡与 `/undo` 由既有烟测覆盖并重跑。
+- 验证：全量 **145 文件 / 1227 用例**、typecheck、build、18 项状态核对、文件工作台 7 阶段（含宽度持久化）、格式烟测、Git 审查 37 阶段、文件组件 5 阶段、BrowserPanel 与真实 App 文档全部通过。
+- 证据及边界见 `.agents/file-review/progress.md`、`docs/file-review-fr-14.md`。不做像素级叠图，参考图图标级差异未逐一复刻。专项 **14/15**，下一条 **FR-15 性能、Windows 与最终整合**（Windows 实机证据需具备 Windows 的环境），本轮未开始，完整目标保持 active。

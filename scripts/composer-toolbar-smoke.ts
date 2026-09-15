@@ -26,7 +26,12 @@ export async function verifyComposerToolbar(win: BrowserWindow): Promise<{ icons
       return r.height===32 && buttons.every(el=>{const b=el.getBoundingClientRect();return b.left>=r.left&&b.right<=r.right+1&&Math.abs((b.top+b.bottom-r.top-r.bottom)/2)<=1});
     })()`), "toolbar must remain within one row with a visible send/stop button");
   };
-  const popupInside = (selector: string) => evaluate(`(() => {const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight})()`);
+  const popupInside = async (selector: string) => {
+    const rect = await evaluate(`(() => {const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {width:r.width,left:r.left,right:r.right,top:r.top,bottom:r.bottom,viewportWidth:innerWidth,viewportHeight:innerHeight}})()`);
+    assert(rect.width > 0 && rect.left >= 0 && rect.right <= rect.viewportWidth && rect.top >= 0 && rect.bottom <= rect.viewportHeight,
+      `${stage}: ${selector} ${JSON.stringify(rect)}`);
+    return true;
+  };
   await mode("full");
   await oneRow();
   await wait(async () => await evaluate("document.querySelector('.prompt-input').textContent==='缩放后保留这条输入'"));

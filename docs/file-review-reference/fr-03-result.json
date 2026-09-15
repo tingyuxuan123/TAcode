@@ -1,0 +1,35 @@
+{
+  "ok": true,
+  "stages": [
+    "Production preload, main Git service, real index/worktree comparison",
+    "Continuous diff, file-tree navigation, split layout and full-context expansion",
+    "Binary, oversized, empty and permission metadata stay separate from source",
+    "Staged, commit, root commit, branch choice, merge base and reference-error recovery",
+    "External file and index changes refresh the active snapshot",
+    "Delayed project A response cannot overwrite project B",
+    "Hidden tab/drawer and simulated page frame suspension release reads and workers",
+    "Non-repository initialization and explicit opened-project authorization",
+    "Renderer reload/window close cleanup and offline dark/English rendering"
+  ],
+  "refreshMs": [
+    385,
+    390
+  ],
+  "networkRequests": [],
+  "rendererErrors": [],
+  "gitHead": "2ef48d0c4ac8b705d0221f410d93a6e34cf6638d",
+  "rootCommit": "6343b43aa4af22b15855e08aeef8e6df33eaf156",
+  "serviceAfterClose": {
+    "projects": 0,
+    "subscriptions": 0,
+    "reads": 0
+  },
+  "environment": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "cpu": "Apple M5",
+    "electron": "37.10.3",
+    "node": "22.21.1",
+    "chromium": "138.0.7204.251"
+  }
+}

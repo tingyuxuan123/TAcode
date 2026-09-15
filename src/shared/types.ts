@@ -275,6 +275,7 @@ export interface WorkspaceReadResult {
 
 export interface DesktopApi {
   platform: NodeJS.Platform;
+  files: import("./files").FilesApi;
   capabilities: import("./capabilities").CapabilitiesApi;
   skills: import("./capabilities").SkillsApi;
   mcp: import("./capabilities").McpApi;
@@ -298,6 +299,9 @@ export interface DesktopApi {
     minimize(): Promise<void>;
     toggleMaximize(): Promise<void>;
     close(): Promise<void>;
+    setCloseGuardReady(ready: boolean): void;
+    onCloseRequest(listener: (request: { id: string; action: "close" | "quit" }) => void): () => void;
+    answerCloseRequest(id: string, allow: boolean): void;
   };
   workspace: {
     choose(): Promise<string | null>;
@@ -310,6 +314,8 @@ export interface DesktopApi {
     restore(files: Array<{ path: string; content: string | null; mode?: number }>, cwd?: string): Promise<{ restored: string[]; failed: Array<{ path: string; error: string }> }>;
     onChanged(listener: (root: string, paths?: string[]) => void): () => void;
   };
+  git: import("./git").GitApi;
+  review: import("./review").ReviewApi;
   vision: {
     config(): Promise<{
       provider?: "deepseek" | "custom";

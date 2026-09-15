@@ -81,10 +81,15 @@ export function PromptToolbar({ children, action, down }: { children: ReactNode;
       const below = window.innerHeight - rect.bottom - 8;
       const above = rect.top - 8;
       const useBelow = down ? below >= height || below > above : above < height && below > above;
+      // The composer's backdrop filter establishes a containing block.
+      const parent = panel.offsetParent as HTMLElement | null;
+      const origin = parent?.getBoundingClientRect();
+      const left = (origin?.left ?? 0) + (parent?.clientLeft ?? 0) - (parent?.scrollLeft ?? 0);
+      const top = (origin?.top ?? 0) + (parent?.clientTop ?? 0) - (parent?.scrollTop ?? 0);
       setPlacement({
         width,
-        left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
-        ...(useBelow ? { top: rect.bottom + 6 } : { bottom: window.innerHeight - rect.top + 6 }),
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) - left,
+        top: (useBelow ? rect.bottom + 6 : rect.top - height - 6) - top,
       });
     };
     place();

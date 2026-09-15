@@ -1,0 +1,118 @@
+diff --git a/dist/components/CodeView.js b/dist/components/CodeView.js
+index 2fd5213232a3c550d483dcdf61497ed40f070a9b..17897d37ae52f7a1096239f2d7d849c7292d9905 100644
+--- a/dist/components/CodeView.js
++++ b/dist/components/CodeView.js
+@@ -180,6 +180,8 @@ var CodeView = class CodeView {
+ 	scrollAnimation;
+ 	root;
+ 	resizeObserver;
++	resizeFrame;
++	pendingResizeEntries = new Map();
+ 	container = document.createElement("div");
+ 	stickyContainer = document.createElement("div");
+ 	stickyOffset = document.createElement("div");
+@@ -401,6 +403,9 @@ var CodeView = class CodeView {
+ 		};
+ 	}
+ 	reset() {
++		if (this.resizeFrame != null) cancelAnimationFrame(this.resizeFrame);
++		this.resizeFrame = void 0;
++		this.pendingResizeEntries.clear();
+ 		dequeueRender(this.computeRenderRangeAndEmit);
+ 		this.clearReadySubscription();
+ 		this.restoreScrollInteractions();
+@@ -1789,6 +1794,16 @@ var CodeView = class CodeView {
+ 		this.scrollAnimation = void 0;
+ 	};
+ 	handleResize = (entries) => {
++		for (const entry of entries) this.pendingResizeEntries.set(entry.target, entry);
++		if (this.resizeFrame != null) return;
++		this.resizeFrame = requestAnimationFrame(() => {
++			this.resizeFrame = void 0;
++			const pending = [...this.pendingResizeEntries.values()];
++			this.pendingResizeEntries.clear();
++			if (this.root != null) this.applyResizeEntries(pending);
++		});
++	};
++	applyResizeEntries = (entries) => {
+ 		let shouldRender = false;
+ 		for (const entry of entries) if (entry.target === this.stickyContainer) {
+ 			const blockSize = entry.borderBoxSize[0].blockSize;
+diff --git a/dist/managers/ResizeManager.js b/dist/managers/ResizeManager.js
+index 9724cb1e344af1ac8763b592f671a9ceb63f1a76..e5db37f9b83251ef2e742f949f531cea96ed97d4 100644
+--- a/dist/managers/ResizeManager.js
++++ b/dist/managers/ResizeManager.js
+@@ -1,6 +1,8 @@
+ //#region src/managers/ResizeManager.ts
+ var ResizeManager = class ResizeManager {
+ 	static resizeObserver;
++	static resizeFrame;
++	static pendingResizeEntries = new Map();
+ 	static managersByElement = /* @__PURE__ */ new Map();
+ 	static getResizeObserver() {
+ 		const resizeObserver = ResizeManager.resizeObserver ?? new ResizeObserver(ResizeManager.handleSharedResizeEntries);
+@@ -8,6 +10,16 @@ var ResizeManager = class ResizeManager {
+ 		return resizeObserver;
+ 	}
+ 	static handleSharedResizeEntries(entries) {
++		for (const entry of entries) ResizeManager.pendingResizeEntries.set(entry.target, entry);
++		if (ResizeManager.resizeFrame != null) return;
++		ResizeManager.resizeFrame = requestAnimationFrame(() => {
++			ResizeManager.resizeFrame = void 0;
++			const pending = [...ResizeManager.pendingResizeEntries.values()];
++			ResizeManager.pendingResizeEntries.clear();
++			ResizeManager.applySharedResizeEntries(pending);
++		});
++	}
++	static applySharedResizeEntries(entries) {
+ 		const entriesByManager = /* @__PURE__ */ new Map();
+ 		for (const entry of entries) {
+ 			const manager = ResizeManager.managersByElement.get(entry.target);
+@@ -18,6 +30,8 @@ var ResizeManager = class ResizeManager {
+ 		}
+ 		for (const [manager, managerEntries] of entriesByManager) manager.handleResizeEntries(managerEntries);
+ 	}
++	resizeFrame;
++	pendingEntries = /* @__PURE__ */ new Map();
+ 	observedNodes = /* @__PURE__ */ new Map();
+ 	setup(pre, { disableAnnotations, columnVariables = "apply" }) {
+ 		const annotationUpdates = /* @__PURE__ */ new Set();
+@@ -150,6 +164,9 @@ var ResizeManager = class ResizeManager {
+ 		observedNodes.clear();
+ 	}
+ 	cleanUp() {
++		if (this.resizeFrame != null) cancelAnimationFrame(this.resizeFrame);
++		this.resizeFrame = void 0;
++		this.pendingEntries.clear();
+ 		for (const element of this.observedNodes.keys()) this.unobserve(element);
+ 		this.observedNodes.clear();
+ 	}
+@@ -167,13 +184,28 @@ var ResizeManager = class ResizeManager {
+ 		if (owner == null) return;
+ 		else if (owner !== this) throw new Error("ResizeManager.unobserve: element is owned by another ResizeManager");
+ 		managersByElement.delete(element);
++		this.pendingEntries.delete(element);
++		ResizeManager.pendingResizeEntries.delete(element);
+ 		resizeObserver?.unobserve(element);
+ 		if (resizeObserver != null && managersByElement.size === 0) {
++			if (ResizeManager.resizeFrame != null) cancelAnimationFrame(ResizeManager.resizeFrame);
++			ResizeManager.resizeFrame = void 0;
++			ResizeManager.pendingResizeEntries.clear();
+ 			resizeObserver.disconnect();
+ 			ResizeManager.resizeObserver = void 0;
+ 		}
+ 	}
+ 	handleResizeEntries(entries) {
++		for (const entry of entries) this.pendingEntries.set(entry.target, entry);
++		if (this.resizeFrame != null) return;
++		this.resizeFrame = requestAnimationFrame(() => {
++			this.resizeFrame = void 0;
++			const pending = [...this.pendingEntries.values()];
++			this.pendingEntries.clear();
++			this.applyResizeEntries(pending);
++		});
++	}
++	applyResizeEntries(entries) {
+ 		const codeUpdates = /* @__PURE__ */ new Map();
+ 		const annotationUpdates = /* @__PURE__ */ new Set();
+ 		for (const entry of entries) {

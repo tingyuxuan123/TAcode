@@ -66,6 +66,8 @@ export async function verifyPanelResize(win: BrowserWindow) {
 
 /** Exercise the actual Chat layout, its stored width and ResizeObserver. */
 export async function verifyAdaptivePanelWidth(win: BrowserWindow): Promise<Buffer> {
+  win.focus(); win.webContents.focus();
+  await win.webContents.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
   const read = () => win.webContents.executeJavaScript(`(() => {
     const body = document.querySelector('.chat-body');
     const panel = document.querySelector('.inspect-shell');

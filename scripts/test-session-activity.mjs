@@ -31,7 +31,7 @@ try {
       window.addEventListener('error', e => { if (e.message.includes('ResizeObserver loop')) window.__resizeWarnings.push(window.__resizeTrace.slice()); });
     })()` }];
   } };
-  await buildRenderer({ configFile: false, plugins: [baselinePlugin, resizeDiagnostic, rendererPerformancePlugin(performanceFixture), react()], resolve: { alias: performanceFixture ? [{ find: /^react-dom\/client$/, replacement: "react-dom/profiling" }] : [] }, base: "./", logLevel: "warn", build: { outDir: path.join(output, "renderer"), emptyOutDir: true, rollupOptions: { input: "index.html" } } });
+  await buildRenderer({ configFile: false, plugins: [baselinePlugin, resizeDiagnostic, rendererPerformancePlugin(performanceFixture), react()], resolve: { alias: performanceFixture ? [{ find: /^react-dom\/client$/, replacement: "react-dom/profiling" }] : [] }, base: "./", logLevel: "warn", worker: { format: "es" }, build: { outDir: path.join(output, "renderer"), emptyOutDir: true, rollupOptions: { input: "index.html" } } });
   const env = { ...process.env, TACODE_ACTIVITY_FIXTURE: path.join(output, "renderer/index.html") };
   delete env.ELECTRON_RUN_AS_NODE;
   const benchmark = process.env.TACODE_STARTUP_BENCHMARK === "1";

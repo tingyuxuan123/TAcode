@@ -1,5 +1,5 @@
 import { useCallback, useState, type ReactNode } from "react";
-import { ClipboardCheck, FolderOpen, Globe, MessageCirclePlus, Plug, Sparkles, SquareTerminal } from "lucide-react";
+import { ArrowLeft, ArrowRight, ClipboardCheck, FolderOpen, Globe, MessageCirclePlus, Pin, Plug, Sparkles, SquareTerminal, X } from "lucide-react";
 import { ConfirmDialog, PanelPicker, PanelTabs } from "../ui";
 import { useI18n } from "../i18n";
 import type { PermissionMode, ProviderStatus } from "../../shared/types";
@@ -15,6 +15,8 @@ import { SkillsPanel } from "../capabilities/skills-panel";
 import { McpPanel } from "../capabilities/mcp-panel";
 import { CapabilityRuntime } from "../capabilities/runtime-status";
 import "../capabilities/capabilities.css";
+import { useFileEditing } from "../workbench/file-editing";
+import { fileDocuments } from "../workbench/file-document-store";
 
 /** 侧边聊天是声明式临时会话：关闭有破坏性确认，「不再询问」记在 localStorage。 */
 const SIDE_CHAT_DONT_ASK_KEY = "sidechat:close-dont-ask";
@@ -40,7 +42,7 @@ export type SideChatPanelProps = {
 };
 
 /** 网页与审查共用顶部标签栏，切换标签时所有网页保持挂载。 */
-export function WorkbenchPanels({ panels, review, files, sideChatProps, onError, workspace, sessionPath, onUsePrompt }: {
+export function WorkbenchPanels({ panels, review, files, sideChatProps, onError, workspace, sessionPath, onUsePrompt, onOpenFile = panels.openFile }: {
   panels: ReturnType<typeof useBrowserPanels>;
   review: ReactNode;
   files: ReactNode;
@@ -50,8 +52,10 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
   workspace?: string;
   sessionPath?: string;
   onUsePrompt?(text: string): void;
+  onOpenFile?(path: string, options?: { preview?: boolean; literal?: boolean }): void;
 }) {
   const { t } = useI18n();
+  const editing = useFileEditing();
   const { active, dispatch, openPanel, openBrowser, openSideChat, closePanel, selectPanel } = panels;
   // 标签栏只显示当前主会话上下文的标签（侧边聊天、子会话标签跟会话走）；其他会话的实例保持挂载（display:none），切回即原样恢复。
   const tabs = visiblePanelTabs(panels);
@@ -59,8 +63,8 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
   // 快捷键提示跟随平台样式；浏览器暂无快捷键，不显示提示。
   const isMac = window.harness.platform === "darwin";
   const shortcutHint = (mac: Parameters<typeof t>[0], other: Parameters<typeof t>[0]) => (isMac ? t(mac) : t(other));
-  // 审查保留工作台内边距；其余面板自己管理滚动和内边距。
-  const flush = activeTab !== undefined && activeTab.type !== "review";
+  // Each panel owns its padding and scrolling, including the Git workbench.
+  const flush = activeTab !== undefined;
   const [pendingSideChatClose, setPendingSideChatClose] = useState<SideChatPanelTab | null>(null);
   const [dontAskClose, setDontAskClose] = useState(false);
   const [dirtyCapabilities, setDirtyCapabilities] = useState<Record<string, boolean>>({});
@@ -71,6 +75,10 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
   const requestClosePanel = (id: string) => {
     if (dirtyCapabilities[id]) { setPendingCapabilityClose(id); return; }
     const tab = tabs.find((item) => item.id === id);
+    if (tab?.type === "file" && tab.workspace) {
+      void editing.confirm(tab.workspace, [tab.path]).then((allow) => { if (allow) closePanel(id); }).catch((error) => onError(String(error)));
+      return;
+    }
     if (tab?.type === "side-chat" && !readSideChatDontAskClose()) {
       setDontAskClose(false);
       setPendingSideChatClose(tab);
@@ -138,11 +146,26 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
         : tab.type === "child-session"
           ? { id: tab.id, label: childSessionPanelLabel(tab.info, t("delegate.detailChildSession"), t("subagent.awaitingInput")), title: tab.info.sessionPath ?? tab.info.task ?? "" }
           : tab.type === "file"
-            ? { id: tab.id, label: filePanelLabel(tab.path), title: [tab.workspace, tab.path].filter(Boolean).join("/") }
+            ? { id: tab.id, label: filePanelLabel(tab.path), title: [tab.workspace, tab.path].filter(Boolean).join("/"), preview: Boolean(tab.preview), reorderable: true, dirty: Boolean(tab.workspace && fileDocuments().snapshot(tab.workspace, tab.path).dirty) }
             : { id: tab.id, label: browserPanelLabel(tab.page, t("browser.newTab")), title: [tab.page?.title, tab.page?.url].filter(Boolean).join("\n") })}
       active={active}
       onSelect={selectPanel}
       onCloseTab={requestClosePanel}
+      onPinTab={(id) => dispatch({ type: "pin-file", id })}
+      onReorder={(id, before, after) => dispatch({ type: "reorder", id, before, after })}
+      tabCommands={(id) => {
+        const index = tabs.findIndex((tab) => tab.id === id); const tab = tabs[index]; if (tab?.type !== "file") return [];
+        return [
+          ...(tab.preview ? [{ label: t("fileView.pin"), icon: <Pin size={14} />, run: () => dispatch({ type: "pin-file", id }) }] : []),
+          { label: t("panel.closeTab"), icon: <X size={14} />, run: () => requestClosePanel(id) },
+          { label: t("fileView.closeOthers"), icon: <X size={14} />, run: () => {
+            const other = tabs.filter((item) => item.type === "file" && item.id !== id).map((item) => item.type === "file" ? item.path : "");
+            void editing.confirm(tab.workspace, other).then((allow) => { if (allow) dispatch({ type: "close-other-files", id }); }).catch((error) => onError(String(error)));
+          } },
+          { label: t("fileView.moveLeft"), icon: <ArrowLeft size={14} />, disabled: index === 0, run: () => { if (tabs[index - 1]) dispatch({ type: "reorder", id, before: tabs[index - 1].id }); } },
+          { label: t("fileView.moveRight"), icon: <ArrowRight size={14} />, disabled: index === tabs.length - 1, run: () => { if (tabs[index + 1]) dispatch({ type: "reorder", id, before: tabs[index + 1].id, after: true }); } },
+        ];
+      }}
       addItems={[
         ...(!tabs.some((tab) => tab.type === "skills") ? [{ type: "skills", label: t("panel.skills"), icon: <Sparkles size={15} strokeWidth={1.8} /> }] : []),
         ...(!tabs.some((tab) => tab.type === "mcp") ? [{ type: "mcp", label: t("panel.mcp"), icon: <Plug size={15} strokeWidth={1.8} /> }] : []),
@@ -202,9 +225,9 @@ export function WorkbenchPanels({ panels, review, files, sideChatProps, onError,
           <ChildSessionPanel info={tab.info} delegationId={tab.key} active={tab.id === active && isPanelVisible(tab, panels.session)} />
         </div>
       ))}
-      {tabs.filter((tab) => tab.type === "file").map((tab) => (
+      {panels.tabs.filter((tab) => tab.type === "file").map((tab) => (
         <div key={tab.id} className="child-session-host" style={{ display: tab.id === active ? "flex" : "none" }}>
-          <FilePanel path={tab.path} workspace={tab.workspace ?? workspace} active={tab.id === active} />
+          <FilePanel path={tab.path} workspace={tab.workspace} scope={tab.scope} location={tab.location} reveal={tab.reveal} active={tab.id === active && isPanelVisible(tab, panels.session, panels.filesScope)} onOpen={onOpenFile} />
         </div>
       ))}
       {tabs.filter((tab) => tab.type === "browser").map((tab) => (

@@ -59,7 +59,6 @@ import {
   turnAnchors,
   upsertSessionSummary,
   type ChatMessage,
-  type FileChange,
   type RestoreFile,
   type SessionTodo,
 } from "./conversation";
@@ -68,10 +67,8 @@ import {
   AssistantTurn,
   Chat,
   Dots,
-  FileDrawer,
   FlowSpinner,
   Icon,
-  InspectPanel,
   Login,
   PromptBar,
   SelectionAskBar,
@@ -82,7 +79,10 @@ import {
 } from "./ui";
 import { MessageList, type MessageListHandle, type MessageListItem } from "./message-list";
 import { WorkbenchPanels } from "./browser/workbench-panels";
+import { GitReviewPanel } from "./workbench/git-review-panel";
+import { SessionReviewActions } from "./workbench/session-review-actions";
 import { useBrowserPanels } from "./browser/use-browser-panels";
+import { useFileEditing } from "./workbench/file-editing";
 import { FilesPanel } from "./browser/files-panel";
 import { useDelegationTabs } from "./browser/use-delegation-tabs";
 import { useDelegationState } from "./use-delegation-state";
@@ -598,20 +598,24 @@ export function App() {
   }, [loading, activeActivity]);
   const [fullscreen, setFullscreen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
-  const [preview, setPreview] = useState<FileChange>();
-  const browserPanels = useBrowserPanels(workspace);
+  const browserPanels = useBrowserPanels(workspace, activeSession);
   const panelDispatch = browserPanels.dispatch;
   // 侧边聊天锚定发起时的主会话（Codex 模式临时语义）：切换/新建会话后，
   // 不属于新会话的临时侧边聊天一并关闭，runtime 由面板卸载逻辑兜底停止。
   useEffect(() => {
     panelDispatch({ type: "session-changed", ...(activeSession ? { sourceSession: activeSession } : {}) });
   }, [activeSession, panelDispatch]);
+  const fileEditing = useFileEditing();
   const sidebarLayout = useSidebarLayout();
   // 用户点开子会话的统一入口（侧栏行 + 委派卡片行都走这里）。除了把标签放进右侧
   // 工作台，还要把**关着的右侧抽屉拉开**：标签加进了一个看不见的抽屉等于没反应——
   // 这正是「点了子会话没效果」的根因。自动开标签（useDelegationTabs 的后台刷新）
   // 直接走 browserPanels 原入口、不经过这里，不抢抽屉。
   const [drawerSignal, setDrawerSignal] = useState(0);
+  const openFileFromClick = useCallback((path: string, options?: { preview?: boolean; literal?: boolean }) => {
+    try { browserPanels.openFile(path, options); setDrawerSignal((value) => value + 1); }
+    catch { setToast(t("fileView.outsideProject")); }
+  }, [browserPanels.openFile, t]);
   const openChildSessionFromClick = useCallback(
     (key: string, info: ChildSessionPanelInfo, options?: { activate?: boolean }) => {
       // 子会话标签锚定父会话（可见性跟会话走）：点击都发生在当前主会话的上下文里，
@@ -800,6 +804,7 @@ export function App() {
   const todos = chatTodos.length ? chatTodos : featureTodos;
   const progressTasks = useMemo(() => collectProgressTasks(messages, tools), [messages, tools]);
   const planApproval = planAwaitingApproval(permission, running, todos);
+  const canUndoTurn = !running && workingFiles.some((file) => file.kind === "edit");
   const darwin = window.harness.platform === "darwin";
   const connected = activeChatProvider(providers);
   const modelOptions = useMemo(() => composerModelOptions(providers, model, chatModels), [providers, model, chatModels]);
@@ -930,6 +935,7 @@ export function App() {
     storagePath?: string,
     sourceDraftKey?: string,
   ) => {
+    if (!resume && workspace && cwd !== workspace && !await fileEditing.confirm(workspace, undefined, true)) return false;
     const seq = ++startSeq.current;
     const browsing = Boolean(sessionPath) && !seedMessage && !resume;
     let browsingSnapshot: AgentStartResult | undefined;
@@ -1202,7 +1208,7 @@ export function App() {
     } finally {
       if (seq === startSeq.current) setLoading(false);
     }
-  }, [agentErrorToast, applyThinkingForModel, dropAgentSession, mergeActivity, permission, refreshAgentSkills, resolveSandbox, syncAgentThinking, t]);
+  }, [agentErrorToast, applyThinkingForModel, dropAgentSession, fileEditing, mergeActivity, permission, refreshAgentSkills, resolveSandbox, syncAgentThinking, t, workspace]);
 
   /**
    * 委派子会话：默认在右侧面板开一个只读标签（不再抢占中间主会话区）。
@@ -1373,6 +1379,7 @@ export function App() {
   }, [applyThinkingForModel, loading, modelOptions, running, t, workspace]);
 
   const bindProject = useCallback(async (cwd: string): Promise<boolean> => {
+    if (workspace && cwd !== workspace && !await fileEditing.confirm(workspace, undefined, true)) return false;
     // Phase 3b：多会话并行下，切换项目不再因“当前 agent 仍在运行”而阻止——每个
     // 项目/会话有独立 worker，旧项目的会话切走后会继续后台运行，切回即可见。
     detachAgentView();
@@ -1393,11 +1400,10 @@ export function App() {
     sessionRef.current = undefined;
     setRunning(false);
     setUiRequest(undefined);
-    setPreview(undefined);
     setFeatureTodos([]);
     setAgentSkills([]);
     return true;
-  }, [applyThinkingForModel, detachAgentView]);
+  }, [applyThinkingForModel, detachAgentView, fileEditing, workspace]);
   const openFolder = useCallback(async () => {
     const selected = await window.harness.workspace.choose();
     if (!selected) return;
@@ -1416,7 +1422,6 @@ export function App() {
     setSteering([]);
     setRunning(false);
     setUiRequest(undefined);
-    setPreview(undefined);
     setFeatureTodos([]);
     setAgentSkills([]);
     setActiveSession(undefined);
@@ -1471,6 +1476,7 @@ export function App() {
   }, [mutateSession]);
 
   const removeProject = useCallback(async (path: string) => {
+    if (!await fileEditing.confirm(path, undefined, true)) return;
     const seq = startSeq.current;
     const runtimeId = runtimeIdRef.current;
     try {
@@ -1492,7 +1498,7 @@ export function App() {
     setUiRequest(undefined);
     sessionRef.current = undefined;
     if (runtimeId) await window.harness.agent.stop(runtimeId).catch(() => undefined);
-  }, [detachAgentView, workspace]);
+  }, [detachAgentView, fileEditing, workspace]);
 
   const applyUndo = useCallback(async (files: RestoreFile[]) => {
     const seq = startSeq.current;
@@ -2059,8 +2065,8 @@ export function App() {
             stopping={isLastGroup && stopping}
             errorRecovered={recovered}
             recoverableFailStreak={recoverableFailStreak}
-            onOpenFile={setPreview}
-            onOpenPath={(path) => browserPanels.openFile(path)}
+            onOpenFile={(file) => openFileFromClick(file.path, { literal: true })}
+            onOpenPath={(path) => openFileFromClick(path, { literal: true })}
             workspace={workspace}
             onRetry={showRetry ? () => {
               void sendMessage(t("composer.retryContinue"));
@@ -2132,6 +2138,11 @@ export function App() {
         ),
       });
     }
+    if (planApproval || canUndoTurn) {
+      items.push({ key: "session-review-actions", render: () => <SessionReviewActions key={transcriptKey}
+        planApproval={planApproval} canUndo={canUndoTurn} onApprovePlan={() => void approvePlan()}
+        onRefinePlan={(text) => void refinePlan(text)} onUndo={() => void undoLastTurn()} /> });
+    }
     // 全部命中时保持上一次的数组引用：MessageList / Virtualizer 的 props 在
     // 流式帧里真正稳定，虚拟列表内部不再做无谓的按帧对账。
     const previous = lastListItems.current;
@@ -2141,7 +2152,7 @@ export function App() {
     }
     lastListItems.current = items;
     return items;
-  }, [groups, recoverableStreaks, running, stopping, uiRequest, loading, messages, activeActivity, t]);
+  }, [groups, recoverableStreaks, running, stopping, uiRequest, loading, messages, activeActivity, t, planApproval, canUndoTurn, transcriptKey, approvePlan, refinePlan, undoLastTurn]);
 
   const forceStopCurrent = async () => {
     const runtimeId = runtimeIdRef.current;
@@ -2271,7 +2282,7 @@ export function App() {
   );
 
   return (
-    <PreviewContext.Provider value={(filePath) => setPreview({ path: filePath, additions: 0, deletions: 0 })}>
+    <PreviewContext.Provider value={openFileFromClick}>
     <div className={["app", darwin && "darwin", fullscreen && "fullscreen"].filter(Boolean).join(" ")}>
       <SidebarNav
         collapsed={sidebarLayout.collapsed}
@@ -2437,7 +2448,7 @@ export function App() {
           messageList.current?.scrollToAnchor(id, { onSettled: follow.reanchor });
         }} /></>}
         inspect={workspace || browserPanels.tabs.some((tab) => tab.type === "skills" || tab.type === "mcp") ? (
-          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace} sessionPath={activeSession} onUsePrompt={fillPrompt}
+          <WorkbenchPanels panels={browserPanels} onError={setToast} workspace={workspace} sessionPath={activeSession} onUsePrompt={fillPrompt} onOpenFile={openFileFromClick}
             sideChatProps={{
               workspace,
               provider: connected,
@@ -2448,19 +2459,9 @@ export function App() {
               effortLevels: thinkingLevels,
               permission,
             }}
-            review={
-            <InspectPanel
-              files={workingFiles}
-              todos={todos}
-              running={running}
-              planApproval={planApproval}
-              onApprovePlan={() => void approvePlan()}
-              onRefinePlan={(text) => void refinePlan(text)}
-              onOpen={(file) => browserPanels.openFile(file.path)}
-              onUndo={() => void undoLastTurn()}
-            />
-          }
-            files={<FilesPanel workspace={workspace} files={workingFiles} onOpen={browserPanels.openFile} />}
+            review={<GitReviewPanel projectRoot={workspace} sessionKey={activeSession ?? ""} onUsePrompt={fillPrompt} active={browserPanels.active === "review"}
+              onOpenFile={(path) => openFileFromClick(path, { literal: true })} onChooseProject={() => void openFolder()} onOpenTerminal={() => browserPanels.openPanel("terminal")} />}
+            files={<FilesPanel workspace={workspace} scope={browserPanels.filesScope} active={browserPanels.active === "files"} files={workingFiles} onOpen={openFileFromClick} />}
           />
         ) : undefined}
       >
@@ -2537,7 +2538,7 @@ export function App() {
               )}
             </div>
           )}
-          {(groups.length > 0 || Boolean(uiRequest)) && (
+          {(groups.length > 0 || Boolean(uiRequest) || planApproval || canUndoTurn) && (
             <MessageList
               ref={messageList}
               items={listItems}
@@ -2558,7 +2559,6 @@ export function App() {
         )}
       </Chat>
       </PanelActionsProvider>
-      {preview && <FileDrawer file={preview} workspace={workspace} onClose={() => setPreview(undefined)} />}
 
       {/* 选中主聊天文字 → 浮出「在侧边聊天中询问」（Codex 模式入口之一）。 */}
       {workspace && <SelectionAskBar onAsk={(text) => browserPanels.openSideChat(activeSession, text)} />}

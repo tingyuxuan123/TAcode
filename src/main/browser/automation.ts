@@ -60,6 +60,7 @@ export class BrowserAutomation {
     private readonly getMainWindow: () => BrowserWindow | undefined,
     /** 当前会话的工作区根：用于把工作区文件解析成内置浏览器可加载的预览 URL。 */
     private readonly getWorkspaceRoot?: () => string | undefined,
+    private readonly previewUrl?: (root: string, relative: string) => string,
   ) {}
 
   private session(runtimeId?: string): AgentSession {
@@ -341,7 +342,7 @@ export class BrowserAutomation {
   private destination(params: BrowserParams): { url: string; preview?: WorkspacePreviewTarget } {
     const pathParam = typeof params.path === "string" ? params.path : undefined;
     const urlParam = typeof params.url === "string" ? params.url : undefined;
-    const preview = resolveWorkspacePreview(pathParam ?? urlParam, this.getWorkspaceRoot?.(), { explicit: pathParam !== undefined });
+    const preview = resolveWorkspacePreview(pathParam ?? urlParam, this.getWorkspaceRoot?.(), { explicit: pathParam !== undefined, previewUrl: this.previewUrl });
     if (preview) return { url: preview.url, preview };
     if (pathParam !== undefined)
       throw new Error("未找到该工作区文件。path 必须是项目内已存在的文件（相对项目根，如 demo/index.html，或绝对路径）。");

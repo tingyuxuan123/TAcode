@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { workspacePreviewUrl } from "../../shared/preview";
+import { projectPreviewUrl } from "../files/preview-registry";
 import { resolveWorkspacePreview } from "./preview-target";
 
 let root = "";
@@ -29,13 +29,13 @@ describe("workspace preview target", () => {
   it("resolves project-relative files given as an explicit path", () => {
     expect(resolveWorkspacePreview("demo/index.html", root, { explicit: true })).toEqual({
       file: real(path.join(root, "demo", "index.html")),
-      url: workspacePreviewUrl("demo/index.html"),
+      url: projectPreviewUrl(root, "demo/index.html"),
     });
   });
 
   it("resolves absolute and file:// inputs inside the workspace", () => {
     const absolute = resolveWorkspacePreview(path.join(root, "pelican.html"), root);
-    expect(absolute?.url).toBe(workspacePreviewUrl("pelican.html"));
+    expect(absolute?.url).toBe(projectPreviewUrl(root, "pelican.html"));
     expect(resolveWorkspacePreview(`file://${path.join(root, "pelican.html")}`, root)?.file).toBe(real(path.join(root, "pelican.html")));
   });
 
