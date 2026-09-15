@@ -147,3 +147,13 @@
 - 接手本轮已完成 FR-10 / FR-11 / FR-12，三项都已提交并带原生证据（`1a2cf2a`、`b3125cf`、`98c9366`）；本次到这里停止，不开始 FR-13 的实现，避免留下未验证的半成品。
 - 已确认 FR-13 可直接复用的既有基础：运行时内置角色 `code-reviewer`（`src/runtime/subagents.ts`，`read_file`/`list_files`/`search_files`/`exec_command` + `execPolicy: "readonly"`、`thinkingLevel: "high"`）；子会话委派链路 `src/main/delegation-coordinator.ts` + `src/shared/delegation.ts`（`DELEGATION_COMPLETION_CONTRACT`：空闲后取最后一条带文本的 assistant 消息，不能把工具旁白当报告）；`AgentHost`/`AgentManager` 每会话一个 RPC worker；本轮新增的 `TurnSnapshotService.resolve(snapshotId)` 可作为「冻结范围」的来源，`GitReader` 已支持 `{kind:"turn"}` 只读范围，`ReviewWorkbench` 已具备范围栏、右侧栏与行级锚点（意见卡片的 annotation 机制可直接复用来渲染 AI 发现）。
 - FR-13 尚未开始实现，`passes` 保持 false。下一条仍为 **FR-13：AI 审查**。
+
+## 2026-09-14 FR-13 完成（AI 审查）
+
+- 新增主进程 `ReviewCoordinator` 与 IPC/preload/共享契约：一次审查绑定一个冻结范围（未暂存/已暂存/指定提交/相对分支/最近一轮）+ 可选附加要求，只读运行独立 worker。worker 复用 `AgentHost` 与当前会话的供应商/模型配置，但硬性只读：`activeTools` 只有 read_file/list_files/search_files/exec_command、`execPolicy: readonly`、权限 plan、沙箱 read-only、轮数上限 24；审查事件不进主会话视图/活动/快照记录。
+- 范围来自只读 Git 快照（与 diff 同源），每个文件带两侧真实行数，补丁按 1 MiB 预算裁剪并在覆盖说明里标出截断与二进制文件。结果先校验再上屏：路径必须在范围内、side 只能 old/new、行号必须落在该侧真实行数内（无行数据的文件只接受 line 0）；校验不过的条目连同原因与原始 JSON 单列，不丢弃。
+- 界面新增「AI 审查」面板：状态（运行/完成/失败/已取消）、覆盖文件数与说明、每条问题的高/中/低严重程度与已核实/推断、路径:行号与侧、证据全文，点问题跳到该行；范围或快照变化的旧审查标为「与当前范围不一致」。支持取消、失败重试（同范围同要求）、每项目保留最近 20 次历史并随渲染层重载从磁盘读回；窗口重载/销毁取消该窗口的审查。
+- 验证：`TACODE_GIT_REVIEW_REPORT=docs/file-review-reference/fr-13-git-result.json pnpm test:git-review` **37 阶段**通过（原 32 + 新 5），外部刷新 **339/302 ms**，网络与 renderer 错误 0、关窗后资源 0；新增单测 `review-findings`/`review-coordinator`/`review-range` 共 **15 用例**；最终全量 **145 文件 / 1227 用例**、typecheck、build 通过，文件组件 **5 阶段**、文件工作台 **7 阶段**、格式烟测、真实 App 文档与 BrowserPanel 回归通过。
+- 离线烟测用可注入 runner 固定模型输出（真实模型调用需联网与凭据，不在自动化验收内）；范围读取、提示词、校验、状态机、持久化、IPC 与渲染全走生产代码。
+- 已知待修（属 FR-14）：右侧上下文栏是「文件树 + 一个面板」，AI 审查面板展开时其底部重试按钮会被文件树挤出可视区，鼠标点不到；本轮烟测改为驱动与按钮相同的调用来验证状态机，界面可达性留给 FR-14。
+- 专项 **13/15**；下一条 **FR-14：视觉与交互完整性**，本轮未开始。提交仍在本工作树隔离分支、未合并；原工作区及另一运行任务未修改、切换、重置或停止，既有 UX 清单未改。

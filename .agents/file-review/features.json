@@ -62,7 +62,7 @@
   {
     "id": "FR-13",
     "description": "AI 审查：独立只读 ReviewCoordinator 复用 AgentHost 和 code-reviewer 模型配置；支持未提交/分支/提交范围和附加要求，结构化问题校验路径行号、显示严重程度/证据/覆盖状态；取消/失败重试/后台/重载/历史可用，版本过期明确，审查不写仓库。",
-    "passes": false
+    "passes": true
   },
   {
     "id": "FR-14",

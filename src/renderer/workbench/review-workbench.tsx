@@ -1,11 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDownToLine, ChevronsDownUp, Columns2, Folders, GitCommitHorizontal, History, MessageSquare, RefreshCw, RotateCcw, Rows2, WrapText } from "lucide-react";
+import { ArrowDownToLine, Bot, ChevronsDownUp, Columns2, Folders, GitCommitHorizontal, History, MessageSquare, RefreshCw, RotateCcw, Rows2, WrapText } from "lucide-react";
 import { useI18n } from "../i18n";
 import { WorkbenchButton, WorkbenchStats } from "./controls";
 import { WorkbenchFileTree } from "./file-tree";
 import { WorkbenchSurface } from "./surface";
 import { ancestorPaths } from "./tree-model";
 import { ReviewComments, useReviewComments } from "./review-comment-list";
+import { ReviewFindings, type ReviewScopeRef } from "./review-findings";
 import { newReviewComment, type ReviewComment, type ReviewCommentContext, type ReviewCommentScope } from "./review-comments";
 import type { DiffViewerHandle, DiffViewerProps } from "./diff-viewer";
 import { extractSnippet } from "./diff-viewer";
@@ -14,7 +15,7 @@ import type { ReviewScope, WorkbenchColorScheme, WorkbenchDiffFile } from "./typ
 const DiffViewer = lazy(() => import("./diff-viewer").then((module) => ({ default: module.DiffViewer })));
 const scopes: ReviewScope[] = ["unstaged", "staged", "commit", "branch", "lastTurn"];
 
-export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRefresh, onStageAll, onUnstageAll, onDiscardAll, onCommit, onMutation, onRecoveries, dialogs, busy = false, error, colorScheme = "light", onWorkerStateChange, onSelectionChange, initialTreeWidth = 374, scopeDetails, emptyState, paused = false, comparisonKey = scope, disabledScopes = [], commentScope, commentContext, onUsePrompt }: {
+export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRefresh, onStageAll, onUnstageAll, onDiscardAll, onCommit, onMutation, onRecoveries, dialogs, busy = false, error, colorScheme = "light", onWorkerStateChange, onSelectionChange, initialTreeWidth = 374, scopeDetails, emptyState, paused = false, comparisonKey = scope, disabledScopes = [], commentScope, commentContext, reviewScope, onUsePrompt }: {
   files: readonly WorkbenchDiffFile[];
   scope: ReviewScope;
   onScopeChange(scope: ReviewScope): void;
@@ -41,6 +42,8 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
   /** Line comments are scoped by project + conversation and bound to the displayed comparison. */
   commentScope?: ReviewCommentScope;
   commentContext?: ReviewCommentContext;
+  /** Read-only AI review of the displayed range; findings are bound to its range and snapshot. */
+  reviewScope?: ReviewScopeRef;
   onUsePrompt?(text: string): void;
 }) {
   const { t } = useI18n();
@@ -50,7 +53,10 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
   const [wrap, setWrap] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [selectedPath, setSelectedPath] = useState(files[0]?.path);
-  const [commentsOpen, setCommentsOpen] = useState(true);
+  // The review column hosts the file tree plus one context panel at a time: stacked
+  // panels squeezed the tree and pushed their own controls out of reach.
+  const [sidebar, setSidebar] = useState<"comments" | "findings" | "none">("comments");
+  const toggleSidebar = (panel: "comments" | "findings") => setSidebar((current) => current === panel ? "none" : panel);
   const [selectedComments, setSelectedComments] = useState<ReadonlySet<string>>(new Set());
   const comments = useReviewComments(commentScope, commentContext);
   useEffect(() => { setSelectedPath((current) => files.some((file) => file.path === current) ? current : files[0]?.path); }, [files]);
@@ -72,6 +78,10 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
   const expanded = useMemo(() => [...new Set(files.flatMap((file) => ancestorPaths(file.path)))], [files]);
   const stats = useMemo(() => files.reduce((total, file) => ({ additions: total.additions + file.additions, deletions: total.deletions + file.deletions }), { additions: 0, deletions: 0 }), [files]);
   const canMutate = scope === "unstaged" || scope === "staged";
+  const revealFinding = useCallback((path: string, line: number, side: "old" | "new") => {
+    setSelectedPath(path);
+    viewer.current?.revealLine(path, line, side === "new" ? "additions" : "deletions");
+  }, []);
   return <WorkbenchSurface kind="review" treeOpen={treeOpen} colorScheme={colorScheme} initialTreeWidth={initialTreeWidth} context={scopeDetails}
     toolbar={<>
       <select className="workbench-scope" aria-label={t("workbench.scope")} value={scope} onChange={(event) => onScopeChange(event.target.value as ReviewScope)}>
@@ -87,7 +97,8 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
       </WorkbenchButton>
       {onRefresh && <WorkbenchButton label={t("workbench.refresh")} disabled={busy} onClick={onRefresh}><RefreshCw size={15} className={busy ? "is-spinning" : ""} /></WorkbenchButton>}
       {canMutate && onRecoveries && <WorkbenchButton label={t("workbench.recoveries")} disabled={busy} onClick={onRecoveries}><History size={15} /></WorkbenchButton>}
-      <WorkbenchButton label={t("reviewComments.toggle")} aria-pressed={commentsOpen} data-review-comments-toggle={comments.comments.length} onClick={() => setCommentsOpen(!commentsOpen)}><MessageSquare size={15} /></WorkbenchButton>
+      <WorkbenchButton label={t("review.toggle")} aria-pressed={sidebar === "findings"} data-review-findings-toggle={sidebar === "findings" ? "open" : "closed"} onClick={() => toggleSidebar("findings")}><Bot size={15} /></WorkbenchButton>
+      <WorkbenchButton label={t("reviewComments.toggle")} aria-pressed={sidebar === "comments"} data-review-comments-toggle={comments.comments.length} data-review-comments-open={sidebar === "comments"} onClick={() => toggleSidebar("comments")}><MessageSquare size={15} /></WorkbenchButton>
       <WorkbenchButton label={t(treeOpen ? "workbench.hideTree" : "workbench.showTree")} aria-pressed={treeOpen} onClick={() => setTreeOpen(!treeOpen)}><Folders size={18} /></WorkbenchButton>
       {onCommit && <WorkbenchButton label={t("workbench.commitOrPush")} className="has-label is-outlined" disabled={busy} onClick={onCommit}><GitCommitHorizontal size={16} /><span>{t("workbench.commitOrPush")}</span></WorkbenchButton>}
     </>}
@@ -97,12 +108,13 @@ export function ReviewWorkbench({ files, scope, onScopeChange, onOpenFile, onRef
           setSelectedPath(path);
           if (viewer.current) viewer.current.revealFile(path); else pendingReveal.current = path;
         }} label={t("workbench.fileChanges")} />
-      {commentsOpen && <ReviewComments comments={comments.comments} files={files} context={commentContext} selected={selectedComments}
+      {sidebar === "comments" && <ReviewComments comments={comments.comments} files={files} context={commentContext} selected={selectedComments}
         onToggle={toggleComment} onResolve={comments.resolve} onDelete={comments.remove} onUsePrompt={onUsePrompt}
         onReveal={(comment) => {
           setSelectedPath(comment.path);
           if (viewer.current) viewer.current.revealLine(comment.path, comment.endLine, comment.side); else pendingReveal.current = comment.path;
         }} />}
+      {reviewScope && sidebar === "findings" && <ReviewFindings scope={reviewScope} active={!paused} expanded onReveal={revealFinding} />}
     </>}>
     {error && <div role="alert" className="workbench-notice">{error}</div>}
     {!paused && filtered.length ? <Suspense fallback={<p className="workbench-empty" role="status">{t("workbench.diffLoading")}</p>}>

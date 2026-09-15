@@ -315,6 +315,7 @@ export interface DesktopApi {
     onChanged(listener: (root: string, paths?: string[]) => void): () => void;
   };
   git: import("./git").GitApi;
+  review: import("./review").ReviewApi;
   vision: {
     config(): Promise<{
       provider?: "deepseek" | "custom";

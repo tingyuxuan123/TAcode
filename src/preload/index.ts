@@ -115,6 +115,13 @@ const api: DesktopApi = {
     applyCommit: (token) => ipcRenderer.invoke("git:apply-commit", token),
     cancelCommit: (token) => ipcRenderer.invoke("git:cancel-commit", token),
   },
+  review: {
+    start: (request) => ipcRenderer.invoke("review:start", request),
+    cancel: (id) => ipcRenderer.invoke("review:cancel", id),
+    retry: (id) => ipcRenderer.invoke("review:retry", id),
+    list: (projectRoot) => ipcRenderer.invoke("review:list", projectRoot),
+    onUpdate: (listener) => subscribe("review:update", listener),
+  },
   vision: {
     config: () => ipcRenderer.invoke("vision:config"),
     saveConfig: (config) => ipcRenderer.invoke("vision:save-config", config),

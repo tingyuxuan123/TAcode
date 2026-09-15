@@ -71,8 +71,34 @@
 .code-workbench.is-tree-open .workbench-body { grid-template-columns: minmax(180px, 1fr) 1px minmax(160px, min(var(--workbench-tree-width), 54%)); }
 .workbench-content { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .workbench-navigation { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
-.review-comments { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 46%; border-top: 1px solid var(--workbench-border); font-size: 12px; }
-.review-comments > header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--workbench-secondary); border-bottom: 1px solid var(--workbench-border); }
+/* Only the review column stacks panels under the tree; the file column keeps its single tree. */
+.code-workbench.is-review .workbench-navigation { overflow-y: auto; overflow-x: hidden; }
+.code-workbench.is-review .workbench-navigation > .project-file-tree { flex: 0 0 auto; height: auto; min-height: 260px; }
+.code-workbench.is-review .review-comments, .code-workbench.is-review .review-findings { flex: 0 0 auto; max-height: none; }
+.review-findings { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 42%; overflow: hidden; border-top: 1px solid var(--workbench-border); font-size: 12px; }
+.review-findings > header { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--workbench-secondary); border-bottom: 1px solid var(--workbench-border); }
+.review-findings > header button { border: 1px solid var(--workbench-border); border-radius: 5px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 2px 6px; cursor: pointer; }
+.review-findings > select, .review-findings > textarea { flex: none; margin: 6px 10px 0; border: 1px solid var(--workbench-border); border-radius: 5px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 4px 6px; font: inherit; }
+.review-findings textarea { resize: vertical; }
+.review-run-status { flex: none; display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 10px; color: var(--workbench-secondary); font-variant-numeric: tabular-nums; }
+.review-findings-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.review-finding-list { list-style: none; margin: 0; padding: 0; flex: none; }
+.review-finding-list > li { padding: 7px 10px; border-top: 1px solid var(--workbench-border); display: flex; flex-direction: column; gap: 4px; }
+.review-finding-head { display: flex; align-items: center; gap: 6px; }
+.review-severity { border-radius: 4px; padding: 1px 6px; font-size: 11px; color: var(--workbench-ink); background: var(--workbench-hover); }
+.review-severity.is-high { color: var(--red); }
+.review-finding-location { border: 0; background: none; padding: 0; font: inherit; color: var(--workbench-ink); font-family: var(--workbench-mono); cursor: pointer; overflow-wrap: anywhere; text-align: start; }
+.review-finding-confidence { color: var(--workbench-secondary); font-size: 11px; }
+.review-finding-list p[data-finding-title] { margin: 0; overflow-wrap: anywhere; }
+.review-finding-list pre[data-finding-evidence] { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; font: 11px/1.6 var(--workbench-mono); }
+.review-rejected { flex: none; margin: 4px 10px 8px; }
+.review-rejected ul { list-style: none; margin: 4px 0 0; padding: 0; }
+.review-rejected li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 3px 0; }
+.review-rejected pre { margin: 0; width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 var(--workbench-mono); color: var(--workbench-secondary); }
+.review-run-actions { padding: 6px 10px; }
+.review-run-actions button { border: 1px solid var(--workbench-border); border-radius: 6px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 3px 9px; cursor: pointer; }
+.review-comments { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 42%; overflow: hidden; border-top: 1px solid var(--workbench-border); font-size: 12px; }
+.review-comments > header { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--workbench-secondary); border-bottom: 1px solid var(--workbench-border); }
 .review-comments > header button { border: 1px solid var(--workbench-border); border-radius: 5px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 2px 6px; cursor: pointer; }
 .review-comments > ul { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; }
 .review-comments > ul > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; padding: 7px 10px; border-bottom: 1px solid var(--workbench-border); }
@@ -83,7 +109,7 @@
 .review-comment-row-actions span { color: var(--workbench-secondary); font-size: 11px; }
 .review-comments p[data-comment-text] { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .review-comments-empty { margin: 0; padding: 12px 10px; color: var(--workbench-secondary); }
-.review-comments > footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; }
+.review-comments > footer { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; }
 .review-comments > footer button { border: 1px solid var(--workbench-border); border-radius: 6px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 3px 9px; cursor: pointer; }
 .review-comments > footer button:disabled { opacity: .5; cursor: default; }
 .review-comments > footer span { color: var(--workbench-secondary); }

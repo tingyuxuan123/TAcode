@@ -182,7 +182,7 @@ function Viewer({ files, layout, wrap, colorScheme = "light", collapsed = false,
         setPending({ fileId: file.id, side, startLine: Math.min(range.start, range.end), endLine: Math.max(range.start, range.end) });
       },
       // Only while a composer is open: leave room to scroll its controls clear of the sticky action bar.
-      layout: { paddingTop: 0, paddingBottom: pending ? 168 : 72, gap: 0 },
+      layout: { paddingTop: 0, paddingBottom: pending ? 168 : 96, gap: 0 },
       unsafeCSS: workbenchDiffCSS }}
     onSelectedLinesChange={(selection) => onSelectionChange?.(selection)}
     onScroll={(position, instance) => {

@@ -159,6 +159,7 @@ function ProjectGitReview({ projectRoot, sessionKey, active, onOpenFile, onChoos
       scopeDetails={scopeDetails || actions.phase || actions.result || commitActions.result ? <><>{scopeDetails}</><GitMutationNotice actions={actions} onRefresh={store.refresh} /><GitCommitNotice actions={commitActions} /></> : undefined}
       commentScope={projectRoot && sessionKey ? { projectRoot, sessionKey } : undefined}
       commentContext={{ rangeKey: comparisonRangeKey(query), snapshotId: comparisonSnapshotId(query) }}
+      reviewScope={projectRoot && query.kind !== "repository" ? { projectRoot, comparison: query, snapshotId: comparisonSnapshotId(query) } : undefined}
       onUsePrompt={onUsePrompt}
       emptyState={emptyState} />
   </div>;

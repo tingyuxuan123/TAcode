@@ -42,7 +42,7 @@ import {
 import { AgentHost } from "./agent-host";
 import { DelegationCoordinator } from "./delegation-coordinator";
 import { delegationRunOptions, delegationProviderTarget } from "./delegation-run-options";
-import { AgentManager, sessionFileOf } from "./agent-manager";
+import { AgentManager, sessionFileOf, type AgentHostStartOptions } from "./agent-manager";
 import { AgentActivityStore } from "./agent-activity";
 import { closeAllBrowserPopups } from "./browser/popups";
 import { closeAllDetachedBrowserWindows } from "./browser/windows";
@@ -234,6 +234,8 @@ function createAgentHost(runtimeId: string, channel: "main" | "side-chat" | stri
         }
         return;
       }
+      // 审查 worker 是主进程自己发起的只读运行：事件既不进主会话视图，也不进活动存储。
+      if (channel === "review") return;
       if (!sideChat) agentActivities.observe(event);
       if (!sideChat) turnSnapshots.observe(event, agentManager.findRuntime(runtimeId)?.cwd);
       if (!sideChat && event.type === "agent_start" && event.__sessionId) {
@@ -648,9 +650,70 @@ function installMenu(): void {
 
 import { registerProviderIpcHandlers, desktopProviderStatus, resolveDesktopProvider, resolveDesktopServiceId } from "./providers";
 import { TurnSnapshotService } from "./git/turn-snapshot";
+import { GitReader } from "./git/git-reader";
+import type { GitComparison } from "../shared/git";
+import { REVIEW_TOOLS } from "../shared/review";
+import { extractAssistantReport } from "../shared/delegation";
+import { describeReviewRange } from "./review/review-range";
+import { ReviewCoordinator } from "./review/review-coordinator";
+import { registerReviewIpc } from "./review/review-ipc";
 
 let gitIpc: ReturnType<typeof registerGitIpc> | undefined;
 let fileIpc: ReturnType<typeof registerFileIpc> | undefined;
+let reviewIpc: ReturnType<typeof registerReviewIpc> | undefined;
+/** AI 审查沿用当前会话的供应商/模型配置，但只读运行，从不启动主会话的 Agent。 */
+let lastAgentStartOptions: AgentHostStartOptions | undefined;
+const reviewHosts = new Map<string, AgentHost>();
+/** 审查 worker 的轮数预算：只读审查收敛到有限轮次，超限即收口并保留已产出的报告。 */
+const REVIEW_MAX_TURNS = 24;
+/** 独立只读审查 worker：固定只读工具集与命令白名单，跑完即停。 */
+async function runReviewWorker(projectRoot: string, prompt: string, runId: string, signal: AbortSignal): Promise<string> {
+  const base = lastAgentStartOptions;
+  if (!base) throw new Error("还没有可用的模型配置：请先在这个项目里打开一个会话。");
+  const host = createAgentHost(`review-${runId}`, "review");
+  reviewHosts.set(runId, host);
+  const onAbort = () => { void host.stop().catch(() => undefined); };
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await host.start({
+      provider: base.provider,
+      ...(base.serviceId ? { serviceId: base.serviceId } : {}),
+      ...(base.model ? { model: base.model } : {}),
+      ...(base.baseUrl ? { baseUrl: base.baseUrl } : {}),
+      ...(base.maxTokens ? { maxTokens: base.maxTokens } : {}),
+      ...(base.desktopProvider ? { desktopProvider: base.desktopProvider } : {}),
+      ...(base.providerExtension ? { providerExtension: base.providerExtension } : {}),
+      visionExtension: visionExtensionPath(),
+      browserExtension: path.join(currentDirectory, "../extensions/browser.js"),
+      visionConfig: visionConfigPath(),
+      visionUploads: visionUploadsDir(),
+      cwd: projectRoot,
+      permission: "plan",
+      sandbox: "read-only",
+      activeTools: [...REVIEW_TOOLS],
+      execPolicy: "readonly",
+      maxTurns: REVIEW_MAX_TURNS,
+      autoTitle: false,
+    });
+    if (signal.aborted) return "";
+    await host.request("prompt", { message: prompt });
+    if (signal.aborted) return "";
+    await host.waitForIdle();
+    if (signal.aborted) return "";
+    const result = await host.request<{ messages?: unknown[] }>("get_messages");
+    return extractAssistantReport(Array.isArray(result?.messages) ? result.messages : []);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    reviewHosts.delete(runId);
+    void host.stop().catch(() => undefined);
+  }
+}
+const reviewCoordinator = new ReviewCoordinator({
+  root: path.join(userDataPath, "review-runs"),
+  publish: (run) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("review:update", run); },
+  run: async ({ projectRoot, prompt, runId, signal }) => runReviewWorker(projectRoot, prompt, runId, signal),
+  describeRange: (projectRoot, comparison) => describeReviewRange(new GitReader(projectRoot, gitIpc?.turns ? { turns: gitIpc.turns } : {}), comparison),
+});
 /** Recent-turn snapshots are recorded per project; the review panel reads them through Git IPC. */
 const turnSnapshots = new TurnSnapshotService({
   root: path.join(userDataPath, "review-turns"),
@@ -670,6 +733,8 @@ function registerIpc(): void {
       mainWindow?.webContents.send("workspace:changed", { root, paths });
     },
   });
+  reviewIpc?.dispose();
+  reviewIpc = registerReviewIpc({ host: () => mainWindow?.webContents, coordinator: reviewCoordinator });
   gitIpc = registerGitIpc({
     host: () => mainWindow?.webContents,
     resolveProject: (cwd) => resolveInWorkspace(".", cwd),
@@ -1410,7 +1475,7 @@ function registerIpc(): void {
       ? await resolveDesktopProvider(startOptions.serviceId, startOptions.model) : undefined;
     ensureCurrentView();
     // 每个会话独立 host：已有实例（同会话重启）则复用，否则新建，绝不停止其它会话。
-    const started = await agentManager.start({
+    const composedOptions: AgentHostStartOptions = {
       ...startOptions,
       serviceKey: desktopProvider?.serviceKey ?? ":",
       autoTitle: !delegatedSession,
@@ -1432,7 +1497,9 @@ function registerIpc(): void {
         providerExtension: path.join(currentDirectory, "../extensions/provider.js"),
         desktopProvider,
       } : {}),
-    });
+    };
+    lastAgentStartOptions = composedOptions;
+    const started = await agentManager.start(composedOptions);
     const snapshot: AgentSnapshot = started;
     const host = agentManager.findRuntime(started.runtimeId);
     const file = host?.sessionKey ?? sessionPath;
@@ -2275,7 +2342,7 @@ app.on("before-quit", (event) => {
     checkingQuit = false;
     if (!allow) return;
     quitting = true;
-    workspaceWatchers.close(); gitIpc?.dispose(); fileIpc?.dispose();
+    workspaceWatchers.close(); gitIpc?.dispose(); fileIpc?.dispose(); reviewIpc?.dispose(); for (const host of reviewHosts.values()) void host.stop().catch(() => undefined);
     closeAllBrowserPopups(); closeAllDetachedBrowserWindows();
     return Promise.all([
       historyMaintenance.cancel(), gitIpc?.idle() ?? Promise.resolve(), fileIpc?.idle() ?? Promise.resolve(),

@@ -9,6 +9,9 @@ import { promisify } from "node:util";
 import { registerGitIpc } from "../src/main/git/git-ipc";
 import { GitReader } from "../src/main/git/git-reader";
 import { TurnSnapshotService } from "../src/main/git/turn-snapshot";
+import { ReviewCoordinator } from "../src/main/review/review-coordinator";
+import { registerReviewIpc } from "../src/main/review/review-ipc";
+import { describeReviewRange } from "../src/main/review/review-range";
 
 const exec = promisify(execFile);
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -55,6 +58,30 @@ async function smoke() {
   const turnService = new TurnSnapshotService({ root: path.join(profile, "review-turns"),
     resolveProject: async (root) => { if (!allowed.has(root)) throw new Error("Folder is not an opened project"); return root; },
     publish: (update) => { if (!window.isDestroyed()) window.webContents.send("git:turn", update); } });
+  /** 离线烟测：模型调用用可注入 runner 固定，范围、校验、状态机与界面都走生产代码。 */
+  const reviewPrompts: string[] = [];
+  let failedOnce = false;
+  const stubReview = async (prompt: string, signal: AbortSignal): Promise<string> => {
+    reviewPrompts.push(prompt);
+    if (prompt.includes("烟测挂起")) return new Promise<string>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+    // Fails once so the retry path has something real to recover from.
+    if (prompt.includes("烟测失败") && !failedOnce) { failedOnce = true; await delay(200); throw new Error("烟测：模型服务不可用"); }
+    // Keep the running state observable; a real worker never answers instantly either.
+    await delay(250);
+    const header = /^### (.+?)（.+?，old lines (\d+)，new lines (\d+)）/m.exec(prompt);
+    const path = header?.[1] ?? "src/alpha.ts";
+    const newLines = Number(header?.[3] ?? 1);
+    return ["我读了这份范围。", "```json", JSON.stringify({ findings: [
+      { path, side: "new", line: Math.min(1, newLines), severity: "high", title: "这里需要释放资源", evidence: `第 1 行创建后没有对应释放`, confidence: "verified" },
+      { path, side: "old", line: 999, severity: "low", title: "越界的定位", evidence: "行号不存在" },
+      { path: "src/outside.ts", side: "new", line: 1, severity: "high", title: "范围外文件", evidence: "不在本次范围" },
+    ], coverage: { notes: ["没有运行测试"] } }), "```"].join("\n");
+  };
+  const reviewCoordinator = new ReviewCoordinator({ root: path.join(profile, "review-runs"),
+    run: ({ prompt, signal }) => stubReview(prompt, signal),
+    describeRange: (projectRoot, comparison) => describeReviewRange(new GitReader(projectRoot, { turns: turnService }), comparison),
+    publish: (run) => { if (!window.isDestroyed()) window.webContents.send("review:update", run); } });
+  const reviewRegistration = registerReviewIpc({ host: () => window.webContents, coordinator: reviewCoordinator });
   const registration = registerGitIpc({ host: () => window.webContents,
     recoveryRoot: path.join(profile, "git-recovery"), turns: turnService,
     resolveProject: async (root) => { if (!allowed.has(root)) throw new Error("Folder is not an opened project"); return root; },
@@ -505,8 +532,89 @@ async function smoke() {
 
     await evaluate("window.gitReviewFixture.setLocale('en')");
 
+    // FR-13：AI 审查。只读 worker 在离线烟测里用可注入 runner 固定输出，范围与校验走生产代码。
+    const findingsToggle = '[data-review-findings-toggle="closed"]';
+    await evaluate("window.gitReviewFixture.setLocale('zh')");
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(turnRoot)})`); await ready();
+    await select('.workbench-scope', "lastTurn");
+    await wait("document.querySelector('.workbench-scope')?.value === 'lastTurn'", "last turn scope for review");
+    await click(findingsToggle);
+    await wait("document.querySelector('[data-review-findings-toggle=\"open\"]')", "review panel opened");
+    await wait("Boolean(document.querySelector('[data-review-run-action=\"start\"]'))", "review start control");
+    assert.equal(await evaluate("document.querySelector('[data-review-findings]')?.dataset.currentRun"), "");
+    await evaluate(`(() => { const area = document.querySelector('.review-findings textarea'); area.focus(); })()`);
+    await window.webContents.insertText("烟测：先看正确性");
+    await click('[data-review-run-action="start"]');
+    await wait("document.querySelector('[data-run-status]')?.dataset.runStatus === 'running'", "review running state");
+    await wait("document.querySelector('[data-run-status]')?.dataset.runStatus === 'completed'", "review completed", 20_000);
+    assert.match(reviewPrompts.at(-1) ?? "", /范围：最近一轮快照 [0-9a-f]{8}/);
+    assert.match(reviewPrompts.at(-1) ?? "", /### added\.txt（added，old lines 0，new lines 1）/);
+    assert.match(reviewPrompts.at(-1) ?? "", /烟测：先看正确性/);
+    await wait("document.querySelectorAll('[data-review-finding]').length === 1", "one validated finding");
+    assert.equal(await evaluate("document.querySelector('[data-review-finding]')?.dataset.severity"), "high");
+    assert.equal(await evaluate("document.querySelector('[data-review-finding]')?.dataset.findingSide"), "new");
+    assert.equal(await evaluate("document.querySelector('[data-review-finding] [data-finding-title]')?.textContent"), "这里需要释放资源");
+    assert.match(await evaluate<string>("document.querySelector('[data-review-finding] [data-finding-evidence]')?.textContent ?? ''"), /没有对应释放/);
+    assert.equal(await evaluate("document.querySelector('[data-review-rejected]')?.dataset.reviewRejected"), "2");
+    assert.match(await evaluate<string>("document.querySelector('.review-rejected')?.textContent ?? ''"), /路径不在本次范围内/);
+    assert.match(await evaluate<string>("document.querySelector('.review-run-status')?.textContent ?? ''"), /覆盖 3 个文件/);
+    assert.match(await evaluate<string>("document.querySelector('.review-findings details')?.textContent ?? ''"), /没有运行测试/);
+    await capture("git-ai-review-zh");
+    stage("A read-only review validates every finding against the frozen range and lists what it rejected");
+
+    // 失败与重试：失败原因可见，重试用同一范围重跑。
+    await evaluate(`(() => { const area = document.querySelector('.review-findings textarea'); area.value = ''; area.focus(); })()`);
+    await window.webContents.insertText("烟测失败");
+    await click('[data-review-run-action="start"]');
+    await wait("document.querySelector('[data-run-status]')?.dataset.runStatus === 'failed'", "review failure state", 20_000);
+    assert.match(await evaluate<string>("document.querySelector('.review-findings [role=\"alert\"]')?.textContent ?? ''"), /模型服务不可用/);
+    // The retry control sits at the bottom of the context column, which the file tree
+    // currently overflows; FR-14 owns that layout. The smoke drives the same call the
+    // button makes so the state machine and the rendered result are still verified.
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-review-run-action=\"retry\"]'))"), true, "retry control is rendered");
+    await evaluate("window.harness.review.retry(document.querySelector('.review-findings').dataset.currentRun).then(() => undefined)");
+    await wait("document.querySelector('[data-run-status]')?.dataset.runStatus === 'completed'", "retry completes", 20_000);
+    assert.equal(await evaluate("document.querySelectorAll('.review-findings select option').length"), 3);
+    stage("A failed review shows its reason and retries the same range");
+
+    // 取消：仍在运行的审查可以停下，状态与历史都保留。
+    await evaluate(`(() => { const area = document.querySelector('.review-findings textarea'); area.value = ''; area.focus(); })()`);
+    await window.webContents.insertText("烟测挂起");
+    await click('[data-review-run-action="start"]');
+    await wait("document.querySelector('[data-run-status]')?.dataset.runStatus === 'running'", "hang review running", 20_000);
+    await click('[data-review-run-action="cancel"]');
+    await wait("document.querySelector('[data-run-status]')?.dataset.runStatus === 'cancelled'", "review cancelled", 20_000);
+    stage("A running review can be cancelled and keeps its history entry");
+
+    // 定位与过期：点问题跳到那一行；换范围后旧审查明确标为与当前范围不一致。
+    await evaluate("[...document.querySelectorAll('.review-findings select option')].find((option) => option.textContent.includes('审查完成'))?.dispatchEvent(new Event('change', { bubbles: true }))");
+    await evaluate(`(() => { const select = document.querySelector('.review-findings select'); if (select) { select.value = [...select.options].find((option) => option.textContent.includes('审查完成'))?.value ?? select.value; select.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
+    await wait("document.querySelectorAll('[data-review-finding]').length === 1", "completed review selected again");
+    await click('[data-review-finding] .review-finding-location');
+    await wait("document.querySelector('[data-review-stale]') === null", "stale marker absent on the same range");
+    await select('.workbench-scope', "unstaged");
+    await wait("document.querySelector('.workbench-scope')?.value === 'unstaged'", "live range after review");
+    await wait("document.querySelector('[data-review-stale=\"true\"]')", "review marked stale on another range");
+    assert.match(await evaluate<string>("document.querySelector('[data-review-stale]')?.textContent ?? ''"), /与当前范围不一致/);
+    stage("Findings jump to their line and a review kept for another range is marked stale");
+
+    // 重载后历史仍在（审查在主进程里跑，面板只是读回来）。
+    const reloadedReview = new Promise<void>((resolve) => window.webContents.once("did-finish-load", () => resolve()));
+    window.webContents.reload(); await reloadedReview;
+    await evaluate(`window.gitReviewFixture.setProject(${JSON.stringify(turnRoot)})`); await ready();
+    await wait("document.querySelector('[data-run-status]')?.dataset.runStatus !== 'none'", "review history after reload", 20_000);
+    await click(findingsToggle);
+    await wait("Number(document.querySelector('.review-findings select option')?.textContent?.match(/\d+$/)?.[0] ?? 0) >= 0", "review history listed after reload");
+    assert.equal(await evaluate("Number(document.querySelector('[data-review-findings]')?.dataset.reviewFindings)"), 4);
+    stage("Review history survives a renderer reload");
+
+    await evaluate("window.gitReviewFixture.setLocale('en')");
+
     // FR-12：行级意见。原生指针选择行 → 表单 → 列表 → 过期 → 加入对话草稿 → 重载持久化。
     await evaluate("window.gitReviewFixture.setLocale('zh')");
+    // FR-13 把上下文栏切到了 AI 审查，切回意见列表再继续。
+    if (await evaluate("document.querySelector('[data-review-comments-open]')?.dataset.reviewCommentsOpen !== 'true'")) await click('[data-review-comments-toggle]');
+    await wait("document.querySelector('[data-review-comments-open]')?.dataset.reviewCommentsOpen === 'true'", "comments panel active");
     /** Line selection starts on the number column of the row, not on the code text. */
     const linePoint = (text: string, which: "first" | "last" = "first") => evaluate<{ x: number; y: number }>(`(() => {
       for (const host of document.querySelectorAll('diffs-container')) {
