@@ -31,7 +31,8 @@
     "pack": "pnpm build && electron-builder --mac --win",
     "pack:mac": "pnpm build && electron-builder --mac",
     "pack:win": "pnpm build && electron-builder --win",
-    "start": "electron ."
+    "start": "electron .",
+    "test:ui-review": "node scripts/test-ui-review.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

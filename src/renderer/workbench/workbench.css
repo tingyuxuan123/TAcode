@@ -51,7 +51,8 @@
 .code-workbench button:focus-visible, .code-workbench select:focus-visible, .workbench-tree-row:focus-visible, .workbench-divider:focus-visible {
   outline: 2px solid var(--workbench-secondary); outline-offset: -2px;
 }
-.workbench-toolbar { display: flex; flex: 0 0 40px; align-items: center; gap: 6px; padding: 4px 9px 4px 13px; min-width: 0; border-bottom: 1px solid var(--workbench-border); white-space: nowrap; }
+/* 窄窗下工具栏横向滚动而不是换行：参考图是一行工具栏，换行会挤压差异区。 */
+.workbench-toolbar { display: flex; flex: 0 0 40px; flex-wrap: nowrap; align-items: center; gap: 6px; padding: 4px 9px 4px 13px; min-width: 0; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--workbench-border); white-space: nowrap; }
 .code-workbench.is-review .workbench-toolbar { flex-basis: 46px; }
 .workbench-toolbar-spacer { flex: 1 1 0; min-width: 0; }
 .workbench-breadcrumb { display: flex; align-items: center; gap: 5px; min-width: 30px; overflow: hidden; color: var(--workbench-secondary); }
@@ -71,11 +72,12 @@
 .code-workbench.is-tree-open .workbench-body { grid-template-columns: minmax(180px, 1fr) 1px minmax(160px, min(var(--workbench-tree-width), 54%)); }
 .workbench-content { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .workbench-navigation { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
-/* Only the review column stacks panels under the tree; the file column keeps its single tree. */
-.code-workbench.is-review .workbench-navigation { overflow-y: auto; overflow-x: hidden; }
-.code-workbench.is-review .workbench-navigation > .project-file-tree { flex: 0 0 auto; height: auto; min-height: 260px; }
-.code-workbench.is-review .review-comments, .code-workbench.is-review .review-findings { flex: 0 0 auto; max-height: none; }
-.review-findings { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 42%; overflow: hidden; border-top: 1px solid var(--workbench-border); font-size: 12px; }
+/* The tree keeps a definite height (virtualization needs it) and the panels below it share
+   the rest, scrolling inside their own box instead of being clipped out of reach. */
+.code-workbench.is-review .workbench-navigation > .project-file-tree { flex: 1 1 auto; height: auto; min-height: 120px; }
+/* 面板不参与收缩：让文件树吸收剩余高度，面板的表头和底部操作才不会被裁掉。 */
+.code-workbench.is-review .review-comments, .code-workbench.is-review .review-findings { flex: 0 0 auto; min-height: 0; max-height: 52%; }
+.review-findings { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 52%; overflow: hidden; border-top: 1px solid var(--workbench-border); font-size: 12px; }
 .review-findings > header { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--workbench-secondary); border-bottom: 1px solid var(--workbench-border); }
 .review-findings > header button { border: 1px solid var(--workbench-border); border-radius: 5px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 2px 6px; cursor: pointer; }
 .review-findings > select, .review-findings > textarea { flex: none; margin: 6px 10px 0; border: 1px solid var(--workbench-border); border-radius: 5px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 4px 6px; font: inherit; }
@@ -97,7 +99,7 @@
 .review-rejected pre { margin: 0; width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 var(--workbench-mono); color: var(--workbench-secondary); }
 .review-run-actions { padding: 6px 10px; }
 .review-run-actions button { border: 1px solid var(--workbench-border); border-radius: 6px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 3px 9px; cursor: pointer; }
-.review-comments { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 42%; overflow: hidden; border-top: 1px solid var(--workbench-border); font-size: 12px; }
+.review-comments { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 52%; overflow: hidden; border-top: 1px solid var(--workbench-border); font-size: 12px; }
 .review-comments > header { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--workbench-secondary); border-bottom: 1px solid var(--workbench-border); }
 .review-comments > header button { border: 1px solid var(--workbench-border); border-radius: 5px; background: var(--workbench-bg); color: var(--workbench-ink); padding: 2px 6px; cursor: pointer; }
 .review-comments > ul { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; }
@@ -282,7 +284,7 @@
 .file-name-label input { padding: 8px; width: 100%; border: 1px solid var(--workbench-border); border-radius: 4px; background: var(--workbench-bg); color: var(--workbench-ink); font-family: var(--workbench-mono); }
 .file-action-error, .file-mutation-status { position: fixed; bottom: 16px; right: 16px; z-index: 60; max-width: min(480px, calc(100vw - 32px)); padding: 10px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); overflow-wrap: anywhere; }
 .file-action-error { color: var(--red); }
-.code-workbench:not(.is-review) .workbench-toolbar { overflow-x: auto; scrollbar-width: none; }
+.workbench-toolbar::-webkit-scrollbar { display: none; }
 .file-view-modes { display: flex; flex: none; padding: 1px; border: 1px solid var(--workbench-border); border-radius: 4px; }
 .file-view-modes .workbench-button { width: 25px; height: 24px; border-radius: 3px; }
 .file-preview-tools, .file-page-tools { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: 4px; min-height: 36px; padding: 4px 10px; border-bottom: 1px solid var(--workbench-border); color: var(--workbench-secondary); font-size: 11px; }
